@@ -3601,10 +3601,11 @@ State
                                  --if-revision changes the state only while it is still at
                                  that revision, which \`it state\` prints. JSON in single
                                  quotes is read as written in bash, zsh, Git Bash and
-                                 PowerShell, Windows PowerShell 5.1 among them, but for a few
-                                 forms that \`it help page\` names. --file, and --state-file
-                                 on create, read the JSON from a file instead, for JSON that
-                                 is long or awkward to quote.
+                                 PowerShell 7.3 and later. In Windows PowerShell 5.1 it is
+                                 read whole or refused, and \`it help page\` says how to
+                                 write it there. --file, and --state-file on create, read
+                                 the JSON from a file instead, for JSON that is long or
+                                 awkward to quote.
   it state <id>
   it say <id> "<text>"           A line of your own words above the ${NOUN.one}, where the person is
                                  looking: an answer that has no place on the ${NOUN.one} itself.

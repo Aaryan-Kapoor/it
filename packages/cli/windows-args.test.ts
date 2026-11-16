@@ -3,6 +3,7 @@
 // main workflow runs the same commands through the real shells and the real standalone program
 // (e2e/windows-json.mjs).
 import { describe, expect, test } from 'vitest'
+import { parse, json as readJson, setValue, text } from './src/args'
 import { WOKEN, WOKEN_POWERSHELL, wokenNote } from './src/wake'
 import { commandLineWords, jsonEnd, wholeJson } from './src/windows-args'
 
@@ -39,6 +40,29 @@ const given = (line: string) =>
     .map((w) => w.value)
 /** What a command is run with: what it was given, or that with the JSON taken whole from the line. */
 const run = (line: string) => wholeJson(line, given(line)) ?? given(line)
+
+/** How many words each command reads before it refuses one more, as `noMore` in main.ts counts them. */
+const MOST: Record<string, number> = { patch: 2, create: 1, tour: 3 }
+/**
+ * What a command does with JSON written as Windows PowerShell 5.1 hands it on: the line is built
+ * as that PowerShell builds it, read back as the program reads it, and given to the very reading
+ * the command does (`parse`, then `json` or `setValue`). The value it would change the state to,
+ * or the sentence it refuses with.
+ */
+function outcome(args: string[]): { value: unknown } | { refused: string } {
+  try {
+    const [cmd, ...rest] = run(windowsPowerShell(args))
+    const a = parse(rest)
+    const most = MOST[cmd!]
+    if (most !== undefined && a._.length > most) return { refused: `It does not know what to do with "${a._[most]}".` }
+    if (cmd === 'patch') return { value: readJson(a._[1]!, 'The patch', 'it patch board --file <path>') }
+    if (cmd === 'set') return { value: setValue(a._.slice(2).join(' '), 'it set board v --file <path>') }
+    if (cmd === 'create') return { value: readJson(text(a, 'state')!, '--state', 'it create … --state-file <path>') }
+    return { value: readJson(a._[2]!, 'The answer') }
+  } catch (err) {
+    return { refused: (err as Error).message }
+  }
+}
 
 describe('JSON spoilt by Windows PowerShell 5.1 is read whole from the command line', () => {
   const cases: [string, string[]][] = [
@@ -181,23 +205,59 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     expect(run(`"${IT}" patch board {"a":"b c"} --if-revision=3`)).toEqual(['patch', 'board', '{"a":"b c"}', '--if-revision=3'])
     expect(run(`"${IT}" tour answer k57abc {"say":"a b"} --no-wait`)).toEqual(['tour', 'answer', 'k57abc', '{"say":"a b"}', '--no-wait'])
   })
-  test('what the skill says Windows PowerShell 5.1 cannot hand on is not read back, and the way it gives instead is', () => {
-    // An array still JSON without its quotes is taken as it arrives; in a file it is read as written
-    expect(run(windowsPowerShell(['set', 'board', 'order', '["1","2"]']))).toEqual(['set', 'board', 'order', '[1,2]'])
-    // A backslash just before a double quote, with an option after the JSON, and the same with the option before it
-    for (const json of [String.raw`{"dir":"C:\\"}`, String.raw`["a\"b"]`]) {
-      expect(run(windowsPowerShell(['patch', 'board', json, '--if-revision', '7']))).not.toContain(json)
-      expect(run(windowsPowerShell(['patch', 'board', '--if-revision', '7', json]))).toEqual(['patch', 'board', '--if-revision', '7', json])
-    }
-    // --state joined to its JSON by =, and given it as a word of its own
-    expect(run(windowsPowerShell(['create', 'Plan', '--state={"a":1}']))).toEqual(['create', 'Plan', '--state={a:1}'])
-    expect(run(windowsPowerShell(['create', 'Plan', '--state', '{"a":1}']))).toEqual(['create', 'Plan', '--state', '{"a":1}'])
-    // A value of `it set` with an escaped double quote in it, or that is a JSON string, and the same through `it patch`
-    const quoted = String.raw`{"say":"she said \"hi\""}`
-    expect(run(windowsPowerShell(['set', 'board', 'say', quoted]))).not.toContain(quoted)
-    expect(run(windowsPowerShell(['set', 'board', 'v', '"true"']))).toEqual(['set', 'board', 'v', 'true'])
-    for (const json of [String.raw`{"say":{"say":"she said \"hi\""}}`, '{"v":"true"}'])
-      expect(run(windowsPowerShell(['patch', 'board', json]))).toEqual(['patch', 'board', json])
+  test('`it patch`, `--state` and `it tour answer` either read the JSON exactly as written or refuse it, whatever form it is written in', () => {
+    const forms: [string, string][] = [
+      ['compact', '{"a":1,"b":"x - y"}'],
+      ['spaced, with a dash in a string', '{"title": "Plan - draft", "n": 1}'],
+      ['spaced, with a switch in a string', '{"note": "run with --verbose"}'],
+      ['spaced, with a negative number', '{"n": -1, "m": "a b"}'],
+      ['pretty-printed', '{\n  "a": 1,\n  "b": "x y"\n}'],
+      ['beginning with a space', ' {"a":1}'],
+      ['a backslash before a quote', String.raw`{"dir":"C:\\"}`],
+      ['an escaped quote', String.raw`{"say":"she said \"hi\" twice"}`],
+      ['an empty string with a space outside it', '{"name": "", "n": 1}'],
+      ['a Windows path', String.raw`{"folder":"D:\\work"}`],
+    ]
+    for (const [what, json] of forms)
+      for (const args of [
+        ['patch', 'board', json, '--if-revision', '7'],
+        ['patch', 'board', '--if-revision', '7', json],
+        ['create', 'Plan', '--html', 'hi', '--state', json, '--open'],
+        ['create', 'Plan', `--state=${json}`],
+        ['tour', 'answer', 'k57abc', json, '--no-wait'],
+      ]) {
+        const done = outcome(args)
+        expect([what, args, 'refused' in done || done.value]).toEqual([what, args, 'refused' in done || JSON.parse(json)])
+      }
+  })
+  test('what the skill tells an agent on Windows is so: the habits it gives are read exactly, and `it set` changes what it says it changes', () => {
+    // A Windows path, written with two backslashes or with forward slashes
+    expect(outcome(['patch', 'board', String.raw`{"folder":"D:\\work"}`])).toEqual({ value: { folder: String.raw`D:\work` } })
+    expect(outcome(['patch', 'board', '{"folder":"D:/work"}'])).toEqual({ value: { folder: 'D:/work' } })
+    // No space outside the strings, every option before the JSON, and --state given its JSON as a word of its own
+    expect(outcome(['patch', 'board', '{"a":1,"b":"x - y"}'])).toEqual({ value: { a: 1, b: 'x - y' } })
+    expect(outcome(['patch', 'board', '--if-revision', '7', String.raw`{"dir":"C:\\"}`])).toEqual({ value: { dir: 'C:\\' } })
+    expect(outcome(['create', 'Plan', '--state', '{"a":1}'])).toEqual({ value: { a: 1 } })
+    // A space outside the strings is read too where no string has a space and then a dash, as the Windows check writes it
+    expect(outcome(['patch', 'board', '--if-revision', '3', '{"a": 1, "b": "x y"}'])).toEqual({ value: { a: 1, b: 'x y' } })
+    // And the forms those habits avoid are refused
+    expect(outcome(['patch', 'board', '{"title": "Plan - draft", "n": 1}'])).toHaveProperty('refused')
+    expect(outcome(['patch', 'board', String.raw`{"dir":"C:\\"}`, '--if-revision', '7'])).toHaveProperty('refused')
+    expect(outcome(['create', 'Plan', '--state={"a":1}'])).toHaveProperty('refused')
+    // `it set`: a JSON string loses its quotes, an array of such strings loses theirs, and an object with \" or "" in it may be taken as text
+    expect(outcome(['set', 'board', 'v', '"true"'])).toEqual({ value: true })
+    expect(outcome(['set', 'board', 'v', String.raw`"D:\\work"`])).toEqual({ value: String.raw`D:\\work` })
+    expect(outcome(['set', 'board', 'order', '["1","2"]'])).toEqual({ value: [1, 2] })
+    expect(outcome(['set', 'board', 'say', String.raw`{"say":"she said \"hi\""}`])).toEqual({ value: '{say:she said "hi"}' })
+    expect(outcome(['set', 'board', 'who', '{"name": "", "n": 1}'])).toEqual({ value: '{name: ", n: 1}' })
+    // Plain text, a number, true and false are set as they are written, and the rest goes through `it patch` whole
+    expect(outcome(['set', 'board', 'status', 'Deploying 3 of 7'])).toEqual({ value: 'Deploying 3 of 7' })
+    expect(outcome(['set', 'board', 'n', '4'])).toEqual({ value: 4 })
+    expect(outcome(['set', 'board', 'done', 'false'])).toEqual({ value: false })
+    expect(outcome(['patch', 'board', '{"order":["1","2"]}'])).toEqual({ value: { order: ['1', '2'] } })
+    expect(outcome(['patch', 'board', String.raw`{"say":"she said \"hi\"","who":{"name":"","n":1}}`])).toEqual({
+      value: { say: 'she said "hi"', who: { name: '', n: 1 } },
+    })
   })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()

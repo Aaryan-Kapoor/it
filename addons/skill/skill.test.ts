@@ -267,16 +267,18 @@ describe('the agent skill', () => {
     expect(more.page).toContain('in cmd write it in quotes with backslashes')
   })
 
-  test('tells an agent on Windows to give JSON as anywhere, never after `--%`, with what Codex refuses written as escapes, and not to pipe it there', () => {
+  test('tells an agent on Windows to give JSON in single quotes as anywhere but cmd, never after `--%`, with what Codex refuses written as escapes, and not to pipe it there', () => {
     expect(more.page).toContain('## On Windows')
-    expect(more.page).toContain(`JSON is given on Windows as everywhere, as in \`it.exe patch board '{"order":["c1"]}'\``)
+    expect(more.page).toContain(`JSON is given on Windows in single quotes, as everywhere but cmd: \`it.exe patch board '{"order":["c1"]}'\``)
     expect(more.page).toContain('keep `--%` out of it')
-    // What It cannot read back in Windows PowerShell 5.1, said no wider than it is, and how a backslash is written
-    expect(more.page).toContain('as `["1","2"]` is as `[1,2]`, is taken as it arrives, so give an array of such strings in a file')
-    expect(more.page).toContain('so put every option before the JSON')
-    expect(more.page).toContain('and not as `--state=\'{"a":1}\'`')
-    expect(more.page).toContain('so change such a value with `it patch`')
+    // How a backslash is written, what Windows PowerShell 5.1 is held to, the habits that avoid a refusal, and what `it set` changes without a word
     expect(more.page).toContain('JSON itself writes a backslash inside a string as two')
+    expect(more.page).toContain('either reads the JSON exactly as written or refuses it and changes nothing')
+    expect(more.page).toContain('write the JSON with no space outside its strings')
+    expect(more.page).toContain('put every option before the JSON')
+    expect(more.page).toContain('never as `--state=\'{"a":1}\'`')
+    expect(more.page).toContain('`\'"true"\'` is set as the boolean')
+    expect(more.page).toContain('anything else with `it patch`')
     expect(more.page).toContain('`\\u2014`')
     expect(more.page).toContain('`it.exe patch board --file ')
     expect(more.page).toContain('`--state-file "<path>"` on `it.exe create`')
