@@ -317,7 +317,7 @@ async function main() {
   }
   log(`flow ${flow} with ${app} in ${which}`)
   await new Promise((resolve) => {
-    const child = spawn('sudo', ['-n', 'docker', 'exec', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC|SITES|TWOSAME)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC|SITES|TWOSAME)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn('sudo', ['-n', 'docker', 'exec', '-e', 'REHEARSAL_HARNESS=1', name, 'su', '-l', '-w', 'REHEARSAL_HARNESS', 'ana', '-s', '/bin/bash', '-c', `cd ~/work 2>/dev/null || mkdir -p ~/work && cd ~/work; DISPLAY=:1 PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright node /build/harness/${/^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC|SITES|TWOSAME|IMAGE)/.test(flow) ? 'scripted' : 'flow'}.mjs ${flow === 'WAKEBOOT' ? 'WAKEBOOT1' : flow} ${app} ${which === 'chromium' && /^(S\d|SOAK|WAKE|RESTARTCLICK|VENV|STANDIN|OTHERAPP|MISC|SITES|TWOSAME|IMAGE)/.test(flow) ? '' : which} ${FLOW}`], { stdio: ['ignore', 'pipe', 'pipe'] })
     // A change the flow asks for between two clicks, run as root (an update of the agent app)
     const between = setInterval(() => {
       // The change itself is root's own file, written by the prepare step; the flow (ana) only asks for it

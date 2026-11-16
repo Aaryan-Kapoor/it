@@ -1188,6 +1188,83 @@ async function TWOSAME() {
   return r
 }
 
+/**
+ * A page that takes a photo and has the agent say what is in it. IMAGE-<variant>: default (the app
+ * as it starts), or full (Codex's least restrictive choice on its /permissions screen first).
+ */
+async function IMAGE() {
+  const variant = scenario.split('-')[1] ?? 'default'
+  const who = app
+  sh('python3 /build/harness/red.py /home/ana/red.png')
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  await startApp(who, counts)
+  if (variant === 'full') {
+    await type('/permissions')
+    await sleep(4000)
+    const menu = screen().replace(/\s+$/, '').split('\n').slice(-20).join('\n')
+    const line = menu.split('\n').find((l) => /full access/i.test(l)) ?? ''
+    const n = /(\d)\./.exec(line)?.[1]
+    step("Codex's /permissions screen", { menu, chose: line.trim() })
+    if (n) await type(n, { enter: false })
+    await sleep(1500)
+    await key('Enter')
+    await sleep(3000)
+    const after = screen().replace(/\s+$/, '').split('\n').slice(-12).join('\n')
+    if (/continue|are you sure|yes/i.test(after) && /full access|danger|sandbox/i.test(after)) {
+      await key('Enter')
+      await sleep(2000)
+    }
+    step('after choosing it', { screen: screen().replace(/\s+$/, '').split('\n').slice(-10).join('\n') })
+  }
+  await ask(who, 'Make me a page with It where I can upload a photo, and you tell me on the page what is in it.')
+  await settle(who, counts, 600_000, 8000)
+  let url = null
+  for (let i = 0; i < 40 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (p.url().includes('/p/') && /photo|upload|image|picture/i.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  if (!check('the page is on the screen', !!url)) return
+  const f = await agentFrame(p)
+  const input = f && (await f.$('input[type=file]'))
+  if (!check('the page has a file input', !!input)) return
+  const before = await shown(p)
+  const t0 = Date.now()
+  await input.setInputFiles('/home/ana/red.png')
+  await sleep(2000)
+  for (const b of await f.$$('button')) {
+    const t = ((await b.innerText().catch(() => '')) ?? '').trim()
+    if (/send|upload|submit|tell|describe|what|analy|look|go\b/i.test(t) && (await b.isVisible().catch(() => false)) && (await b.isEnabled().catch(() => false))) {
+      await b.click()
+      step(`presses "${t}"`)
+      break
+    }
+  }
+  const bars = []
+  let ok = false
+  const told = /could not|couldn.t|blocked|rejected|approval/i
+  while (Date.now() - t0 < 300_000) {
+    await answerApp(who, counts).catch(() => {})
+    const b = await bar(p)
+    if (b && b !== bars.at(-1)) bars.push(b)
+    const now = await shown(p).catch(() => before)
+    if (now !== before && /\bred\b|cross|plus sign/i.test(now) && !/\bred\b|cross|plus sign/i.test(before)) {
+      ok = true
+      break
+    }
+    if (told.test(now) && !told.test(before)) break
+    await sleep(2000)
+  }
+  const said = (await shown(p).catch(() => '')).replace(/\s+/g, ' ').slice(0, 400)
+  const term = screen().replace(/\s+$/, '').split('\n').filter((l) => /approv|review|blocked|reject|image|photo/i.test(l)).slice(-6).join(' | ').slice(0, 600)
+  check('the agent says on the page what is in the photo', ok, { seconds: Math.round((Date.now() - t0) / 1000), bars: bars.join(' | ').slice(0, 300), page: said, terminal: term })
+}
+
 async function hostDoes(what, ms = 2400_000) {
   sh('rm -f /var/lib/rehearsal-flow/host-done')
   writeFileSync('/var/lib/rehearsal-flow/host-now', what)
@@ -1319,6 +1396,7 @@ async function main() {
     else if (scenario.startsWith('OTHERAPP')) await OTHERAPP()
     else if (scenario.startsWith('SITES')) await SITES()
     else if (scenario === 'TWOSAME') await TWOSAME()
+    else if (scenario.startsWith('IMAGE')) await IMAGE()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
