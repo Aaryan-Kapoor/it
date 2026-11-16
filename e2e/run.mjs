@@ -1315,8 +1315,12 @@ try {
     CODEX_THREAD_ID: 'e2e-opens-a-browser',
     IT_BROWSER_OPENER: JSON.stringify([process.execPath, opener]),
     // A run in CI is still to be taken for a person's machine here, and one started over SSH for one with a person at it
-    CI: '',
-    GITHUB_ACTIONS: '',
+    ...Object.fromEntries(
+      ['CI', 'CONTINUOUS_INTEGRATION', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BUILDKITE', 'CIRCLECI', 'TF_BUILD', 'JENKINS_URL', 'TEAMCITY_VERSION'].map((name) => [
+        name,
+        '',
+      ]),
+    ),
     SSH_CONNECTION: '',
     SSH_TTY: '',
     SSH_CLIENT: '',
@@ -1331,7 +1335,9 @@ try {
         process.env.WSL_DISTRO_NAME ||
         /microsoft/i.test(os.release()) ||
         process.env.CODESPACES ||
-        process.env.REMOTE_CONTAINERS,
+        process.env.REMOTE_CONTAINERS ||
+        process.env.GITPOD_WORKSPACE_ID ||
+        process.env.CLOUD_SHELL,
     )
   const opening = await patiently(() => it(STACK.home, ['site'], { extraEnv: asAnAgent }))
   const askedAgain = await patiently(() => it(STACK.home, ['site'], { extraEnv: asAnAgent }))
