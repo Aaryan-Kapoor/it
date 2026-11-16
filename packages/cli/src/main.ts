@@ -1211,7 +1211,7 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * its rule for `it`, and refuses where nobody can approve it, as in a conversation It reopened.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, write it the same way, with each apostrophe as two and ’ “ ” or a long dash as \`\\u2019\`, \`\\u201c\`, \`\\u201d\` or \`\\u2014\`, and no \`--%\`: \`it tour answer ${id} '{"say":"That''s it."}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, write it the same way, with each apostrophe as two, ’ ‘ “ ” – — ― as \`\\u2019\`, \`\\u2018\`, \`\\u201c\`, \`\\u201d\`, \`\\u2013\`, \`\\u2014\` and \`\\u2015\`, and no \`--%\`: \`it tour answer ${id} '{"say":"That''s it."}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {

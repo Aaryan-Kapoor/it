@@ -14,15 +14,17 @@
  * other shell work in Windows PowerShell as well, `--%` and a file not needed.
  *
  * It is done only where an argument that begins as JSON does, with `{` or `[`, is not JSON as the
- * program was given it, and before any command has started, so that it decides what the command
+ * program was given it (or is an array, which can lose its quotes and still be JSON), and before
+ * any command has started, so that it decides what the command
  * is given and nothing else. The line is split again by the same rules the runtime split it by,
  * and only where those rules give back exactly the words the program was given is anything taken
- * from it. Then each word that begins with `{` or `[` on the line (or with one quote before it,
- * which the shell put there) and is not JSON as it was given is replaced by the whole JSON value
- * that begins there, scanned with what JSON says of its strings, where that value parses and
- * ends where a word ends. Everything else on the line is read as before. Where nothing can be
+ * from it. Then each word that begins with `{` or `[` and is not JSON as it was given (or is an
+ * array, which a shell can spoil into other JSON) is replaced by the whole JSON value that begins
+ * there on the line, scanned with what JSON says of its strings, where that value can only be
+ * the one argument the shell spoilt (see `wholeJson`). Everything else on the line is read as before. Where nothing can be
  * taken back, the words are left as they were given, and the command says what it says today.
  */
+import path from 'node:path'
 import { runSync } from './child'
 
 /** The rules a program on Windows splits its command line by: the C runtime's since 2008, or `CommandLineToArgvW`'s, which read `""` inside quotes differently. */
@@ -135,16 +137,33 @@ export function jsonEnd(line: string, i: number): number {
   return -1
 }
 
-const isJson = (text: string) => {
+const parsed = (text: string): { value: unknown } | null => {
   try {
-    JSON.parse(text)
-    return true
+    return { value: JSON.parse(text) }
   } catch {
-    return false
+    return null
   }
 }
-/** Whether a word is one this is for: it begins as a JSON object or array does, after a quote a shell may have left, and is not JSON as it is. */
-const spoilt = (word: string) => /^['"]?[[{]/.test(word) && !isJson(word)
+/**
+ * Whether a word may be JSON a shell spoilt: it begins as a JSON object or array does, and is not
+ * JSON as it is, or is an array, which can still be JSON once its quotes are gone (`["1","2"]`
+ * arrives as `[1,2]`). An object that is JSON as it is kept its quotes, since its keys need them.
+ */
+const spoilt = (word: string) => /^[[{]/.test(word) && (word.startsWith('[') || parsed(word) === null)
+
+/** Whether a JSON value on the line has a space or tab outside its strings. */
+function spacedOutsideStrings(json: string): boolean {
+  let inString = false
+  for (let i = 0; i < json.length; i++) {
+    const c = json[i]
+    if (inString) {
+      if (c === '\\') i++
+      else if (c === '"') inString = false
+    } else if (c === '"') inString = true
+    else if (space(c)) return true
+  }
+  return false
+}
 
 /**
  * The words after the program's name (and the script's, under Node) with each JSON value the
@@ -152,6 +171,15 @@ const spoilt = (word: string) => /^['"]?[[{]/.test(word) && !isJson(word)
  * cannot be split back into exactly `given` by either rules, or no word is both spoilt and
  * whole on the line. `given` is what the program was given after its own name (and the
  * script's), in order.
+ *
+ * A value is taken only where it can be nothing but one argument that a shell spoilt. It begins
+ * at the start of a word, or just inside the quotes Windows PowerShell put round the word, and
+ * ends where that word ends, or at the closing one of those quotes. Where there are no such
+ * quotes, it has no space outside its strings, since Windows PowerShell puts quotes round any
+ * argument that has one, and where it has a backslash just before a quote, it is the last thing
+ * on the line, since there PowerShell 7's older way of counting quotes can leave a space that was
+ * inside the argument outside its quotes. And it parses, as something other than what the word
+ * was as given.
  */
 export function wholeJson(line: string, given: readonly string[]): string[] | null {
   if (!given.some(spoilt)) return null
@@ -167,14 +195,22 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
       while (space(line[i])) i++
       if (i >= line.length) break
       const word = wordAt(line, i, rules)
-      const wrap = line[i] === '"' || line[i] === "'" ? (line[i] as string) : ''
-      const from = i + wrap.length
+      const wrapped = line[i] === '"'
+      const from = i + (wrapped ? 1 : 0)
       if (spoilt(word.value) && (line[from] === '{' || line[from] === '[')) {
         const end = jsonEnd(line, from)
-        const after = end === -1 ? -1 : end + (wrap && line[end] === wrap ? 1 : 0)
-        const closes = end !== -1 && (!wrap || line[end] === wrap) && (after >= line.length || space(line[after]))
-        if (closes && isJson(line.slice(from, end))) {
-          out.push(line.slice(from, end))
+        const after = end === -1 ? -1 : end + (wrapped ? 1 : 0)
+        const json = end === -1 ? '' : line.slice(from, end)
+        const ends = after >= line.length || line.slice(after).trim() === ''
+        const whole =
+          end !== -1 &&
+          (!wrapped || line[end] === '"') &&
+          (after >= line.length || space(line[after])) &&
+          (wrapped || (!spacedOutsideStrings(json) && (!/\\"/.test(json) || ends)))
+        const value = whole ? parsed(json) : null
+        const was = parsed(word.value)
+        if (value && (was === null || JSON.stringify(was.value) !== JSON.stringify(value.value))) {
+          out.push(json)
           taken = true
           i = after
           continue
@@ -216,8 +252,9 @@ export async function ownCommandLine(): Promise<string | null> {
       // Asked of Windows's record below
     }
   }
+  // By its whole path, so that no program of that name in the folder It was started in is run in its place
   const asked = runSync(
-    'powershell.exe',
+    path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     [
       '-NoProfile',
       '-NonInteractive',

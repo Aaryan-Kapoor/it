@@ -7,7 +7,7 @@
 //
 // node e2e/windows-json.mjs <the program>. Run on Windows alone, by the main workflow's job that
 // starts the Windows program.
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -44,10 +44,27 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
 const url = `http://127.0.0.1:${server.address().port}`
 const home = mkdtempSync(path.join(os.tmpdir(), 'it-windows-json-'))
+// A machine set up as It sets one up, so that the program asks the stand-in at all
+writeFileSync(path.join(home, 'installation.json'), '{"product":"It","format":1,"about":"This folder holds an installation of It."}\n')
+writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'test', key: {} }))
 writeFileSync(path.join(home, 'token.json'), JSON.stringify({ token: 'a-token', exp: Math.floor(Date.now() / 1000) + 3600, machine: 'machine-1', site: url }))
 const env = { ...process.env, IT_HOME: home, IT_URL: url, IT_SITE_URL: url, DO_NOT_TRACK: '1', IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage' }
 
-const opts = { env, encoding: 'utf8', windowsHide: true, timeout: 60_000 }
+const opts = { env, windowsHide: true }
+/** Runs a command and resolves with how it ended and what it said, without holding up the stand-in, which answers it meanwhile. */
+const ran = (file, args, extra = {}) =>
+  new Promise((resolve) => {
+    const child = spawn(file, args, { ...opts, ...extra })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (c) => (stdout += c))
+    child.stderr.on('data', (c) => (stderr += c))
+    const timer = setTimeout(() => child.kill(), 60_000)
+    child.on('close', (status) => {
+      clearTimeout(timer)
+      resolve({ status, stdout, stderr })
+    })
+  })
 const gitBash = ['C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files\\Git\\usr\\bin\\bash.exe'].find(existsSync)
 const has = (shell) => spawnSync(shell, ['-NoProfile', '-Command', 'exit 0'], { windowsHide: true }).status === 0
 /**
@@ -58,15 +75,11 @@ const has = (shell) => spawnSync(shell, ['-NoProfile', '-Command', 'exit 0'], { 
 const shells = [
   [
     'Windows PowerShell 5.1',
-    has('powershell.exe') &&
-      ((words) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `& '${program}' ${words.map(ps).join(' ')}`], opts)),
+    has('powershell.exe') && ((words) => ran('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `& '${program}' ${words.map(ps).join(' ')}`])),
   ],
-  [
-    'PowerShell 7',
-    has('pwsh') && ((words) => spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `& '${program}' ${words.map(ps).join(' ')}`], opts)),
-  ],
-  ['cmd', (words) => spawnSync('cmd.exe', ['/d', '/s', '/c', `""${program}" ${words.map(bare).join(' ')}"`], { ...opts, windowsVerbatimArguments: true })],
-  ['Git Bash', gitBash && ((words) => spawnSync(gitBash, ['-c', `'${program.replaceAll('\\', '/')}' ${words.map(sh).join(' ')}`], opts))],
+  ['PowerShell 7', has('pwsh') && ((words) => ran('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `& '${program}' ${words.map(ps).join(' ')}`]))],
+  ['cmd', (words) => ran('cmd.exe', ['/d', '/s', '/c', `""${program}" ${words.map(bare).join(' ')}"`], { windowsVerbatimArguments: true })],
+  ['Git Bash', gitBash && ((words) => ran(gitBash, ['-c', `'${program.replaceAll('\\', '/')}' ${words.map(sh).join(' ')}`]))],
 ]
 const ps = (w) => `'${w.replaceAll("'", "''")}'`
 const sh = (w) => `'${w.replaceAll("'", "'\\''")}'`
@@ -97,16 +110,16 @@ for (const [name, run] of shells) {
     const written =
       name === 'cmd' ? JSON.stringify(value).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`) : JSON.stringify(value)
     calls.length = 0
-    const ran = run(['patch', 'board', written, '--if-revision', '3'])
+    const done = await run(['patch', 'board', written, '--if-revision', '3'])
     const sent = calls.find((c) => c.path === 'state:patch')?.args
     check(
       `${name}: it patch board ${written} --if-revision 3`,
-      ran.status === 0 && sent?.patch === JSON.stringify(value) && sent?.baseRevision === 3,
-      `exit ${ran.status}, sent ${JSON.stringify(sent)}, said ${ran.stderr.trim().slice(0, 400)}`,
+      done.status === 0 && sent?.patch === JSON.stringify(value) && sent?.baseRevision === 3,
+      `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
     )
   }
   calls.length = 0
-  const set = run(['set', 'board', 'order', '["c1","c 2"]'])
+  const set = await run(['set', 'board', 'order', '["c1","c 2"]'])
   const setSent = calls.find((c) => c.path === 'state:patch')?.args
   check(
     `${name}: it set board order ["c1","c 2"]`,
@@ -118,9 +131,15 @@ for (const [name, run] of shells) {
     ['create', 'Plan', '--html', '<p>hi</p>', '--state', '{"steps":{"build":"not yet"}}'],
     ['tour', 'answer', 'k57abc', '{"say":"Right: twelve times twelve is 144."}', '--no-wait'],
   ]) {
-    const ran = run(words)
-    const said = `${ran.stdout}${ran.stderr}`
-    check(`${name}: it ${words.join(' ')} takes its JSON`, !/not valid JSON|does not know what to do with/.test(said), said.trim().slice(0, 400))
+    calls.length = 0
+    const done = await run(words)
+    const said = `${done.stdout}${done.stderr}`
+    // Its JSON is read before it asks anything of It, so a call made at all means the JSON was taken
+    check(
+      `${name}: it ${words.join(' ')} takes its JSON`,
+      calls.length > 0 && !/not valid JSON|does not know what to do with/.test(said),
+      said.trim().slice(0, 400),
+    )
   }
 }
 server.close()

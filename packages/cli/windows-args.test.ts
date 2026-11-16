@@ -69,9 +69,12 @@ describe('JSON spoilt by Windows PowerShell 5.1 is read whole from the command l
     // cmd, with the JSON written as the program reads it
     expect(wholeJson(`${IT} patch board "{\\"a\\":\\"b c\\"}"`, ['patch', 'board', '{"a":"b c"}'])).toBeNull()
   })
-  test('JSON typed bare in cmd, or in its single quotes, which cmd hands on as they are, is read whole too', () => {
+  test('JSON typed bare in cmd, which cmd hands on as it is, is read whole too', () => {
     expect(run(`"${IT}" patch board {"a":"b c"}`)).toEqual(['patch', 'board', '{"a":"b c"}'])
-    expect(run(`"${IT}" patch board '{"a":"b c"}'`)).toEqual(['patch', 'board', '{"a":"b c"}'])
+  })
+  test('an array whose strings Windows PowerShell 5.1 turned into numbers is read with its strings, and one of numbers is left as it is', () => {
+    expect(run(windowsPowerShell(['set', 'board', 'order', '["1","2"]']))).toEqual(['set', 'board', 'order', '["1","2"]'])
+    expect(wholeJson(windowsPowerShell(['set', 'board', 'order', '[1,2]']), ['set', 'board', 'order', '[1,2]'])).toBeNull()
   })
   test('under Node, with the script’s name after the runtime’s, the words after both are read', () => {
     const line = `"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\ana\\it\\dist\\it.mjs" patch board {"note":"two words"}`
@@ -110,6 +113,19 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     const line = windowsPowerShell(args)
     expect(given(line)).toEqual(['patch', 'board', '{note:two words}', '--if-revision', '7'])
     expect(run(line)).toEqual(args)
+  })
+  test('separate arguments are never joined, quotes that are part of a word are never dropped, and nothing outside the JSON becomes a switch', () => {
+    // Two words that together would be JSON, as `it say board "[1," "2]"` hands them on
+    expect(wholeJson(`"${IT}" say board [1, 2]`, ['say', 'board', '[1,', '2]'])).toBeNull()
+    // A file whose name has apostrophes in it, as `it patch board --file "'[1]'"` hands it on
+    expect(wholeJson(`"${IT}" patch board --file '[1]'`, ['patch', 'board', '--file', "'[1]'"])).toBeNull()
+    // One argument, `{"x":"\\"} --replace`, which PowerShell 7's older way of counting quotes left without quotes round it
+    const legacy = String.raw`"${IT}" patch board {"x":"\\"} --replace`
+    expect(given(legacy)).toEqual(['patch', 'board', String.raw`{x:\}`, '--replace'])
+    expect(wholeJson(legacy, given(legacy))).toBeNull()
+    // And bare in cmd, with a space outside its strings, JSON is not taken, since it may be two arguments
+    expect(given(`"${IT}" patch board {"a":1, "b":2}`)).toHaveLength(4)
+    expect(wholeJson(`"${IT}" patch board {"a":1, "b":2}`, given(`"${IT}" patch board {"a":1, "b":2}`))).toBeNull()
   })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()
