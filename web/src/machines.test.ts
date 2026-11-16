@@ -149,3 +149,48 @@ describe('an agent app that has It’s add-on turned off', () => {
     expect(buttons(claude, 'Turn back on')).toEqual([])
   })
 })
+
+describe('Approve for me, beside Codex’s Auto-wake', () => {
+  const connected = (over: Record<string, unknown> = {}) =>
+    machine({
+      harnesses: [
+        { id: 'claude-code', version: '2.1.322', addon: 'connected' },
+        { id: 'codex', version: '0.167.2', addon: 'connected' },
+        { id: 'pi', version: '0.82.0', addon: 'connected' },
+      ],
+      wakes: [
+        { harness: 'claude-code', since: NOW },
+        { harness: 'codex', since: NOW },
+      ],
+      ...over,
+    })
+  const reviewSwitch = (name: string) => row(name).querySelector<HTMLInputElement>('input[aria-label^="Approve for me"]')
+
+  test('is on until the owner turns it off, says that Codex’s reviewer decides in their place, and is offered for Codex alone', async () => {
+    machines = [connected()]
+    await shown()
+    const codex = reviewSwitch('Codex')
+    expect(codex?.checked).toBe(true)
+    expect(row('Codex').textContent).toContain('Codex’s automatic reviewer decides in your place')
+    expect(reviewSwitch('Claude Code')).toBeNull()
+    expect(reviewSwitch('Pi')).toBeNull()
+    await act(async () => codex!.click())
+    expect(asked).toEqual([{ name: 'machines:review', args: { machineId: 'machine-1', harness: 'codex', on: false } }])
+  })
+
+  test('turned off, says that nothing can approve anything and what is refused, and turns back on', async () => {
+    machines = [connected({ reviewOff: ['codex'] })]
+    await shown()
+    const codex = reviewSwitch('Codex')
+    expect(codex?.checked).toBe(false)
+    expect(row('Codex').textContent).toContain('anything that would ask you is refused')
+    await act(async () => codex!.click())
+    expect(asked).toEqual([{ name: 'machines:review', args: { machineId: 'machine-1', harness: 'codex', on: true } }])
+  })
+
+  test('is not offered where Auto-wake is off for Codex, since nothing is reopened for it to judge', async () => {
+    machines = [connected({ wakes: [] })]
+    await shown()
+    expect(reviewSwitch('Codex')).toBeNull()
+  })
+})
