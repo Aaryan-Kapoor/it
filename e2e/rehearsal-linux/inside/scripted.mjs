@@ -1078,7 +1078,14 @@ async function SITES() {
     const had = new Set(rollouts())
     await type(`mkdir ~/w${i}; cd ~/w${i} && clear && tmux clear-history`)
     await sleep(2000)
+    if (variant === 'before' && i > 1) break
     await startApp('codex', counts)
+    if (variant === 'before') {
+      // The conversation open first; It installed and set up from another shell while it is
+      await ask('codex', 'hi')
+      await settle('codex', counts, 120_000, 6000)
+      step('It installed and set up from another shell, the conversation still open', { said: sh('sh /build/harness/install-it.sh >/dev/null 2>&1; ~/.it/bin/it setup --only codex 2>&1 | tail -2; ls ~/.codex/skills').replace(/\s+/g, ' ').slice(0, 300) })
+    }
     await ask('codex', asks[kind])
     await settle('codex', counts, 540_000, 10_000)
     const term = sh('tmux capture-pane -p -J -S -20000 -t agent')
