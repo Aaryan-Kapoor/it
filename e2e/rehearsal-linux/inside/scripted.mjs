@@ -889,7 +889,6 @@ async function STANDIN() {
     return lines.map((l) => l.replace(/^\S+\s+/, '').replace(/\{.*$/, '{…}').replace(/\([0-9a-f]{6,}\)/g, '(…)').slice(0, 90))
   }
   let n = 0
-  let nthPick = 0
   const click = async (what, ms) => {
     await p.goto(url).catch(() => {})
     await sleep(4000)
@@ -985,6 +984,7 @@ async function OTHERAPP() {
     else await sleep(3000)
   }
   if (!check(`${who} put its page on the screen`, !!url, { seconds: Math.round((Date.now() - t0) / 1000), screen: url ? undefined : screen().replace(/\s+$/, '').split('\n').slice(-12).join(' | ').slice(0, 600) })) return
+  let nthPick = 0
   const click = async (what, ms) => {
     await p.goto(url).catch(() => {})
     await sleep(5000)
