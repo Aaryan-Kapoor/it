@@ -53,7 +53,6 @@ describe('JSON spoilt by Windows PowerShell 5.1 is read whole from the command l
     ['a switch after the JSON', ['patch', 'board', '{"total":42, "of":"all of it"}', '--if-revision', '7']],
     ['a switch before it, and one whose value is JSON', ['create', 'Plan', '--html', '<p>{x}</p>', '--state', '{"steps":{"build":"not yet"}}', '--open']],
     ['the tour’s answer', ['tour', 'answer', 'k57abc', '{"say":"Right: 12 × 12 is 144, a square’s area."}']],
-    ['two of them', ['patch', 'a', '{"x":"1 2"}', '--replace', '{"y":"3 4"}']],
     ['a switch inside a string, which is not one', ['patch', 'board', '{"note":"run --replace now"}']],
   ]
   test.each(cases)('%s', (_, args) => {
@@ -150,6 +149,21 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     // `it patch board '{"x":"a' 'b"}'`, which nobody writes for anything else
     const line = windowsPowerShell(['patch', 'board', '{"x":"a', 'b"}'])
     expect(run(line)).toEqual(['patch', 'board', '{"x":"a b"}'])
+  })
+  test('only where a command takes JSON: never from a key, a file’s name or text, which cmd reads with its quotes as quoting', () => {
+    for (const line of [
+      `"${IT}" set board ["a"] 42`,
+      `"${IT}" set board n ["a\\"b"]`,
+      `"${IT}" set board n ["a"] tail`,
+      `"${IT}" say board ["a"]`,
+      `"${IT}" save k57abc ["a"]`,
+      `"${IT}" patch board --file ["a"]`,
+      `"${IT}" patch board {"a":1} {"b":2}`,
+    ])
+      expect([line, wholeJson(line, given(line))]).toEqual([line, null])
+    // And where it does, with options anywhere around it
+    expect(run(`"${IT}" --json set board steps {"build":"not yet"}`)).toEqual(['--json', 'set', 'board', 'steps', '{"build":"not yet"}'])
+    expect(run(`"${IT}" tour answer k57abc {"say":"a b"} --no-wait`)).toEqual(['tour', 'answer', 'k57abc', '{"say":"a b"}', '--no-wait'])
   })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()

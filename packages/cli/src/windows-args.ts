@@ -23,7 +23,7 @@
  * taken back, the words are left as they were given, and the command says what it says today.
  */
 import path from 'node:path'
-import { VALUED } from './args'
+import { quotesTakenOut, VALUED } from './args'
 import { runSync } from './child'
 
 /** The rules a program on Windows splits its command line by: the C runtime's since 2008, or `CommandLineToArgvW`'s, which read `""` inside quotes differently. */
@@ -173,8 +173,54 @@ const oneArgument = (stretch: string) =>
       (stretch.length >= 2 && stretch.startsWith('"') && stretch.endsWith('"') && rendered(stretch.slice(1, -1), counting) === stretch),
   )
 
-/** The options whose value is not JSON, after which nothing is taken from the line, however it looks. */
-const NOT_JSON = new Set([...VALUED].filter((name) => name !== 'state'))
+/**
+ * Where a command takes JSON, by the place of the word among those the program was given: the
+ * patch of `it patch <id> <json>`, the answer of `it tour answer <id> <json>`, the value of
+ * `--state`, and the value of `it set <id> <key> <value>` where `it set` would refuse it as given
+ * (a value that begins and ends as JSON does and has lost its quotes). Each only where nothing
+ * the command reads as a word of its own comes after it, so that the JSON is the whole of what
+ * the command takes there. Anywhere else, a word that looks like JSON may be a key, a file's
+ * name or text, which cmd reads with its quotes as quoting, and nothing is taken there.
+ */
+export function jsonPlaces(given: readonly string[]): Map<number, number> {
+  const words: number[] = []
+  const places = new Map<number, number>()
+  let options = true
+  for (let k = 0; k < given.length; k++) {
+    const word = given[k]!
+    if (options && word === '--') {
+      options = false
+      continue
+    }
+    const option = options ? /^--?([a-z][a-z-]*)(=.*)?$/.exec(word) : null
+    if (option) {
+      if (option[2] === undefined && VALUED.has(option[1]!)) {
+        // The value of --state is JSON, and is the whole of it; the value of any other option is not
+        if (option[1] === 'state' && k + 1 < given.length) places.set(k + 1, k + 1)
+        k++
+      }
+      continue
+    }
+    words.push(k)
+  }
+  const [command, second] = words.map((k) => given[k])
+  const last = words[words.length - 1]!
+  // The place where the JSON begins, and the last word the command reads that it may run over
+  const json = command === 'patch' ? words[2] : command === 'tour' && second === 'answer' ? words[3] : command === 'set' ? words[3] : undefined
+  if (json === undefined) return places
+  if (
+    command === 'set' &&
+    !quotesTakenOut(
+      words
+        .slice(3)
+        .map((k) => given[k])
+        .join(' '),
+    )
+  )
+    return places
+  places.set(json, last)
+  return places
+}
 
 /**
  * The words after the program's name (and the script's, under Node) with each JSON value the
@@ -189,8 +235,9 @@ const NOT_JSON = new Set([...VALUED].filter((name) => name !== 'state'))
  * line it takes is exactly what PowerShell builds for it as one argument, in quotes only where
  * PowerShell would have put them; no longer stretch, running on over the words after it, could
  * be one argument PowerShell built, so that nothing written inside one argument is taken for a
- * switch or another word; none of the words it stands in for reads as an option; it is not the
- * value of an option that does not take JSON; and it parses.
+ * switch or another word; none of the words it stands in for reads as an option; it is at a
+ * place where the command takes JSON (`jsonPlaces`), and runs over every word the command would
+ * read after it there; and it parses.
  *
  * Two lines are the same on the line as the one-argument line they are taken for, and so are
  * taken as it: two arguments that together make one JSON value with a space inside a string
@@ -207,17 +254,18 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
     const lead = words.length - given.length
     if (lead < 1 || words.slice(lead).some((w, k) => w.value !== given[k])) continue
     const after = words.slice(lead)
+    const places = jsonPlaces(given)
     // Read again from the first word after the program's own, taking each spoilt JSON value whole
     const out: string[] = []
     let taken = false
     let k = 0
     while (k < after.length) {
       const word = after[k]!
-      const option = /^--?([a-z][a-z-]*)$/.exec(after[k - 1]?.value ?? '')?.[1]
       const at = word.start
       const wrapped = line[at] === '"'
       const from = at + (wrapped ? 1 : 0)
-      const candidate = spoilt(word.value) && (line[from] === '{' || line[from] === '[') && !(option && NOT_JSON.has(option))
+      const reach = places.get(k)
+      const candidate = reach !== undefined && spoilt(word.value) && (line[from] === '{' || line[from] === '[')
       const end = candidate ? jsonEnd(line, from) : -1
       const stop = end === -1 ? -1 : end + (wrapped ? 1 : 0)
       // The words the value would stand in for: from this one to the last that begins inside it
@@ -231,6 +279,8 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
         after[last]!.end === stop &&
         COUNTINGS.some((counting) => rendered(json, counting) === line.slice(at, stop)) &&
         after.slice(k + 1, last + 1).every((w) => !w.value.startsWith('-')) &&
+        reach !== undefined &&
+        last >= reach &&
         after.slice(last + 1).every((w) => !oneArgument(line.slice(at, w.end)))
       if (fits && parsed(json)) {
         out.push(json)
