@@ -1293,6 +1293,24 @@ async function STAR() {
     }
     if (i >= 5) check(`the ask for a star is there after ${i} pages`, seen || i < 5)
   }
+  // The other asks in the bar put away, one at a time, as a person closes them
+  await p.goto(site).catch(() => {})
+  await sleep(4000)
+  for (let k = 0; k < 4; k++) {
+    const chips = await p.mainFrame().evaluate(() => document.body.innerText.split('\n').filter((l) => /name this display|notifications|star|github/i.test(l)).slice(0, 4).join(' / ')).catch(() => '')
+    const closed = await p.mainFrame().evaluate(() => {
+      const b = [...document.querySelectorAll('button')].find((x) => /^(×|✕|x)$/i.test(x.innerText.trim()) || /dismiss|close|not now|put away/i.test(x.getAttribute('aria-label') ?? ''))
+      if (!b) return false
+      b.click()
+      return true
+    }).catch(() => false)
+    step(`the bar, ask ${k + 1}`, { asks: chips || 'none', closedOne: closed })
+    if (!closed) break
+    await sleep(2000)
+    await p.reload().catch(() => {})
+    await sleep(4000)
+  }
+  check('the ask for a star shows once the other asks are put away', await look('after putting the other asks away'))
 }
 
 async function hostDoes(what, ms = 2400_000) {
