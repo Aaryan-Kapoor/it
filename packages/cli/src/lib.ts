@@ -582,12 +582,14 @@ const SERVE_IS = '`it serve` runs It only until the terminal it was started in c
  * registered service left stopped.
  */
 export function notRunningHint(registered: boolean | 'unknown' = registeredHere(), kept: () => boolean = keptHere): string {
+  // Where nothing could keep It running by itself, as in a container, setup has said so already,
+  // and sending the person back to it, or to `it service install`, which refuses there, leads
+  // round in a circle. A service's definition can be on the disk there all the same, as in a
+  // home that a container shares with the machine it runs on
+  if (registered !== 'unknown' && !kept())
+    return `Nothing can keep It running in the background on this machine, which has no systemd for your account that can be reached from here, as in a container. Run \`it serve\` in a terminal of your own and leave that terminal open, or under a supervisor of your own. ${SERVE_IS}`
   if (registered === true)
     return `It's background service is registered on this machine and is not running: \`it service install\` starts it again and keeps it running. ${SERVE_IS}`
-  // Where nothing could keep It running by itself, as in a container, setup has said so already,
-  // and sending the person back to it leads round in a circle
-  if (registered === false && !kept())
-    return `Nothing can keep It running in the background on this machine, which has no systemd for your account that can be reached from here, as in a container. Run \`it serve\` in a terminal of your own and leave that terminal open, or under a supervisor of your own. ${SERVE_IS}`
   if (registered === false) return `Run \`it setup\`, which starts It and keeps it running in the background. ${SERVE_IS}`
   return `Where \`it setup\` registered It's background service on this machine, \`it service install\` starts it again; where it did not, run \`it setup\`. Either keeps It running in the background. ${SERVE_IS}`
 }
