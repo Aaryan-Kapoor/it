@@ -48,6 +48,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterTool, newestUser, standInModel, textOf } from './opencode/model.mjs'
+import { chooseWakeMode } from './wake-mode.mjs'
 import { homeOnWindows, nodeAlone, processesIn, runRoot, systemPath, windows } from './windows.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -386,6 +387,17 @@ let conversation
 let sessionId
 /** Which of the stand-in's answers it gave, in order, for the checks to read. */
 const answered = []
+/** The file a reopened turn of part 4 is to write with OpenCode's own tool before it changes the page, and what that tool gave back. */
+let wakeWrite = null
+let wroteSaid = null
+const wroteFor = new Set()
+/** OpenCode's tool that writes a file, and the names of its two arguments, as a request offers it. */
+const writeTool = (request) => {
+  const fn = (request.tools ?? []).map((t) => t?.function).find((f) => f?.name === 'write')
+  const names = Object.keys(fn?.parameters?.properties ?? {})
+  const where = names.find((n) => /path/i.test(n))
+  return fn && where && names.includes('content') ? { name: fn.name, where } : null
+}
 
 /** The name of the shell tool in a request: `bash` in OpenCode 1, `shell` in OpenCode 2. */
 const shellTool = (request) => {
@@ -485,6 +497,9 @@ try {
         },
         model: 'standin/model',
         small_model: 'standin/model',
+        // Writing a file asks, as a person can set it, so that part 4 can show what each mode does
+        // with what would ask: OpenCode 2 takes a list of rules, and OpenCode 1 a setting per tool
+        ...(major >= 2 ? { permissions: [{ action: 'edit', resource: '*', effect: 'ask' }] } : { permission: { edit: 'ask' } }),
       },
       null,
       2,
@@ -625,6 +640,12 @@ try {
     section('Part 3: a click on a page whose conversation is closed reopens it')
     await part3()
   }
+
+  // ---------- part 4 ----------
+  if (results.every((r) => r.ok)) {
+    section('Part 4: reopened in Auto-approve it writes what would ask, and in Ask that is refused')
+    await part4()
+  }
 } catch (err) {
   failed = true
   check('the run went to its end', false, unpaired(err?.stack ?? err))
@@ -697,13 +718,30 @@ function script(request) {
   // OpenCode asks for a conversation's title with no tools, and is given one
   if (!request.tools?.length) return answered.push('title') && { text: 'A page with a button' }
   const said = textOf(newestUser(request))
-  if (afterTool(request)) return answered.push('done') && { text: 'Done.' }
+  if (afterTool(request)) {
+    // After part 4's write, whatever became of it, the page is changed as for any click
+    const called = request.messages.findLast((m) => m.role === 'assistant' && m.tool_calls?.length)?.tool_calls?.at(-1)?.function?.name
+    if (called === 'write' && clicked) {
+      wroteSaid = textOf(request.messages.at(-1))
+      answered.push('patch')
+      const pings = heard.indexOf(clicked) + 1
+      return shellCall(request, `${itName()} patch ${PAGE} ${json_({ pings, heard: clicked }, 'patch')}`, 'Shows on the page that the click was heard')
+    }
+    return answered.push('done') && { text: 'Done.' }
+  }
   // A click handed to an open conversation ends with its action's id; one that Auto-wake reopens
   // a conversation for has It's word about the reopening after it
   const action = /^\[It\][\s\S]*?\[action ([^\]\s]+)\]/.exec(said.trim())
   if (action) {
     clicked = action[1]
     if (!heard.includes(clicked)) heard.push(clicked)
+    // Part 4's reopened turn writes its file first, with OpenCode's own tool
+    const tool = wakeWrite && !wroteFor.has(clicked) ? writeTool(request) : null
+    if (tool) {
+      wroteFor.add(clicked)
+      answered.push('write')
+      return { tool: { name: tool.name, args: { [tool.where]: wakeWrite, content: `written by a reopened turn\n` } } }
+    }
     answered.push('patch')
     const pings = heard.indexOf(clicked) + 1
     return shellCall(request, `${itName()} patch ${PAGE} ${json_({ pings, heard: clicked }, 'patch')}`, 'Shows on the page that the click was heard')
@@ -882,4 +920,60 @@ async function part3() {
     patched && second && patched.state.heard === second,
     JSON.stringify(patched),
   )
+}
+
+/**
+ * The mode chosen for OpenCode beside its Auto-wake switch decides what a reopened turn does with
+ * what would ask: writing a file, which the run's settings have ask. Chosen on the Machines page as
+ * the owner chooses it, Auto-approve has `opencode run --auto` approve it: the file is written, and
+ * the turn goes on to change the page. Ask has OpenCode refuse it, since nobody is there to answer:
+ * the file is not written, and OpenCode ends the turn there.
+ */
+async function part4() {
+  const frame = shownIn.frameLocator('.mount iframe')
+  const stopButton = shownIn.locator('.page-nav button[aria-label="Stop the agent"]')
+  const runOver = () => until(async () => (await stopButton.count()) === 0, 90_000, 250)
+  for (const [mode, label, writes] of [
+    ['auto', 'Auto-approve', true],
+    ['ask', 'Ask', false],
+  ]) {
+    // Nothing of the run before is left: the reopened run has ended, and OpenCode and its service are stopped
+    await runOver()
+    await stop('opencode')
+    if (major >= 2) await run(opencodeBin, ['service', 'stop'], { ms: 30_000 })
+    check(`the Machines page takes ${label} for OpenCode`, await chooseWakeMode(shownIn.context(), shownIn.url(), 'opencode', mode))
+    const file = path.join(WORK, `woken-${mode}.txt`)
+    wakeWrite = file
+    wroteSaid = null
+    const before = heard.length
+    await frame.locator('#ping').click()
+    const asked = await until(() => heard.length > before, 180_000, 500)
+    check(`in ${label}, Auto-wake reopens the conversation for the click`, asked, `answered: ${answered}\n${others.join('\n---\n')}`)
+    const tried = await until(() => wroteFor.has(heard.at(-1)), 60_000, 250)
+    check(`and the reopened turn asks OpenCode to write a file with its own tool`, tried, `answered: ${answered}`)
+    if (writes) {
+      const pings = heard.length
+      const patched = await until(
+        async () => {
+          const state = json((await it(['state', PAGE])).out)
+          return state?.state?.pings === pings && state
+        },
+        90_000,
+        500,
+      )
+      check(
+        'in Auto-approve, OpenCode wrote the file that its settings would have asked about, and the turn went on to change the page',
+        patched && existsSync(file) && readFileSync(file, 'utf8') === 'written by a reopened turn\n',
+        `${JSON.stringify(json((await it(['state', PAGE])).out)?.state)}\nthe write gave: ${wroteSaid}`,
+      )
+    } else {
+      const ended = await runOver()
+      check(
+        'in Ask, OpenCode refused to write the file, as nobody was there to answer, and the reopened run ended',
+        ended && !existsSync(file),
+        `ended: ${Boolean(ended)}, the file is ${existsSync(file) ? 'there' : 'not there'}, the write gave: ${wroteSaid}`,
+      )
+    }
+  }
+  wakeWrite = null
 }
