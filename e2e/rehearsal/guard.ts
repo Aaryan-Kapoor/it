@@ -69,8 +69,33 @@ if (!real) {
   process.exit(70)
 }
 if (!convert) {
-  const r = spawnSync(real, args, { stdio: 'inherit', windowsHide: false })
+  // On Windows the rest of this program's own command line is passed on as it came, verbatim, so
+  // that the real program sees what the shell wrote (It reads its own raw command line to recover
+  // JSON that Windows PowerShell 5.1 spoils, which re-quoting the parsed arguments would undo)
+  const tail = await rawTail()
+  const r = tail === null ? spawnSync(real, args, { stdio: 'inherit', windowsHide: false }) : spawnSync(real, tail ? [tail] : [], { stdio: 'inherit', windowsHide: false, windowsVerbatimArguments: true })
   process.exit(r.status ?? 1)
+}
+async function rawTail(): Promise<string | null> {
+  if (process.platform !== 'win32' || !('Bun' in globalThis)) return null
+  try {
+    const ffi = await import('bun:ffi')
+    const k = ffi.dlopen('kernel32.dll', { GetCommandLineW: { args: [], returns: ffi.FFIType.ptr }, lstrlenW: { args: [ffi.FFIType.ptr], returns: ffi.FFIType.i32 } })
+    const at = k.symbols.GetCommandLineW()
+    if (!at) return null
+    const line = Buffer.from(ffi.toArrayBuffer(at, 0, k.symbols.lstrlenW(at) * 2)).toString('utf16le')
+    k.close()
+    // The program's own name: quoted, or up to the first space or tab
+    let i = 0
+    if (line[0] === '"') {
+      i = line.indexOf('"', 1)
+      i = i === -1 ? line.length : i + 1
+    } else while (i < line.length && line[i] !== ' ' && line[i] !== '	') i++
+    while (i < line.length && (line[i] === ' ' || line[i] === '	')) i++
+    return line.slice(i)
+  } catch {
+    return null
+  }
 }
 note(`converted: it ${args.join(' ').slice(0, 300)} → with --no-service, then it serve`)
 const r = spawnSync(real, [...args, '--no-service'], { stdio: 'inherit', windowsHide: false })
