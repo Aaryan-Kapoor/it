@@ -150,6 +150,7 @@ async function main() {
   // ---- the sign-in, and the terminal ----
   {
     // A run against a stand-in for the model takes no sign-in of the owner's at all
+    if (OTHER && has('no-sign-in')) throw Object.assign(new Error('--no-sign-in is not for Pi, OpenCode or Hermes, which need the OpenRouter key'), { blame: 'harness' })
     if (OTHER) {
       // Pi, OpenCode and Hermes reach a model through OpenRouter, with the key the owner allowed
       held = takeOpenRouter()

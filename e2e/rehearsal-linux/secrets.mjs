@@ -156,8 +156,9 @@ export function takeOpenRouter() {
 /** What OpenRouter says this key has spent, in dollars, asked with the key in a header from memory; null where it could not be told. */
 export async function openRouterSpent(held) {
   try {
-    const r = await fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${held.key}` } })
-    const j = await r.json()
+    // Never longer than ten seconds in all, so that it can never hold up the wipe
+    const r = await fetch('https://openrouter.ai/api/v1/key', { headers: { authorization: `Bearer ${held.key}` }, signal: AbortSignal.timeout(10_000) })
+    const j = await Promise.race([r.json(), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 10_000))])
     return typeof j?.data?.usage === 'number' ? j.data.usage : null
   } catch {
     return null
