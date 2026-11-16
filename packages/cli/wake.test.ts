@@ -29,6 +29,8 @@ import { addonMarks, conversationFolder, conversationsFile, forgetAddonMark, not
 import {
   Budget,
   bootId,
+  CODEX_REVIEWED,
+  CODEX_UNREVIEWED,
   carrying,
   carryOn,
   cgroupOf,
@@ -36,8 +38,6 @@ import {
   claudeResume,
   claudeWroteAt,
   codexHolder,
-  CODEX_REVIEWED,
-  CODEX_UNREVIEWED,
   codexInterruptedAt,
   codexReview,
   codexWroteAt,
