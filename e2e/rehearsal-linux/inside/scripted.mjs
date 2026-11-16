@@ -80,7 +80,7 @@ async function press(p, re, nth = 0) {
   // A page that asks for a pick and then a press of its own button is sent by that button
   for (const b of await f.$$('button')) {
     const t = ((await b.innerText().catch(() => '')) ?? '').trim()
-    if (t && t !== one.t && !re.test(t) && /order|tell|send|submit|ask|what would|go\b|confirm|pair|get |show|see |recommend|suggest|choose|done|let.s|find|match/i.test(t) && (await b.isVisible().catch(() => false)) && (await b.isEnabled().catch(() => false))) {
+    if (t && t !== one.t && (!re.test(t) || /^(choose|order|send|submit|confirm|get|show|tell|ask|go)\b/i.test(t)) && /order|tell|send|submit|ask|what would|go\b|confirm|pair|get |show|see |recommend|suggest|choose|done|let.s|find|match/i.test(t) && (await b.isVisible().catch(() => false)) && (await b.isEnabled().catch(() => false))) {
       await sleep(1000)
       await b.click()
       await sleep(1500)
