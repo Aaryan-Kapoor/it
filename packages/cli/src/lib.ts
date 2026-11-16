@@ -1826,7 +1826,7 @@ export function askShell(said?: (line: string) => void): void {
   if (/^(0|off|false|no)$/i.test((process.env.IT_SHELL_ENV ?? '').trim())) return
   shellIsAsked = true
   void shellLearned().then(() => {
-    const n = Object.keys(fromShell).filter((k) => k !== 'PATH').length
+    const n = Object.keys(fromShell).length
     said?.(
       shellAskedAt && n
         ? `agent apps that It reopens are given ${n} setting${n === 1 ? '' : 's'} of your shell that the background service was started without`
