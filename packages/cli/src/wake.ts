@@ -62,7 +62,7 @@ export const WOKEN =
  * What a conversation of Codex is told as well, after `WOKEN`, when It reopens it on Windows. Codex
  * runs its commands there in PowerShell, and lets a command out of its sandbox, where alone `it`
  * can reach It, only where its rule for `it` matches. It matches only a command it reads as plain
- * words: one with `--%`, a value piped into it, a variable or `$(…)` outside single quotes, or any of ’ ‘ “ ” – — ― anywhere in it is one
+ * words: one with `--%`, a string or here-string piped into it, a variable or `$(…)` outside single quotes, or any of ’ ‘ “ ” – — ― anywhere in it is one
  * it cannot read, and where nobody can approve it, as here, it is refused. A woken Codex that
  * wrote JSON with `--%`, as it had been told to in PowerShell, was refused, and the person's page
  * said only "Your agent could not do that" (the Windows rehearsal, Codex 0.167.2). So it is told
@@ -70,7 +70,7 @@ export const WOKEN =
  * Codex reads as plain words (`POWERSHELL_JSON`; `quotesEscaped` says why).
  */
 export const WOKEN_POWERSHELL =
-  "[It] Codex runs your commands here in PowerShell, and runs an `it` command in this turn only where it can read the command as plain words. So write each one plainly, as `it <command> <words>`: with no `--%`, nothing piped into it, and no variable or `$(…)` outside single quotes, and with none of ’ ‘ “ ” – — ― anywhere in it, since any of them has Codex refuse the whole command: in JSON write them as `\\u2019`, `\\u2018`, `\\u201c`, `\\u201d`, `\\u2013`, `\\u2014` and `\\u2015`, which JSON reads as those letters. Give JSON as one argument in single quotes, beginning with a space, with each of its double quotes written as `\\\"`, an apostrophe as two (`''`), and a double quotation mark or a backslash in your words as `\\u0022` or `\\u005c`: `it patch <id> ' {\\\"status\\\":\\\"Done at noon\\\"}'`. PowerShell hands it to It whole only so. Text alone needs no JSON: `it set <id> <key> 'Pressed at noon'`."
+  "[It] Codex runs your commands here in PowerShell, and runs an `it` command in this turn only where it can read the command as plain words. So write each one plainly, as `it <command> <words>`: with no `--%`, no text or here-string piped into it, and no variable or `$(…)` outside single quotes, and with none of ’ ‘ “ ” – — ― anywhere in it, since any of them has Codex refuse the whole command: in JSON write them as `\\u2019`, `\\u2018`, `\\u201c`, `\\u201d`, `\\u2013`, `\\u2014` and `\\u2015`, which JSON reads as those letters. Give JSON as one argument in single quotes, beginning with a space, with each of its double quotes written as `\\\"`, an apostrophe as two (`''`), and a double quotation mark or a backslash in your words as `\\u0022` or `\\u005c`: `it patch <id> ' {\\\"status\\\":\\\"Done at noon\\\"}'`. PowerShell hands it to It whole only so. Text alone needs no JSON: `it set <id> <key> 'Pressed at noon'`."
 
 /** What a conversation of an app is told when It reopens it on a system: `WOKEN`, and for Codex on Windows `WOKEN_POWERSHELL` after it. */
 export const wokenNote = (harness: string, platform: NodeJS.Platform = process.platform): string =>

@@ -56,7 +56,7 @@ export const CODEX_SAVE_ESCALATE =
  * run where nobody can approve a command, as in a conversation It reopened.
  */
 export const POWERSHELL_JSON =
-  'In PowerShell, give the JSON in single quotes, beginning with a space, with each of its double quotes written as `\\"` and any backslash in a value as `\\u005c`, as in \' {\\"a\\":\\"b c\\"}\', and never after `--%`.'
+  "In PowerShell, give the JSON in single quotes, beginning with a space, with each of its double quotes written as `\\\"`, an apostrophe as two (`''`), and a double quotation mark or a backslash inside a value as `\\u0022` or `\\u005c`, as in ' {\\\"a\\\":\\\"It''s done\\\"}', and never after `--%`."
 /**
  * The commands of `it` that change It on this machine, rather than use it: its installation, its
  * service, whom it answers, what it reports, and the hold it keeps on conversations it cannot tell

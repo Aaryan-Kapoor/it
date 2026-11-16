@@ -80,7 +80,7 @@ const powerShell7 = (value: string) => [value]
 const page = readFileSync(new URL('../../addons/skill/more/page.md', import.meta.url), 'utf8')
 const tour = readFileSync(new URL('tour/TOUR.md', import.meta.url), 'utf8')
 const EXAMPLES: [string, string][] = [
-  ['the refusal of JSON', /as in ('[^']*')/.exec(POWERSHELL_JSON)![1]!],
+  ['the refusal of JSON', /as in ('(?:[^']|'')*')/.exec(POWERSHELL_JSON)![1]!],
   ['a reopened Codex on Windows', /`it patch <id> ('.*?')`/.exec(WOKEN_POWERSHELL)![1]!],
   ['the tour', /```powershell\nit tour answer <the action's id> ('.*')\n```/.exec(tour)![1]!],
   ['the tour’s ideas', /`it patch tour-start ('.*?')`/.exec(tour)![1]!.replace('…', '\\"x\\"')],
