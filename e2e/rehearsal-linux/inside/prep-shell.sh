@@ -17,6 +17,8 @@ grep -o 'PATH=[^\"]*' ~/.config/systemd/user/it.service | grep -c '.it/bin' | se
 if [ "$kind" = tmux ]; then echo '[ -z "$TMUX" ] && exec tmux new -A -s main' >> /home/ana/.bashrc; fi
 # The line first in ~/.bashrc, as the audit has it; the harness's own shells carry REHEARSAL_HARNESS and pass it by
 if [ "$kind" = tmuxfirst ]; then sed -i '1i [ -z "$TMUX" ] \&\& [ -z "$REHEARSAL_HARNESS" ] \&\& exec tmux new -A -s main' /home/ana/.bashrc; head -1 /home/ana/.bashrc; fi
+# The same line with the guard many snippets carry, for interactive shells only
+if [ "$kind" = tmuxfirsti ]; then sed -i '1i [[ $- == *i* ]] \&\& [ -z "$TMUX" ] \&\& [ -z "$REHEARSAL_HARNESS" ] \&\& exec tmux new -A -s main' /home/ana/.bashrc; head -1 /home/ana/.bashrc; fi
 # The user manager and It's service started again, with the shell as it now is
 systemctl restart user@1000.service; sleep 3
 # That ended the terminal's session too: the person opens a terminal again, in their own login shell
