@@ -480,7 +480,7 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       {
         id: 'conversation',
         label: 'The conversation’s own',
-        says: 'The mode the conversation was last in, with Manual raised to Auto.',
+        says: 'The mode the conversation was last in, where It can tell; Auto for Manual or unknown.',
       },
     ],
   },
