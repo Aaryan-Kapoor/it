@@ -176,6 +176,7 @@ import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
 import { listActions, watchActions } from './watch-actions'
+import { recoveredArgs } from './windows-args'
 
 // Everything is written through `written`, which follows each write until it has left the
 // process, and nothing here ends the process before all of it has: see `end` and `left`.
@@ -1202,13 +1203,15 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * \u0027, which JSON reads as one. It used to be a here-document given as `"$(cat <<'EOF' …)"`,
  * which no apostrophe could end either, but a command so wrapped is not a plain `it …` to Codex,
  * whose rule lets only that out of its sandbox: every answer then asked the person (seen in the
- * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of an
- * argument it hands a program, and sends what it pipes in ASCII, so that × arrived as "?" on the
- * tour's whiteboard (the Windows rehearsal): there `--%` hands the rest of the line over as it is
- * written, in a command line that holds every letter.
+ * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 hands the JSON on without
+ * its quotes kept, which It reads back whole from its command line (`windows-args.ts`), and sends
+ * what it pipes in ASCII, so that × arrived as "?" on the tour's whiteboard (the Windows
+ * rehearsal). In PowerShell the JSON is in the same single quotes, where an apostrophe is two,
+ * and with none of `--%`, ’, “, ” or a long dash, which Codex reads as a command it cannot match to
+ * its rule for `it`, and refuses where nobody can approve it, as in a conversation It reopened.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, write it the same way, with each apostrophe as two and ’ “ ” or a long dash as \`\\u2019\`, \`\\u201c\`, \`\\u201d\` or \`\\u2014\`, and no \`--%\`: \`it tour answer ${id} '{"say":"That''s it."}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
@@ -3636,7 +3639,9 @@ few sentences. With --json, wherever a program reads what they print, and for an
 they print JSON.
 `
 
-async function main(argv: string[]): Promise<void> {
+async function main(given: string[]): Promise<void> {
+  // On Windows, JSON that Windows PowerShell 5.1 spoilt on its way in is read whole from the command line, before anything is done with it
+  const argv = await recoveredArgs(given)
   const [cmd, ...rest] = argv
   // What is said where It is not running names the background service where this folder registered one
   askRegisteredWith(() => service.installedHereOr('unknown'))

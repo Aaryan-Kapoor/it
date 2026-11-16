@@ -18,6 +18,8 @@ await build({
   format: 'esm',
   target: 'node22',
   outfile: path.join(here, 'dist/it.mjs'),
+  // The standalone program asks Windows for its own command line through Bun's own module, which Node has not and the bundle never loads
+  external: ['bun:ffi'],
   banner: { js: "#!/usr/bin/env node\nimport { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
   loader: { '.md': 'text', '.txt': 'text' },
 })
