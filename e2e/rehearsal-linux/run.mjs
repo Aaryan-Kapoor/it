@@ -227,7 +227,12 @@ async function main() {
   // A participant's machine has It only once the guide's steps ran: a run that names no prepare step
   // of its own gets that one, so no flow ever starts on a machine without It
   const prepare = has('prepare') ? arg('prepare') : participant && !OTHER && arg('person') === 'script' ? `sh /build/harness/prep-setup.sh ${app}` : null
-  if (prepare) result.prepared = exec(prepare).status
+  if (prepare) {
+    // An app's own installer can take ten minutes (Hermes builds its TUI and web UI)
+    const pr = exec(prepare, { timeout: 1_500_000 })
+    result.prepared = pr.status ?? `stopped (${pr.signal ?? pr.error?.code ?? 'no status'})`
+    log(`prepared (${result.prepared}): ${redact(String(pr.stdout ?? ''), held).trim().split('\n').slice(-4).join(' | ').slice(0, 400)}`)
+  }
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
   // What the terminal shows, kept every few seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
