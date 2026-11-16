@@ -3600,11 +3600,11 @@ State
   it patch <id> ('<json>' | --file <path>) [--replace] [--if-revision <n>]
                                  --if-revision changes the state only while it is still at
                                  that revision, which \`it state\` prints. JSON in single
-                                 quotes is read as written in every shell that reads them,
-                                 Windows PowerShell 5.1 among them, but for two cases that
-                                 \`it help page\` names. --file, and --state-file on create,
-                                 read the JSON from a file instead, for JSON that is long or
-                                 awkward to quote.
+                                 quotes is read as written in bash, zsh, Git Bash and
+                                 PowerShell, Windows PowerShell 5.1 among them, but for a few
+                                 forms that \`it help page\` names. --file, and --state-file
+                                 on create, read the JSON from a file instead, for JSON that
+                                 is long or awkward to quote.
   it state <id>
   it say <id> "<text>"           A line of your own words above the ${NOUN.one}, where the person is
                                  looking: an answer that has no place on the ${NOUN.one} itself.

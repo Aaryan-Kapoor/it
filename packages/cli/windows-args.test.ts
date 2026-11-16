@@ -181,6 +181,24 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     expect(run(`"${IT}" patch board {"a":"b c"} --if-revision=3`)).toEqual(['patch', 'board', '{"a":"b c"}', '--if-revision=3'])
     expect(run(`"${IT}" tour answer k57abc {"say":"a b"} --no-wait`)).toEqual(['tour', 'answer', 'k57abc', '{"say":"a b"}', '--no-wait'])
   })
+  test('what the skill says Windows PowerShell 5.1 cannot hand on is not read back, and the way it gives instead is', () => {
+    // An array still JSON without its quotes is taken as it arrives; in a file it is read as written
+    expect(run(windowsPowerShell(['set', 'board', 'order', '["1","2"]']))).toEqual(['set', 'board', 'order', '[1,2]'])
+    // A backslash just before a double quote, with an option after the JSON, and the same with the option before it
+    for (const json of [String.raw`{"dir":"C:\\"}`, String.raw`["a\"b"]`]) {
+      expect(run(windowsPowerShell(['patch', 'board', json, '--if-revision', '7']))).not.toContain(json)
+      expect(run(windowsPowerShell(['patch', 'board', '--if-revision', '7', json]))).toEqual(['patch', 'board', '--if-revision', '7', json])
+    }
+    // --state joined to its JSON by =, and given it as a word of its own
+    expect(run(windowsPowerShell(['create', 'Plan', '--state={"a":1}']))).toEqual(['create', 'Plan', '--state={a:1}'])
+    expect(run(windowsPowerShell(['create', 'Plan', '--state', '{"a":1}']))).toEqual(['create', 'Plan', '--state', '{"a":1}'])
+    // A value of `it set` with an escaped double quote in it, or that is a JSON string, and the same through `it patch`
+    const quoted = String.raw`{"say":"she said \"hi\""}`
+    expect(run(windowsPowerShell(['set', 'board', 'say', quoted]))).not.toContain(quoted)
+    expect(run(windowsPowerShell(['set', 'board', 'v', '"true"']))).toEqual(['set', 'board', 'v', 'true'])
+    for (const json of [String.raw`{"say":{"say":"she said \"hi\""}}`, '{"v":"true"}'])
+      expect(run(windowsPowerShell(['patch', 'board', json]))).toEqual(['patch', 'board', json])
+  })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()
     expect(wholeJson(`${IT} status`, ['status'])).toBeNull()
