@@ -1210,6 +1210,17 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(WOKEN).toContain('Try what the work needs before you conclude that you may not')
     expect(WOKEN).not.toMatch(/not already allowed|is refused\. Run/)
   })
+  test('a reopened conversation is told that It started it and not the person’s terminal, so that it switches on the project’s own tools itself', () => {
+    expect(WOKEN).toContain(
+      'And It started you here, and not their terminal, so what that terminal had switched on may not be here: an activated virtual environment, a version chosen with a version manager, a variable they typed or exported there.',
+    )
+    expect(WOKEN).toContain(
+      'Check, and run the project’s own tools by their paths or switch them on yourself before you run its commands, and if you cannot, say so on the page.',
+    )
+    // Still one note: two differences are named, and nothing says there is only one
+    expect(WOKEN).toContain('Two things differ.')
+    expect(WOKEN).not.toContain('The one difference')
+  })
 })
 
 describe('when Claude Code last wrote of a conversation', () => {
