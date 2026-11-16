@@ -367,7 +367,7 @@ async function SOAK2() {
     await p.goto(who === 'claude' ? urlA : urlB).catch(() => {})
     await sleep(8000)
     before = await shown(p)
-    const which = await press(p, who === 'claude' ? PIZZA : DRINK, Math.floor(n / 2) % 3)
+    const which = await press(p, who === 'claude' ? PIZZA : DRINK, (Math.floor(n / 2) + 1) % 3)
     step(`soak click ${n} (${who}, ${open ? 'conversation open' : 'closed, Auto-wake'}): picks "${which}"`, { bar: await bar(p) })
     await answeredBy(open ? who : swapped ? 'claude' : 'codex', before, 300_000, `soak click ${n}, ${who}, ${open ? 'open' : 'Auto-wake'}: answered on the page`)
     step(`after soak click ${n}`, { bar: await bar(p) })
