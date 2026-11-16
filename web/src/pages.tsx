@@ -1,6 +1,6 @@
 // The person's pages: the grid of all of them, and one of them shown.
 
-import { ALIVE, CODEX_INTERRUPTED, LIMITS, NOUN, TAKES, WAKE_BACK_MS } from '@it/protocol'
+import { ALIVE, CODEX_INTERRUPTED, LIMITS, NOUN, TAKES, WAKE_BACK_MS, wakeNoteText } from '@it/protocol'
 import { useAction, useConvex, useMutation, useQuery } from 'convex/react'
 import { Component, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
@@ -522,7 +522,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
               artifactId={page.id as Id<'artifacts'>}
               stopping={page.run.stopping}
               expectedRun={page.run.identity}
-              note={page.run.note ?? null}
+              note={wakeNoteText(page.agent ?? '', page.run.note)}
               user={user}
               machine={page.machine}
               machineSeenAt={page.machineSeenAt}

@@ -2897,40 +2897,69 @@ describe('clicks and their delivery', () => {
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
     const listed = async () =>
       (await alice.browser.query(api.machines.list, {})).find((x: { id: string }) => x.id === m.id) as { wakeModes: { harness: string; mode: string }[] }
+    const begin = (more = {}) => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: true, ...more })
     // Nothing chosen: a run begins in the app's default, as on every machine before there was a choice
     expect((await listed()).wakeModes).toEqual([])
-    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, mode: 'approve-for-me' })
+    expect(await begin()).toEqual({ stopped: false, mode: 'approve-for-me' })
     // Chosen by the owner, a run that begins after is in it, whatever its machine had heard
     for (const mode of ['full-access', 'read-only', 'ask', 'approve-for-me']) {
       await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode })
       expect((await listed()).wakeModes).toEqual([{ harness: 'codex', mode }])
       expect((await m.as.query(api.machines.me, {})).wakeModes).toEqual([{ harness: 'codex', mode }])
-      expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, mode })
+      expect(await begin()).toEqual({ stopped: false, mode })
     }
-    // Nobody but the owner's own browser chooses: not the machine itself, not a screen paired to the owner, not another person
+    // Nobody but the owner's own browser chooses: not the machine itself, not another of the owner's machines, not a screen paired to the owner, not another person
     await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'ask' })
     const screen = await browserOf(t, 'alice', 'screen')
     const bob = await person(t, 'bob')
     const other = await machineOf(t, 'alice', 'desktop')
-    for (const caller of [m.as, other.as, screen.browser, bob.browser])
+    for (const caller of [m.as, other.as, screen.browser, bob.browser]) {
       expect(await code(caller.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'full-access' }))).not.toBe('ok')
+      expect(await code(caller.mutation(api.machines.wakeMode, { machineId: other.id, harness: 'codex', mode: 'full-access' }))).not.toBe('ok')
+    }
     expect((await listed()).wakeModes).toEqual([{ harness: 'codex', mode: 'ask' }])
     // Nor a mode the app does not offer, or an app that has no choice
     expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'yolo' }))).toBe('invalid')
     expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'pi', mode: 'ask' }))).toBe('invalid')
-    // A name this It does not know, as a newer one may have written, is read as what It did before, never as more
+    // A name this It does not know, as a newer one may have written, reads as the mode that allows least
     await t.run((ctx) => ctx.db.patch(m.id as never, { wakeModes: [{ harness: 'codex', mode: 'something-newer' }] }))
-    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, mode: 'ask' })
-    // How the run was in fact reopened, where it is not as chosen, is said on the page, and only by the machine running it, of its own run
-    await m.as.mutation(api.machines.runBegan, { for: thread, run: 'run-1', ids: [] })
-    expect(await other.as.mutation(api.machines.runNoted, { for: thread, run: 'run-1', note: 'not mine to say' })).toEqual({ noted: false })
-    expect(await m.as.mutation(api.machines.runNoted, { for: thread, run: 'run-0', note: 'an older run' })).toEqual({ noted: false })
-    expect(await m.as.mutation(api.machines.runNoted, { for: thread, run: 'run-1', note: 'Codex would not run in Full Access here.' })).toEqual({ noted: true })
-    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: 'Codex would not run in Full Access here.' })
-    expect(await code(screen.browser.mutation(api.machines.runNoted, { for: thread, run: 'run-1', note: 'x' }))).not.toBe('ok')
+    expect(await begin()).toEqual({ stopped: false, mode: 'read-only' })
+    // How the run was in fact reopened, where it is not as chosen, is said on the page in It's own words, from a code the machine running it gives of its own run
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'full-access' })
+    await begin({ run: 'run-1' })
+    const note = { for: thread, run: 'run-1', why: 'refused', mode: 'full-access', instead: 'approve-for-me' }
+    expect(await other.as.mutation(api.machines.runNoted, note)).toEqual({ noted: false })
+    expect(await m.as.mutation(api.machines.runNoted, { ...note, run: 'run-0' })).toEqual({ noted: false })
+    expect(await code(m.as.mutation(api.machines.runNoted, { ...note, why: 'Read Only; nothing can change' }))).toBe('invalid')
+    expect(await code(m.as.mutation(api.machines.runNoted, { ...note, instead: 'anything at all' }))).toBe('invalid')
+    expect(await code(screen.browser.mutation(api.machines.runNoted, note))).not.toBe('ok')
+    expect(await m.as.mutation(api.machines.runNoted, note)).toEqual({ noted: true })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: 'refused:full-access:approve-for-me' })
     // Another app, which has no choice, is told nothing of one
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
-    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [] })).toEqual({ stopped: false })
+    expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [], modes: true })).toEqual({ stopped: false })
+  })
+
+  test('a machine whose It is from before the choice of mode is not let run Codex with more than the owner chose, and the page says where it runs less', async () => {
+    const { t, alice, m } = await setup()
+    const thread = { harness: 'codex', id: 'thr-older' }
+    await publish(m, 'older', { session: thread })
+    await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
+    // An older connector does not say that it knows modes, and runs Codex in Ask for approval whatever is chosen
+    const olderBegins = () => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], run: 'old-run' })
+    const fails = async () => (await t.run((ctx) => ctx.db.get(m.id as never))) as { fails?: { why: string }[] }
+    // Read Only allows less than that: no run is started, and the page says why
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'read-only' })
+    expect(await olderBegins()).toEqual({ stopped: false, off: true })
+    expect((await fails()).fails?.at(-1)?.why).toMatch(/It from before the choice of mode/)
+    // Full Access allows more: it runs, in what it runs, and the page says so
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'full-access' })
+    expect(await olderBegins()).toEqual({ stopped: false, mode: 'full-access' })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'older' })).run).toMatchObject({ note: 'older:full-access:ask' })
+    // Ask for approval is what it runs anyway: nothing to say
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'ask' })
+    expect(await olderBegins()).toEqual({ stopped: false, mode: 'ask' })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'older' })).run).toMatchObject({ note: null })
   })
 
   test('a computer that takes the place of another takes the mode chosen there for its reopened conversations, as it stands when the place is given up', async () => {

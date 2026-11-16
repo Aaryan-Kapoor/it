@@ -29,13 +29,12 @@ import { addonMarks, conversationFolder, conversationsFile, forgetAddonMark, not
 import {
   Budget,
   bootId,
+  CODEX_CHANGED_SAID,
   CODEX_MODE_REFUSED,
   CODEX_NOT_REVIEWED,
   CODEX_REVIEW_ENDED,
   CODEX_REVIEWED,
   CODEX_REVIEWED_NOTE,
-  CODEX_TOOK_LESS_SAID,
-  CODEX_UNREVIEWED,
   carrying,
   carryOn,
   cgroupOf,
@@ -345,15 +344,13 @@ describe('the command each agent app is carried on with', () => {
     ])
   })
 
-  test('Approve for me is used with every Codex It accepts, and where the version is not known Codex is reopened in Ask for approval and the page is told why; every other mode is as chosen', () => {
+  test('Approve for me is used with every Codex It accepts, and where the version is not known Codex is reopened in Ask for approval, the mode below, and the page is told why; every other mode is as chosen', () => {
     for (const version of ['0.160.0', '0.167.2', '0.170.0', '1.0.0'])
-      expect(codexMode(version, 'approve-for-me')).toEqual({ mode: 'approve-for-me', note: null })
+      expect(codexMode(version, 'approve-for-me')).toEqual({ mode: 'approve-for-me', unreviewed: false })
     for (const version of ['0.159.9', '0.120.0', 'unknown', '', null, undefined, '0.167.2-alpha.1'])
-      expect(codexMode(version, 'approve-for-me'), String(version)).toEqual({ mode: 'ask', note: CODEX_UNREVIEWED })
+      expect(codexMode(version, 'approve-for-me'), String(version)).toEqual({ mode: 'ask', unreviewed: true })
     for (const mode of ['full-access', 'ask', 'read-only'])
-      for (const version of ['0.167.2', undefined]) expect(codexMode(version, mode)).toEqual({ mode, note: null })
-    expect(CODEX_UNREVIEWED.length).toBeLessThanOrEqual(300)
-    expect(CODEX_UNREVIEWED).toMatch(/refused/)
+      for (const version of ['0.167.2', undefined]) expect(codexMode(version, mode)).toEqual({ mode, unreviewed: false })
     expect(CODEX_REVIEWED_NOTE).toMatch(/not the person’s, and allows nothing/)
   })
 
@@ -488,7 +485,7 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     expect(readdirSync(kept)).toEqual([])
   })
 
-  test('a Codex that will not start in the mode it was given says so, and one that takes less is heard saying it while it runs', async () => {
+  test('a Codex that will not start in the mode it was given says so, and one whose requirements change the mode is heard saying it and ended there', async () => {
     const kept = path.join(scratch, 'kept-mode')
     const script = (name: string, body: string) => {
       const file = path.join(scratch, name)
@@ -496,32 +493,38 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
       chmodSync(file, 0o755)
       return file
     }
-    const refused = script(
-      'mode-refused',
-      'echo "Error loading config: \\`approval_policy = \\"never\\"\\` cannot be used because requirements do not allow \\`sandbox_mode = \\"danger-full-access\\"\\`" >&2\nexit 1\n',
-    )
     const brokeOff = vi.fn()
     const opts = { keepIn: kept, said: () => {}, brokeOff }
-    expect(await carryOn({ argv: [refused], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_MODE_REFUSED)
-    // No turn ran, so none is said to have been cut off
-    expect(brokeOff).not.toHaveBeenCalled()
-    // The same words from another app are its own failure
-    expect(await carryOn({ argv: [refused], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, opts)).toBe('Pi exited with 1')
-    // Codex that takes less than it was given says so as it starts, and goes on
-    const less = script(
-      'mode-less',
-      'echo "warning: Configured value for \\`sandbox_mode\\` is disallowed by requirements; falling back to required value ReadOnly." >&2\nsleep 2\nexit 0\n',
+    // Both of the ways Codex refuses outright, as its config loader words them
+    for (const [n, words] of [
+      'Error loading config: `approval_policy = "never"` cannot be used because requirements do not allow `sandbox_mode = "danger-full-access"`',
+      'configured value for `sandbox_mode` is disallowed by requirements (not allowed); fallback to a requirement-compliant value also failed (not allowed)',
+    ].entries()) {
+      const refused = script(`mode-refused-${n}`, `cat >&2 <<'SAID'\n${words}\nSAID\nexit 1\n`)
+      expect(await carryOn({ argv: [refused], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, opts), words).toBe(
+        CODEX_MODE_REFUSED,
+      )
+      // The same words from another app are its own failure
+      expect(await carryOn({ argv: [refused], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, opts)).toBe('Pi exited with 1')
+    }
+    // No turn ran, so none is said to have been cut off, but for Pi's own failures
+    expect(brokeOff).toHaveBeenCalledTimes(2)
+    // Codex whose requirements put their own value in place of one It gave says so as it starts, and is ended there
+    const changed = script(
+      'mode-changed',
+      'echo "warning: Configured value for \\`approvals_reviewer\\` is disallowed by requirements; falling back to required value AutoReview." >&2\nsleep 30\nexit 0\n',
     )
+    const began = Date.now()
     const heard: string[] = []
-    expect(
-      await carryOn(
-        { argv: [less], input: 'a click', app: 'Codex' },
-        scratch,
-        { harness: 'codex', session: 'x' },
-        { ...opts, noticed: (p: string) => heard.push(p) },
-      ),
-    ).toBeNull()
-    expect(heard.some((p) => CODEX_TOOK_LESS_SAID.test(p))).toBe(true)
+    const noticed = (p: string) => {
+      heard.push(p)
+      return CODEX_CHANGED_SAID.test(p) ? CODEX_MODE_REFUSED : undefined
+    }
+    expect(await carryOn({ argv: [changed], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, { ...opts, noticed })).toBe(
+      CODEX_MODE_REFUSED,
+    )
+    expect(Date.now() - began).toBeLessThan(10_000)
+    expect(heard.length).toBeGreaterThan(0)
     expect(readdirSync(kept)).toEqual([])
   })
 

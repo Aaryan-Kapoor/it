@@ -10,9 +10,12 @@ import {
   TURN_ON_MS,
   TURNS_ON,
   UPGRADE_MS,
+  WAKE_MODE_LEGACY,
   WAKE_MODES,
+  WAKE_NOTE_WHYS,
   WAKES,
   wakeModeOf,
+  wakeModeRank,
   wakesOn,
 } from '@it/protocol'
 import { v } from 'convex/values'
@@ -197,19 +200,20 @@ export const wakeMode = mutation({
 
 /**
  * The machine says how a conversation it is running for It was in fact reopened, where that is not
- * as the person chose: the app refused the mode, and the run went on in another, or the app said
- * it took less. The page says it beside the run, for as long as the run is there. Only of a run
- * this machine has, by its name.
+ * as the person chose (`WAKE_NOTE_WHYS`): by a code and the two modes' names, of its own run, by
+ * its name. The page says it in It's own words (`wakeNoteText`), for as long as the run is there,
+ * and never in words a machine sent.
  */
 export const runNoted = mutation({
-  args: { for: session, run: v.string(), note: v.string() },
-  handler: async (ctx, { for: s, run, note }) => {
+  args: { for: session, run: v.string(), why: v.string(), mode: v.string(), instead: v.string() },
+  handler: async (ctx, { for: s, run, why, mode, instead }) => {
     const { machine } = await requireMachine(ctx)
+    if (!(WAKE_NOTE_WHYS as readonly string[]).includes(why) || wakeModeRank(s.harness, mode) < 0 || wakeModeRank(s.harness, instead) < 0)
+      fail('invalid', 'That is not something It says of how a conversation was reopened.')
     const runs = machine.runs ?? []
-    if (!runs.some((r) => r.harness === s.harness && r.sessionId === s.id && r.run === run)) return { noted: false }
-    await ctx.db.patch(machine._id, {
-      runs: runs.map((r) => (r.harness === s.harness && r.sessionId === s.id && r.run === run ? { ...r, note: note.slice(0, 300) } : r)),
-    })
+    const its = (r: (typeof runs)[number]) => r.harness === s.harness && r.sessionId === s.id && r.run === run
+    if (!runs.some(its)) return { noted: false }
+    await ctx.db.patch(machine._id, { runs: runs.map((r) => (its(r) ? { ...r, note: `${why}:${mode}:${instead}` } : r)) })
     return { noted: true }
   },
 })
@@ -327,8 +331,9 @@ const RUNS_MOST = 20
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
   /** `run` names this run among all there have been of the conversation, so that the ending of an earlier one, told late, does not take this one's place away. */
-  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())), note: v.optional(v.string()) },
-  handler: async (ctx, { for: s, run, ids, note }) => {
+  /** `modes` says the machine's It reopens a conversation in the mode chosen for it: one from before that does not say so, and reopens it in `WAKE_MODE_LEGACY` whatever is chosen. */
+  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())), modes: v.optional(v.boolean()) },
+  handler: async (ctx, { for: s, run, ids, modes }) => {
     const { machine } = await requireMachine(ctx)
     // What it is reopened for may have been stopped while the machine was getting ready: a
     // person who pressed Stop beside a run that was only still listed stopped that, and
@@ -349,10 +354,24 @@ export const runBegan = mutation({
     if (ids !== undefined && !(wakesOn(machine.system, machine.reopens) && (machine.wakes ?? []).some((w) => w.harness === s.harness)))
       return { stopped: false, off: true }
     // The mode it runs in is asked here too, where the person's choice is kept, so that one changed
-    // a moment ago holds for this run. What the machine says of how it was reopened is kept only
-    // where it was to be reopened in the automatic mode and was not.
+    // a moment ago holds for this run
     const mode = wakeModeOf(machine.wakeModes, s.harness)
-    const said = note ? { note: note.slice(0, 300) } : {}
+    // A machine whose It is from before the choice runs the app in its old mode whatever is chosen.
+    // Where what is chosen allows less than that, it is not let start a run, and says why on the
+    // page; where it allows more, the run goes ahead and the page says the machine runs less
+    const legacy = WAKE_MODE_LEGACY[s.harness as Harness]
+    let said = {}
+    if (mode !== null && legacy && !modes && mode !== legacy) {
+      if (wakeModeRank(s.harness, mode) > wakeModeRank(s.harness, legacy)) {
+        const others = (machine.fails ?? []).filter((f) => f.harness !== s.harness || f.sessionId !== s.id)
+        const why = `this machine runs an It from before the choice of mode, which cannot reopen it in the one chosen: update It on that machine, or choose another mode under Machines`
+        await ctx.db.patch(machine._id, {
+          fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why }].slice(-RUNS_MOST),
+        })
+        return { stopped: false, off: true }
+      }
+      said = { note: `older:${mode}:${legacy}` }
+    }
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
       runs: [

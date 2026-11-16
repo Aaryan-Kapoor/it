@@ -150,35 +150,34 @@ export const interruptedByCodex = (printed: string): boolean =>
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the colours a terminal is sent
   INTERRUPTED_SAID.test(printed.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, ''))
 
-/** What the bar above a page says where Codex was to be reopened with Approve for me and was not. */
-export const CODEX_UNREVIEWED =
-  'Codex was reopened in Ask for approval, not Approve for me, because It could not tell that this Codex has an automatic reviewer. So it may run only what Codex’s sandbox and It’s rule let through, and whatever would need approval is refused.'
-
 /**
- * The mode a reopened Codex conversation is in fact run in, from the one chosen under Machines,
- * and what the page is to say where that is not the one chosen. The automatic reviewer, and the
- * way of choosing it from the command line, are in every Codex It accepts, from
- * `CODEX_MIN_VERSION` on, so Approve for me is used where the Codex found on this machine says it
- * is one of those; one whose version was not read, or that is older, is reopened in Ask for
- * approval, and the page says why. Every other mode is Codex's sandbox and approvals alone, which
- * every Codex It accepts has.
+ * The mode a reopened Codex conversation is in fact run in, from the one chosen under Machines.
+ * The automatic reviewer, and the way of choosing it from the command line, are in every Codex It
+ * accepts, from `CODEX_MIN_VERSION` on, so Approve for me is used where the Codex found on this
+ * machine says it is one of those; one whose version was not read, or that is older, is reopened
+ * in Ask for approval, the next mode down, and `unreviewed` says so, for the page. Every other
+ * mode is Codex's sandbox and approvals alone, which every Codex It accepts has.
  */
-export function codexMode(version: string | null | undefined, chosen: string): { mode: string; note: string | null } {
-  if (chosen !== 'approve-for-me') return { mode: chosen, note: null }
+export function codexMode(version: string | null | undefined, chosen: string): { mode: string; unreviewed: boolean } {
+  if (chosen !== 'approve-for-me') return { mode: chosen, unreviewed: false }
   const known = typeof version === 'string' && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version)
-  if (known && !newer(CODEX_MIN_VERSION, version)) return { mode: chosen, note: null }
-  return { mode: 'ask', note: CODEX_UNREVIEWED }
+  if (known && !newer(CODEX_MIN_VERSION, version)) return { mode: chosen, unreviewed: false }
+  return { mode: 'ask', unreviewed: true }
 }
 
 /**
- * Why a reopened Codex run did not start: Codex refused the mode it was given, because what an
- * administrator requires of it forbids that mode (Codex 0.167.2, `core/src/config/mod.rs`). The
- * conversation is then reopened in another mode at once, and the page says so (see `carry`).
+ * Why a reopened Codex run went no further: Codex would not run in the mode it was given exactly,
+ * because what an administrator requires of it forbids that mode (Codex 0.167.2,
+ * `core/src/config/mod.rs`). Either it refused to start, or it said, as it started, that it put a
+ * required value in place of one It gave, which may allow more than was chosen as well as less,
+ * and It ended it there, before its turn could do anything. The conversation is then reopened in
+ * the next mode down, and the page says so (see `carry`).
  */
-export const CODEX_MODE_REFUSED = 'Codex refused the mode it was to be reopened in, as its administrator’s requirements forbid it'
-/** What Codex prints where its requirements forbid a mode outright, and where it takes a lesser one in its place. */
-const REFUSED_SAID = /cannot be used because requirements do not allow|is disallowed by requirements; fallback to a requirement-compliant value also failed/
-export const CODEX_TOOK_LESS_SAID = /Configured value for `[a-z_]+` is disallowed by requirements; falling back/
+export const CODEX_MODE_REFUSED = 'Codex would not run in the mode it was to be reopened in, as what its administrator requires forbids it'
+/** What Codex prints where its requirements forbid a mode outright, as `codex exec` ends without a turn. */
+const REFUSED_SAID = /cannot be used because requirements do not allow|fallback to a requirement-compliant value also failed/
+/** What Codex prints as it starts where its requirements put a value of their own in place of one It gave. */
+export const CODEX_CHANGED_SAID = /is disallowed by requirements; falling back to required value/
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
@@ -321,6 +320,17 @@ function tail(file: string, bytes = 4096): string {
     closeSync(fd)
   }
 }
+/** The beginning of a file, as text: as much as what a program says as it starts could be in. */
+function head(file: string, bytes = 16384): string {
+  const fd = openSync(file, 'r')
+  try {
+    const buf = Buffer.alloc(bytes)
+    const n = readSync(fd, buf, 0, bytes, 0)
+    return buf.subarray(0, n).toString('utf8')
+  } finally {
+    closeSync(fd)
+  }
+}
 /**
  * The last line an app printed, as it may be shown to the person whose app it is: the last of
  * its closing lines that speaks of something going wrong, or else the very last, without the
@@ -375,8 +385,11 @@ export function carryOn(
     overtime?: () => void
     /** Called where the app ended badly by itself, killed or failing, in the middle of whatever it was doing: what it left running is ended before this answers. */
     brokeOff?: () => void
-    /** Given what the app has printed so far, a few times in its first seconds, for what it says of how it started: see `CODEX_TOOK_LESS_SAID`. */
-    noticed?: (printed: string) => void
+    /**
+     * Given the beginning of what the app has printed, every half second while it runs, for what it
+     * says of how it started. Where it answers with words, the run is ended there and that is why.
+     */
+    noticed?: (printed: string) => string | undefined
   } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
@@ -509,15 +522,20 @@ export function carryOn(
       if (!ending && !stopped) opts.overtime?.()
       quit(`${how.app} had not finished in fifteen minutes`)
     }, patience)
-    // What the app says of how it started, which it says in its first seconds, is looked at as it
-    // is printed, so that the page can say it while the run is there
+    // What the app says of how it started is looked at as it is printed, from the beginning of what
+    // it printed, for as long as it runs: where that ends the run, it ends there, before its turn
+    // has got far
     if (opts.noticed && printed) {
-      let looks = 0
       const look = setInterval(() => {
-        if (over || ++looks > 40) return clearInterval(look)
+        if (over || ending) return clearInterval(look)
+        let why: string | undefined
         try {
-          opts.noticed?.(tail(printed))
+          why = opts.noticed?.(head(printed))
         } catch {}
+        if (why) {
+          clearInterval(look)
+          quit(why)
+        }
       }, 500)
       look.unref?.()
     }

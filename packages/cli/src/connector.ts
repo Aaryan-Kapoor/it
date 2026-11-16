@@ -20,7 +20,6 @@ import {
   type Click,
   CODEX_INTERRUPTED,
   describeClick,
-  type Harness,
   LEASE_MS,
   LISTENING_MOST,
   MARK,
@@ -31,9 +30,9 @@ import {
   TAKES,
   TURN_ON_MS,
   TURNS_ON,
-  WAKE_MODES,
   WAKE_MOST,
   WAKES,
+  wakeModeBelow,
   wakeModeOf,
   wakesOn,
 } from '@it/protocol'
@@ -101,9 +100,9 @@ import {
   Budget,
   bootId,
   type Carrying,
+  CODEX_CHANGED_SAID,
   CODEX_MODE_REFUSED,
   CODEX_REVIEW_ENDED,
-  CODEX_TOOK_LESS_SAID,
   carrying,
   carryOn,
   claudeModeOf,
@@ -438,8 +437,6 @@ let wakeModesNow: readonly { harness: string; mode: string }[] = []
 export function wakeModeFor(harness: string): string | null {
   return wakeModeOf(wakeModesNow, harness)
 }
-/** A mode's name in its app's own words, for what the page says. */
-const modeLabel = (harness: string, mode: string): string => WAKE_MODES[harness as Harness]?.choices.find((c) => c.id === mode)?.label ?? mode
 /** The words that start Codex with the environment it is given, for a click queued in an open Codex and for a closed conversation reopened alike. */
 export const codexIn = (env: NodeJS.ProcessEnv): string[] | null =>
   codexCommand(process.platform, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8'))
@@ -2661,7 +2658,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     // its reviewer where this Codex may not have one
     const codexVersion = found.find((h) => h.id === 'codex')?.version
     let chosen = wakeModeFor(now.harness)
-    const runIn = (mode: string | null) => (now.harness === 'codex' && mode !== null ? codexMode(codexVersion, mode) : { mode, note: null })
+    const runIn = (mode: string | null) => (now.harness === 'codex' && mode !== null ? codexMode(codexVersion, mode) : { mode, unreviewed: false })
     const carryingWith = (mode: string | null) =>
       carrying(now.harness, now.id, text, {
         codex: codexIn(env),
@@ -2705,6 +2702,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         for: session,
         run: runId,
         ids,
+        // This It reopens a conversation in the mode chosen for it
+        modes: true,
       }).then(
         // Stopped meanwhile, or reopening switched off since this machine last heard: either way nothing is started
         (said) => {
@@ -2753,22 +2752,14 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         }
         how = again
       }
-      // Said on the page beside the run, where it is not run in the mode the person chose
-      const noted = (note: string) => call('mutation', api.machines.runNoted, { for: session, run: runId, note }).catch(() => {})
-      if (runMode.note) void noted(runMode.note)
-      // What Codex says as it starts, where its administrator's requirements gave it less than the mode chosen
-      let toldLess = false
-      const noticed =
-        now.harness === 'codex'
-          ? (printed: string) => {
-              if (toldLess || !CODEX_TOOK_LESS_SAID.test(printed)) return
-              toldLess = true
-              say(`${a(now.harness)} conversation (${short(key)}) was reopened in less than the mode chosen, as Codex's requirements allow no more`)
-              void noted(
-                `Codex’s administrator’s requirements do not allow ${modeLabel(now.harness, runMode.mode ?? '')} here, so Codex is running this with less than that.`,
-              )
-            }
-          : undefined
+      // Said on the page beside the run, where it is not run in the mode the person chose, by a code
+      // and the modes' names: the page says it in It's words (`wakeNoteText`)
+      const noted = (why: 'refused' | 'unreviewed', mode: string, instead: string) =>
+        call('mutation', api.machines.runNoted, { for: session, run: runId, why, mode, instead }).catch(() => {})
+      if (runMode.unreviewed && chosen) void noted('unreviewed', chosen, runMode.mode ?? '')
+      // Codex saying, as it starts, that its administrator's requirements put a value of their own in
+      // place of one It gave, which may allow more than was chosen: the run is ended there
+      const noticed = now.harness === 'codex' ? (printed: string) => (CODEX_CHANGED_SAID.test(printed) ? CODEX_MODE_REFUSED : undefined) : undefined
       saidLast.delete(key)
       const reopen = (how: Carrying) =>
         carryOn(
@@ -2818,20 +2809,20 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           },
         )
       ended = await reopen(how)
-      // Codex would not start in the mode chosen, as its administrator's requirements forbid it: no
-      // turn ran, and it is reopened once more at once, in its automatic mode or else as It did
-      // before there was a choice, never in more than was chosen, and the page says so
-      if (ended === CODEX_MODE_REFUSED && !stop.signal.aborted) {
-        const fallback = runMode.mode !== 'approve-for-me' ? runIn('approve-for-me') : runIn('ask')
+      // Codex would not run in the mode given, as its administrator's requirements forbid it: it is
+      // reopened at once in the next mode down, which allows less, and so on, never in one that
+      // allows more, and the page says so. Where there is none below, it is a failure as any is
+      while (ended === CODEX_MODE_REFUSED && !stop.signal.aborted && runMode.mode !== null) {
+        const below = wakeModeBelow(now.harness, runMode.mode)
+        if (below === null) break
+        const refused = runMode.mode
+        const fallback = runIn(below)
         const instead = carryingWith(fallback.mode)
-        if (typeof instead !== 'string' && fallback.mode !== runMode.mode) {
-          say(`${a(now.harness)} conversation (${short(key)}) was refused its mode by Codex's requirements; it is reopened in another`)
-          void noted(
-            `Codex would not run in ${modeLabel(now.harness, runMode.mode ?? '')} here, as its administrator’s requirements forbid it, so It reopened it in ${modeLabel(now.harness, fallback.mode ?? '')}.`,
-          )
-          runMode = fallback
-          ended = await reopen(instead)
-        }
+        if (typeof instead === 'string' || fallback.mode === null) break
+        say(`${a(now.harness)} conversation (${short(key)}) was refused its mode by Codex's requirements; it is reopened in the one below`)
+        void noted('refused', refused, fallback.mode)
+        runMode = fallback
+        ended = await reopen(instead)
       }
       // Codex interrupted the turn under its reviewer: it ran, its refusals are in the conversation,
       // and it is handed over as any turn that ran, so that the same request is not put to the

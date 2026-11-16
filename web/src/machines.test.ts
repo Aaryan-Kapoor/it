@@ -181,9 +181,8 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     ])
     expect(chosen('Codex')).toBe('approve-for-me')
     // Each says what a reopened conversation may then do, Full Access both halves of it
-    expect(codex.textContent).toContain(
-      'a press on any screen paired with this It, a phone among them, starts a run on this machine that nothing checks and nothing asks about',
-    )
+    expect(codex.textContent).toContain('a press on any screen paired with this It, a phone among them, or the words on a page, can lead it to do')
+    expect(codex.textContent).toContain('read and send your files and secrets, change or delete files, and start things that keep running after the turn')
     expect(codex.textContent).toContain('It allows what it judges to be of low or medium risk even where you never asked for it')
     expect(codex.textContent).toContain('whatever would ask you is refused')
     // Choosing asks It with the machine, the app and the mode's name, and nothing else
@@ -191,7 +190,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'codex', mode: 'full-access' } }])
   })
 
-  test('shows what was chosen, and reads a name it does not know as what It did before', async () => {
+  test('shows what was chosen, and reads a name it does not know as the mode that allows least', async () => {
     machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'read-only' }] })]
     await shown()
     expect(chosen('Codex')).toBe('read-only')
@@ -199,7 +198,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     host.remove()
     machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'something-newer' }] })]
     await shown()
-    expect(chosen('Codex')).toBe('ask')
+    expect(chosen('Codex')).toBe('read-only')
   })
 
   test('is offered for no app the choice would change nothing for, and not where Auto-wake is off', async () => {

@@ -947,13 +947,18 @@ describe('what the page’s bar says of the last thing the person did', () => {
   })
 
   test('a run reopened otherwise than the person chose says so beside Working, in It’s own sentence, for as long as it runs', async () => {
-    const note = 'Codex was reopened without its automatic reviewer, because It could not tell that this Codex has one.'
-    Object.assign(PAGE, { run: { stopping: false, note }, machineSeenAt: NOW, agent: 'codex' })
+    Object.assign(PAGE, { run: { stopping: false, note: 'unreviewed:approve-for-me:ask' }, machineSeenAt: NOW, agent: 'codex' })
     await shown()
     expect(host.querySelector('.working')?.textContent).toContain('Working')
     expect(host.querySelector('.page-nav-said')?.textContent).toContain(
-      'Codex was reopened without its automatic reviewer, because It could not tell that this Codex has one',
+      'Codex was reopened in Ask for approval, not Approve for me, because It could not tell that this Codex has an automatic reviewer',
     )
+    await act(async () => root.unmount())
+    host.remove()
+    // A note It cannot read says nothing: the bar says only what It itself would say
+    Object.assign(PAGE, { run: { stopping: false, note: 'refused:full-access:Read Only; nothing can change' } })
+    await shown()
+    expect(host.querySelector('.page-nav-said')?.textContent).not.toContain('nothing can change')
     await act(async () => root.unmount())
     host.remove()
     // And nothing where it was reopened as the person chose
