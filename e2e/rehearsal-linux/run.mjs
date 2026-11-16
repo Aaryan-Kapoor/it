@@ -27,6 +27,7 @@ const OTHER = ['pi', 'opencode', 'hermes'].includes(app)
 const which = arg('browser', 'chromium')
 const ubuntu = arg('ubuntu', '24')
 const from = arg('from', `it-rehearsal-ubuntu${ubuntu}:base`)
+if (!from.endsWith(':base')) { console.error('a machine from a snapshot starts It (and its reporting) at boot: start from a :base image'); process.exit(2) }
 const snapshot = arg('snapshot')
 const minutes = Number(arg('minutes', '45'))
 // The released It from its real site and release, as a participant gets it: no stand-in, no IT_INSTALL_BASE
@@ -118,6 +119,22 @@ async function main() {
     await new Promise((r) => setTimeout(r, 1000))
   }
   exec('systemctl is-active user@1000.service rehearsal-xvfb.service rehearsal-wm.service')
+  // Reporting off for the machine's whole life, before It is installed: DO_NOT_TRACK=1 for every
+  // login (the install script, `it setup`, the terminal, the agent app and its commands), for
+  // systemd's system and user managers (It's service), and for shells that read /etc/profile.d.
+  // The first `it` command then writes telemetry-off into ~/.it, which the service goes by too.
+  exec([
+    "grep -q '^DO_NOT_TRACK=' /etc/environment || echo DO_NOT_TRACK=1 >> /etc/environment",
+    "echo 'export DO_NOT_TRACK=1' > /etc/profile.d/do-not-track.sh",
+    'mkdir -p /etc/systemd/system.conf.d /etc/systemd/user.conf.d',
+    "printf '[Manager]\\nDefaultEnvironment=DO_NOT_TRACK=1\\n' > /etc/systemd/system.conf.d/do-not-track.conf",
+    'cp /etc/systemd/system.conf.d/do-not-track.conf /etc/systemd/user.conf.d/do-not-track.conf',
+    'systemctl daemon-reexec',
+    'systemctl restart user@1000.service',
+  ].join(' && '))
+  const dnt = asAna('echo "login:${DO_NOT_TRACK:-unset} user-manager:$(systemctl --user show-environment | grep -c ^DO_NOT_TRACK=1)"', { quiet: true }).stdout.trim()
+  result.reporting = { doNotTrack: dnt }
+  if (!/login:1 user-manager:1/.test(dnt)) throw Object.assign(new Error(`reporting could not be turned off before the install (${dnt})`), { blame: 'harness' })
   // Nothing of the host's results folder is in the machine: ana has the owner's uid, so a folder
   // mounted for her would be one an agent could write into. The flow writes here, the recording
   // goes to a folder only root can enter, and both are copied out and scanned afterwards.
@@ -233,6 +250,8 @@ async function main() {
     result.prepared = pr.status ?? `stopped (${pr.signal ?? pr.error?.code ?? 'no status'})`
     log(`prepared (${result.prepared}): ${redact(String(pr.stdout ?? ''), held).trim().split('\n').slice(-4).join(' | ').slice(0, 400)}`)
   }
+  result.reporting.it = asAna('test -x ~/.it/bin/it && { ~/.it/bin/it telemetry 2>&1 | head -5; ls -la --time-style=full-iso ~/.it/telemetry-off 2>&1 | sed "s/^.* ana ana *//"; journalctl --user -u it.service -o short-iso --no-pager 2>/dev/null | grep -m1 Started; } || echo "It not installed yet"', { quiet: true }).stdout.trim().replace(/\n/g, ' | ')
+  log(`reporting: ${result.reporting.doNotTrack}; ${result.reporting.it.slice(0, 300)}`)
   asAna('tmux set -g status off; tmux set -g history-limit 50000')
   // What the terminal shows, kept every few seconds where it changed: an app that clears the
   // screen as it leaves takes its scrollback with it
