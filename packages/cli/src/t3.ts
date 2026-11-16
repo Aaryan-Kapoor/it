@@ -378,6 +378,16 @@ export function nearby(shell: { threads?: unknown; projects?: unknown }, of: { c
     .map((t) => t.id)
 }
 
+/**
+ * Each folder as the system named it when last asked, and when that was, by the folder and the
+ * system it is named for. A workspace names thousands of worktrees, many of them removed since,
+ * and every listing of every search asks of them all: asked of the disk at most once in ten
+ * minutes each, and no more than so many kept, the oldest let go of first.
+ */
+const realNames = new Map<string, { to: string | undefined; at: number }>()
+const REAL_NAMES_MS = 10 * 60_000
+const REAL_NAMES_MOST = 20_000
+
 /** Whether a thread of a list works in a conversation's folder, as `nearby` says. */
 function folderTest(shell: { projects?: unknown }, of: { cwd?: string }, platform: string): (t: ShellThread) => boolean {
   const roots = new Map<string, string>()
@@ -409,7 +419,18 @@ function folderTest(shell: { projects?: unknown }, of: { cwd?: string }, platfor
   }
   const named = (folder: string): string[] => {
     if (!real.has(folder)) {
-      const to = platform === process.platform ? realOf(folder) : undefined
+      let to: string | undefined
+      if (platform === process.platform) {
+        const now = Date.now()
+        const kept = realNames.get(folder)
+        if (kept && now - kept.at >= 0 && now - kept.at < REAL_NAMES_MS) to = kept.to
+        else {
+          to = realOf(folder)
+          realNames.delete(folder)
+          realNames.set(folder, { to, at: now })
+          while (realNames.size > REAL_NAMES_MOST) realNames.delete(realNames.keys().next().value!)
+        }
+      }
       real.set(folder, to !== undefined && plain(to) !== plain(folder) ? plain(to) : undefined)
     }
     const to = real.get(folder)
