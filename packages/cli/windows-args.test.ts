@@ -162,7 +162,18 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     ])
       expect([line, wholeJson(line, given(line))]).toEqual([line, null])
     // And where it does, with options anywhere around it
-    expect(run(`"${IT}" --json set board steps {"build":"not yet"}`)).toEqual(['--json', 'set', 'board', 'steps', '{"build":"not yet"}'])
+    expect(run(`"${IT}" set board steps {"build":"not yet"} --json`)).toEqual(['set', 'board', 'steps', '{"build":"not yet"}', '--json'])
+    // A word with one dash is a key, as \`it\` reads it, and not an option
+    expect(run(windowsPowerShell(['set', 'board', '-a', '{"x":"b c"}']))).toEqual(['set', 'board', '-a', '{"x":"b c"}'])
+    // Read as `main` reads its words: one-dash words are not options, and what an option takes is skipped as \`it\` skips it
+    for (const line of [
+      `"${IT}" set board -open key {"x":1}`,
+      `"${IT}" set board -state {"x":1} suffix`,
+      `"${IT}" say board -state {"x":1} suffix`,
+      `"${IT}" --json set board steps {"x":1}`,
+    ])
+      expect([line, wholeJson(line, given(line))]).toEqual([line, null])
+    expect(run(`"${IT}" patch board {"a":"b c"} --if-revision=3`)).toEqual(['patch', 'board', '{"a":"b c"}', '--if-revision=3'])
     expect(run(`"${IT}" tour answer k57abc {"say":"a b"} --no-wait`)).toEqual(['tour', 'answer', 'k57abc', '{"say":"a b"}', '--no-wait'])
   })
   test('a line with no spoilt word is never read', () => {

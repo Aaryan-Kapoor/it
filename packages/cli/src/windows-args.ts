@@ -23,7 +23,7 @@
  * taken back, the words are left as they were given, and the command says what it says today.
  */
 import path from 'node:path'
-import { quotesTakenOut, VALUED } from './args'
+import { BOOLEAN, quotesTakenOut, VALUED } from './args'
 import { runSync } from './child'
 
 /** The rules a program on Windows splits its command line by: the C runtime's since 2008, or `CommandLineToArgvW`'s, which read `""` inside quotes differently. */
@@ -183,36 +183,42 @@ const oneArgument = (stretch: string) =>
  * name or text, which cmd reads with its quotes as quoting, and nothing is taken there.
  */
 export function jsonPlaces(given: readonly string[]): Map<number, number> {
-  const words: number[] = []
   const places = new Map<number, number>()
-  let options = true
-  for (let k = 0; k < given.length; k++) {
+  // The words as `main` reads them: the first is the command, and the rest as `parse` reads them,
+  // where only a word that begins with two dashes is an option, `--name=value` is one word, and
+  // an option `parse` does not know, or one left without its value, stops the command anyway
+  const command = given[0]
+  const words: number[] = []
+  for (let k = 1; k < given.length; k++) {
     const word = given[k]!
-    if (options && word === '--') {
-      options = false
+    if (word === '--') {
+      for (let rest = k + 1; rest < given.length; rest++) words.push(rest)
+      break
+    }
+    if (!word.startsWith('--') || word.length === 2) {
+      words.push(k)
       continue
     }
-    const option = options ? /^--?([a-z][a-z-]*)(=.*)?$/.exec(word) : null
-    if (option) {
-      if (option[2] === undefined && VALUED.has(option[1]!)) {
-        // The value of --state is JSON, and is the whole of it; the value of any other option is not
-        if (option[1] === 'state' && k + 1 < given.length) places.set(k + 1, k + 1)
-        k++
-      }
-      continue
-    }
-    words.push(k)
+    const eq = word.indexOf('=')
+    const name = eq === -1 ? word.slice(2) : word.slice(2, eq)
+    if (!BOOLEAN.has(name) && !VALUED.has(name)) return new Map()
+    if (eq !== -1 || BOOLEAN.has(name)) continue
+    const value = given[k + 1]
+    if (value === undefined || (value.startsWith('--') && value.length > 2)) return new Map()
+    // The value of --state is JSON, and is the whole of it; the value of any other option is not
+    if (name === 'state') places.set(k + 1, k + 1)
+    k++
   }
-  const [command, second] = words.map((k) => given[k])
+  const second = words[0] === undefined ? undefined : given[words[0]]
   const last = words[words.length - 1]!
-  // The place where the JSON begins, and the last word the command reads that it may run over
-  const json = command === 'patch' ? words[2] : command === 'tour' && second === 'answer' ? words[3] : command === 'set' ? words[3] : undefined
+  // The place where the JSON begins: after the id, after `answer` and the action's id, or after the id and the key
+  const json = command === 'patch' ? words[1] : command === 'tour' && second === 'answer' ? words[2] : command === 'set' ? words[2] : undefined
   if (json === undefined) return places
   if (
     command === 'set' &&
     !quotesTakenOut(
       words
-        .slice(3)
+        .slice(2)
         .map((k) => given[k])
         .join(' '),
     )
