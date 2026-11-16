@@ -267,7 +267,14 @@ describe('the agent skill', () => {
     expect(more.page).toContain('in cmd write it in quotes with backslashes')
   })
 
-  test('tells an agent on Windows to give JSON in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
+  test('tells an agent in PowerShell the one form of JSON that every PowerShell hands on whole and Codex runs unasked, and never `--%`', () => {
+    expect(more.page).toContain('`it.exe patch board \' {\\"note\\":\\"Ready to ship\\"}\'`')
+    expect(more.page).toContain('the space before the JSON is what makes 5.1 do so')
+    expect(more.page).toContain('Never put `--%` in the command')
+    expect(more.page).not.toMatch(/it(\.exe)? --%/)
+  })
+
+  test('tells an agent on Windows to give state too large for an argument in a file, which Windows PowerShell 5.1 cannot change, and not to pipe it there', () => {
     expect(more.page).toContain('## On Windows')
     expect(more.page).toContain('`it.exe patch board --file ')
     expect(more.page).toContain('`--state-file "<path>"` on `it.exe create`')

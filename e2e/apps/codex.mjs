@@ -409,12 +409,18 @@ async function stopCodexServer() {
 const slug = `codex-ci-${Date.now().toString(36)}`
 const PROMPT = `Put up a page that asks me to approve the deploy (${slug}).`
 const page = `<h1>Deploy</h1><button id="go" onclick="It.action(\`approve\`)">Approve</button>`
-// On Windows Codex runs a command in Windows PowerShell 5.1, and the agent does as It's skill says
-// there (addons/skill/more/page.md, "On Windows"): it runs It as `it.exe`, since a bare `it` there
-// may be Pester's own command, and gives JSON in a file, since that PowerShell takes the double
-// quotes out of an argument. The file is written here, as the agent writes it with its own file
-// tool, in the temporary folder. The Node bundle has no it.exe, only It's it.cmd, which is `it`.
+// On Windows Codex runs a command in PowerShell (PowerShell 7 where it is installed, as on GitHub's
+// runners, and Windows PowerShell 5.1 elsewhere), and the agent does as It's skill says there
+// (addons/skill/more/page.md, "On Windows"): it runs It as `it.exe`, since a bare `it` there may be
+// Pester's own command, and gives JSON in single quotes, beginning with a space, with each of its
+// double quotes written \". That is the form Codex reads as plain words, so that its rule for `it`
+// lets it run in a conversation It reopened, where nobody can approve anything: a woken Codex that
+// wrote `--%` there was refused (the Windows rehearsal). The patch's value has a space in it, which
+// Windows PowerShell 5.1 would split the JSON at without the space before it. The Node bundle has
+// no it.exe, only It's it.cmd, which is `it`.
 const itCommand = windows && STANDALONE ? 'it.exe' : 'it'
+/** What the patch puts beside the click it answers: words with spaces, and letters outside ASCII, which must arrive whole. */
+const NOTE = 'answered on the page, × and é whole'
 /**
  * A command that takes a few seconds and that Codex runs without asking. On Windows Codex asks
  * before running anything but what It's rules let out, so there it is It's own `it wait`, which
@@ -422,12 +428,8 @@ const itCommand = windows && STANDALONE ? 'it.exe' : 'it'
  */
 const waiting = (seconds) => (windows ? `${itCommand} wait --id ${slug} --timeout ${seconds}` : `sleep ${seconds}`)
 const created = `${itCommand} create "Approve the deploy" --id ${slug} --html '${page}' --open`
-const patching = (patch) => {
-  if (!windows) return `it patch ${slug} '${JSON.stringify(patch)}'`
-  const file = path.join(home, 'AppData', 'Local', 'Temp', `${slug}-${Date.now()}.json`)
-  writeFileSync(file, JSON.stringify(patch))
-  return `${itCommand} patch ${slug} --file "${file.replaceAll('\\', '/')}"`
-}
+const patching = (patch) =>
+  windows ? `${itCommand} patch ${slug} ' ${JSON.stringify(patch).replaceAll('"', '\\"')}'` : `it patch ${slug} '${JSON.stringify(patch)}'`
 /**
  * The click a turn was started for, by its id: the line It wrote for it, which begins `[It]` and
  * ends with `[action <id>]`. It is in the person's newest message where It put the whole line
@@ -445,7 +447,7 @@ const model = await standInModel({
     if (asked.newest.startsWith('[It]')) {
       const action = clickOf(asked)
       // A click: the page is answered once, by a patch that names the click it answers
-      if (action && asked.outputs === 0) return { run: patching({ answered: action }) }
+      if (action && asked.outputs === 0) return { run: patching({ answered: action, note: NOTE }) }
       return { say: 'Answered on the page.' }
     }
     if (asked.newest.trim() === PROMPT) return asked.outputs === 0 ? { run: created } : { say: 'The page is up, and I will wait for you to use it.' }
@@ -667,7 +669,7 @@ trust_level = "trusted"
   const state = (await it(['state', slug])).json
   check(
     'Codex runs the `it patch` the stand-in answered with, and the page’s state shows it',
-    patched && state?.state?.answered === action?.id,
+    patched && state?.state?.answered === action?.id && state?.state?.note === NOTE,
     JSON.stringify(state),
   )
 
@@ -773,7 +775,11 @@ trust_level = "trusted"
   check('It records the click as handed to that conversation', second?.delivery === 'handed_off', JSON.stringify(second))
   const wokePatched = await model.until((r) => r.n > beforeWake && r.newest === woken?.newest && r.outputs > 0, 90_000)
   const after = (await it(['state', slug])).json
-  check('and Codex, reopened, runs the `it patch` the stand-in answered with', wokePatched && after?.state?.answered === second?.id, JSON.stringify(after))
+  check(
+    'and Codex, reopened, runs the `it patch` the stand-in answered with',
+    wokePatched && after?.state?.answered === second?.id && after?.state?.note === NOTE,
+    JSON.stringify(after),
+  )
   writeFileSync(path.join(logs, 'runs.txt'), (await it(['runs'])).out)
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
