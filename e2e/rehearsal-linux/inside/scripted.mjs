@@ -732,6 +732,114 @@ async function WAKELITE() {
   }
 }
 
+/** A page made in a fresh conversation, with the browser paired first; resolves with the page and its address. */
+async function freshPage(who, askText, re, before = null) {
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  if (before) await type(before)
+  await startApp(who, counts)
+  await ask(who, askText)
+  await settle(who, counts, 600_000, 8000)
+  let url = null
+  for (let i = 0; i < 40 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (p.url().includes('/p/') && re.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  check('the page is on the screen', !!url)
+  return { p, url }
+}
+
+/**
+ * Finding 6: a click made while It's service restarts, with Claude Code open, ten times, watching
+ * for a second copy of the open conversation started beside it. Five as Linux has it, five with
+ * IT_SHELL_ENV=off in the service, which stands for Windows, where the shell is not asked.
+ */
+async function RESTARTCLICK() {
+  const who = app
+  const { p, url } = await freshPage(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.', PIZZA)
+  if (!url) return
+  let before = await shown(p)
+  const first = await press(p, PIZZA, 0)
+  step(`picks "${first}" with the conversation open`)
+  await answered(p, before, 180_000, 'a click with the conversation open is answered')
+  await settle(who, counts, 120_000, 6000)
+  for (let i = 1; i <= 10; i++) {
+    if (i === 6) {
+      sh('systemctl --user set-environment IT_SHELL_ENV=off')
+      step('from here on IT_SHELL_ENV=off in the service, standing for Windows')
+    }
+    await settle(who, counts, 60_000, 25_000)
+    const had = appProcs(who).map((x) => x.pid)
+    sh('systemctl --user stop it.service')
+    await sleep(2000)
+    before = await shown(p).catch(() => '')
+    const t0 = Date.now()
+    const picked = await press(p, PIZZA, i % 3)
+    await sleep(3000)
+    sh('systemctl --user start it.service')
+    let fresh = ''
+    let seenExtra = []
+    while (Date.now() - t0 < 180_000) {
+      await answerApp(who, counts).catch(() => {})
+      const extra = appProcs(who).filter((x) => !had.includes(x.pid))
+      if (extra.length) seenExtra = extra.map((x) => x.args.slice(0, 90))
+      fresh = answerLine(before, await shown(p).catch(() => before), picked)
+      if (fresh) break
+      await sleep(1000)
+    }
+    check(`restart ${i}: the click made while It was stopped is answered, and no second copy of the open conversation is started`, !!fresh && seenExtra.length === 0, { seconds: Math.round((Date.now() - t0) / 1000), secondCopy: seenExtra, answer: fresh.slice(0, 120) })
+  }
+  sh('systemctl --user unset-environment IT_SHELL_ENV')
+}
+
+/**
+ * Finding 4: the project's virtual environment, active in the terminal the agent was started from,
+ * and a page whose button asks the agent to run a script that needs it; then the app quit and the
+ * same button pressed, so that a reopened turn runs it.
+ */
+async function VENV() {
+  const who = app
+  const RUN = /run|check/i
+  const { p, url } = await freshPage(who, 'Make me a page with It with one button, Run my check. When I press it, run python check.py in this folder and show on the page exactly what it prints, every time I press it.', RUN, 'source .venv/bin/activate')
+  if (!url) return
+  const go = async (what, open) => {
+    await p.goto(url).catch(() => {})
+    await sleep(6000)
+    const before = await shown(p)
+    const had = new Set(appProcs(who).map((x) => x.pid))
+    const t0 = Date.now()
+    step(`${what}: presses "${await press(p, RUN, 0)}"`)
+    let woke = null
+    while (Date.now() - t0 < 300_000) {
+      if (open) await answerApp(who, counts).catch(() => {})
+      if (!woke) {
+        const f = appProcs(who).filter((x) => !had.has(x.pid))
+        if (f.length) woke = { pid: f[0].pid, venv: sh(`tr '\\0' '\\n' < /proc/${f[0].pid}/environ | grep -c '^VIRTUAL_ENV='`).trim() === '1', venvOnPath: /\.venv\/bin/.test(sh(`tr '\\0' '\\n' < /proc/${f[0].pid}/environ | sed -n 's/^PATH=//p'`)) }
+      }
+      const now = await shown(p).catch(() => before)
+      const fresh = now.split('\n').filter((l) => l.trim() && !before.includes(l)).join(' / ')
+      if (/venv ok|ModuleNotFoundError|No module named|not installed|error|could not|failed/i.test(fresh)) {
+        check(`${what}: the page shows what the script printed`, /venv ok/i.test(fresh), { seconds: Math.round((Date.now() - t0) / 1000), shows: fresh.slice(0, 300), reopened: woke ?? 'none new', codexServer: who === 'codex' ? codexServer() : undefined })
+        return
+      }
+      await sleep(1500)
+    }
+    check(`${what}: the page shows what the script printed`, false, { seconds: 300, reopened: woke ?? 'none new' })
+  }
+  await go('the conversation open, the environment active', true)
+  await settle(who, counts, 120_000, 6000)
+  await quitApp(who)
+  // Codex's own server outlives /quit and keeps the terminal's environment: stopped too, as a restart would
+  if (who === 'codex') sh("pkill -u ana -f 'codex app-server' || true")
+  await sleep(30_000)
+  await go('the app quit, a reopened turn', false)
+}
+
 async function main() {
   try {
     if (scenario === 'S4') await S4()
@@ -742,6 +850,8 @@ async function main() {
     else if (scenario === 'WAKE') await WAKE()
     else if (scenario === 'WAKEBOOT1') await WAKEBOOT1()
     else if (scenario === 'WAKELITE') await WAKELITE()
+    else if (scenario === 'RESTARTCLICK') await RESTARTCLICK()
+    else if (scenario === 'VENV') await VENV()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
     const failed = verdict.checks.filter((c) => !c.ok)
