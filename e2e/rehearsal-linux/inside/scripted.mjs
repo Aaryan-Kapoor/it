@@ -66,11 +66,14 @@ async function agentFrame(p) {
 async function press(p, re, nth = 0) {
   const f = await agentFrame(p)
   if (!f) return null
-  const buttons = await f.$$('button, [role=button], .card, label')
+  // Real buttons that name the pick first; a card or label only where no button does
   const named = []
-  for (const b of buttons) {
-    const t = ((await b.innerText().catch(() => '')) ?? '').trim()
-    if (t && re.test(t) && (await b.isVisible().catch(() => false))) named.push({ b, t })
+  for (const sel of ['button, [role=button]', '.card, label']) {
+    for (const b of await f.$$(sel)) {
+      const t = ((await b.innerText().catch(() => '')) ?? '').trim()
+      if (t && re.test(t) && (await b.isVisible().catch(() => false))) named.push({ b, t })
+    }
+    if (named.length) break
   }
   const one = named[nth] ?? named[0]
   if (!one) return null
