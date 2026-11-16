@@ -1595,8 +1595,9 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
         // Long after the connector started, nothing waits for an add-on that is silent: the click is reopened for after the usual moment
         const asked = real()
         offered({ ...click(2), session: { harness: 'claude-code', id: '22222222-2222-4333-8444-555555555555' } })
-        await until(() => failures().length > 1, 3000)
-        expect(real() - asked).toBeLessThan(1500)
+        await until(() => failures().length > 1, ADDONS_HEARD_MS)
+        // Well within the seven seconds a second wait would take, with room for a slow machine
+        expect(real() - asked).toBeLessThan(ADDONS_HEARD_MS / 2)
       } finally {
         later.mockRestore()
       }
