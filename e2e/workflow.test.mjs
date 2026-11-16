@@ -199,19 +199,40 @@ describe('what the jobs are held to running', () => {
     expect(door).toBeDefined()
     expect(door).toMatch(/run: bun test \.\/packages\/cli\/door\.test\.ts \.\/packages\/cli\/push\.test\.ts \.\/packages\/cli\/direct\.test\.ts$/m)
     expect(exports).toMatch(/run: bun test \.\/packages\/cli\/export\.test\.ts$/m)
-    expect(exports).toMatch(/if: \$\{\{ !cancelled\(\) \}\}/)
+    expect(exports).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1 \}\}/)
     expect(exports).not.toMatch(/runner\.os|matrix\.os/)
     // The service's are a step of their own, run on Linux, and not allowed to fail either
-    expect(service).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os == 'Linux' \}\}/)
+    expect(service).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1 && runner\.os == 'Linux' \}\}/)
     expect(service).not.toMatch(/continue-on-error/)
     expect(content).toMatch(/run: npm run test:bun -w @it\/content$/m)
     // Each is a step of its own, run whatever became of the one before it, and neither is allowed to fail
     expect(content).not.toBe(door)
-    expect(door).toMatch(/if: \$\{\{ !cancelled\(\) \}\}/)
+    expect(door).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1 \}\}/)
     // The content service's are left out on Windows, where vitest cannot load its files under Bun and the step ran none of them
-    expect(content).toMatch(/if: \$\{\{ !cancelled\(\) && runner\.os != 'Windows' \}\}/)
+    expect(content).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1 && runner\.os != 'Windows' \}\}/)
     for (const step of [door, exports, content]) expect(step).not.toMatch(/continue-on-error/)
     expect(stepWith('test', 'uses: oven-sh/setup-bun@')).toBeGreaterThan(-1)
+  })
+
+  test('each system’s unit tests are cut into halves that together run every test file, and what is run beside them is run once, in the first half', () => {
+    const job = jobs.test.filter((line) => !/^\s*#/.test(line)).join('\n')
+    // Every system has both halves, and the job's name says which half it is
+    expect(job).toMatch(/^ {8}os: \[ubuntu-latest, macos-latest, windows-latest\]$/m)
+    expect(job).toMatch(/^ {8}shard: \[1, 2\]$/m)
+    expect(job).toMatch(/^ {4}name: Unit tests \(\$\{\{ matrix\.os \}\}, \$\{\{ matrix\.shard \}\} of 2\)$/m)
+    // The one run of vitest is told which half it is, of as many as there are
+    const tests = steps('test').filter((step) => /run: npm test\b/.test(step))
+    expect(tests).toHaveLength(1)
+    expect(tests[0]).toMatch(/run: npm test -- --shard=\$\{\{ matrix\.shard \}\}\/2$/m)
+    expect(tests[0]).toMatch(/if: \$\{\{ !cancelled\(\) \}\}$/m)
+    // What the tests need is come by in each half, before the tests run
+    const at = stepWith('test', 'run: npm test')
+    for (const step of steps('test').slice(0, at)) expect(step).not.toMatch(/matrix\.shard/)
+    // What is run beside them under Bun, and the Hermes add-on's tests in Python, in the first half alone
+    const beside = steps('test').slice(at + 1)
+    expect(beside.length).toBeGreaterThan(0)
+    for (const step of beside) expect(step).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1\b/)
+    expect(beside.some((step) => step.includes('run: npm run test:hermes'))).toBe(true)
   })
 
   test('no step is allowed to fail without failing its job, except the audit of what only the build and the tests use', () => {
