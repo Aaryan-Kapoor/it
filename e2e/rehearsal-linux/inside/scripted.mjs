@@ -1266,6 +1266,35 @@ async function IMAGE() {
   check('the agent says on the page what is in the photo', ok, { seconds: Math.round((Date.now() - t0) / 1000), bars: bars.join(' | ').slice(0, 300), page: said, terminal: term })
 }
 
+/** Where the ask for a star shows: five pages made with `it create`, then It's page list and a page. */
+async function STAR() {
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  const p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
+  const site = new URL(p.url()).origin
+  const look = async (where) => {
+    const text = await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '')
+    const line = text.split('\n').filter((l) => /star|github/i.test(l)).join(' / ')
+    step(`${where}: the star ask`, { found: line || 'none', links: await p.mainFrame().evaluate(() => [...document.querySelectorAll('a')].map((a) => a.href).filter((h) => /github/.test(h)).join(' ')).catch(() => '') })
+    return !!line
+  }
+  for (let i = 1; i <= 6; i++) {
+    sh(`mkdir -p ~/star && printf '<!doctype html><title>Page ${i}</title><h1>Page ${i}</h1>' > ~/star/p${i}.html && ~/.it/bin/it create "Page ${i}" --id page-${i} --file ~/star/p${i}.html 2>&1 | head -2`)
+    await p.goto(site).catch(() => {})
+    await sleep(5000)
+    const seen = await look(`after ${i} page(s), the page list`)
+    if (i === 5 || i === 6) {
+      await p.goto(`${site}/p/page-${i}`).catch(() => {})
+      await sleep(5000)
+      await look(`after ${i} pages, on a page`)
+    }
+    if (i >= 5) check(`the ask for a star is there after ${i} pages`, seen || i < 5)
+  }
+}
+
 async function hostDoes(what, ms = 2400_000) {
   sh('rm -f /var/lib/rehearsal-flow/host-done')
   writeFileSync('/var/lib/rehearsal-flow/host-now', what)
@@ -1398,6 +1427,7 @@ async function main() {
     else if (scenario.startsWith('SITES')) await SITES()
     else if (scenario === 'TWOSAME') await TWOSAME()
     else if (scenario.startsWith('IMAGE')) await IMAGE()
+    else if (scenario === 'STAR') await STAR()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
