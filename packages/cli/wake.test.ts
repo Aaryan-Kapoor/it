@@ -344,7 +344,7 @@ describe('the command each agent app is carried on with', () => {
     expect(argvOf('ask', 'win32').argv.join(' ')).not.toContain('writable_roots')
   })
 
-  test('Pi, OpenCode and Hermes are reopened in each mode they offer by that run’s own flag, and as they always were where nothing is chosen', () => {
+  test('Pi, OpenCode and Hermes are reopened in each mode they offer by that run’s own flag, Pi and OpenCode as they always were where nothing is chosen, and Hermes then in YOLO', () => {
     const argvOf = (harness: string, session: string, wakeMode?: string) => {
       const how = carrying(harness, session, 'a click', { ...has, ...(wakeMode === undefined ? {} : { wakeMode }) })
       if (typeof how === 'string') throw new Error(how)
