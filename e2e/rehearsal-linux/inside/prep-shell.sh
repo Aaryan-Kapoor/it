@@ -8,6 +8,18 @@ if [ "$kind" = fish ]; then
   apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fish >/dev/null 2>&1
   chsh -s /usr/bin/fish ana
 fi
+# zsh with oh-my-zsh as its own installer leaves it, the login shell before It is installed; zshtmux
+# adds oh-my-zsh's tmux plugin with ZSH_TMUX_AUTOSTART=true, as its README shows
+if [ "$kind" = zsh ] || [ "$kind" = zshtmux ]; then
+  apt-get update -qq >/dev/null 2>&1; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zsh git >/dev/null 2>&1
+  chsh -s /usr/bin/zsh ana
+  su -l ana -s /bin/bash -c 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended >/dev/null 2>&1; ls -d ~/.oh-my-zsh >/dev/null && echo "oh-my-zsh installed"'
+  if [ "$kind" = zshtmux ]; then
+    sed -i 's/^plugins=(git)$/plugins=(git tmux)/' /home/ana/.zshrc
+    sed -i '/^source \$ZSH\/oh-my-zsh.sh/i ZSH_TMUX_AUTOSTART=true' /home/ana/.zshrc
+    grep -n "^plugins=\|ZSH_TMUX_AUTOSTART" /home/ana/.zshrc
+  fi
+fi
 su -l -w REHEARSAL_HARNESS ana -s /bin/bash -c "
 [ $app = claude-code ] && node -e 'const f=process.env.HOME+\"/.claude.json\";const fs=require(\"fs\");let j={};try{j=JSON.parse(fs.readFileSync(f,\"utf8\"))}catch{};j.hasCompletedOnboarding=true;fs.writeFileSync(f,JSON.stringify(j,null,2))'
 SHELL=\$(getent passwd ana | cut -d: -f7) sh /build/harness/install-it.sh >/dev/null 2>&1
