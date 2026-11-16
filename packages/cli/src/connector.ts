@@ -2780,6 +2780,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           },
         },
       )
+      // Codex interrupted the turn under its reviewer: it ran, its refusals are in the conversation,
+      // and it is handed over as any turn that ran, so that the same request is not put to the
+      // reviewer again (see `CODEX_REVIEW_ENDED`)
+      if (ended === CODEX_REVIEW_ENDED) {
+        say(`${a(now.harness)} conversation (${short(key)}) was reopened and Codex interrupted its turn under its reviewer; it is taken as handed over`)
+        ended = null
+      }
       // It ran: what was set aside for this conversation after too many tries is its to be given again
       if (ended === null) revive(now.harness, now.id)
       // It ended badly by itself: a key it lacked may be in the person's shell by the next try
@@ -3515,9 +3522,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         if (stalled.get(line) === click.id) stalled.delete(line)
         await confirmAll()
       } else {
-        // A turn that Codex ended because its reviewer refused too much of it is not tried again by
-        // itself: it would only be put to the reviewer again. It is set aside at once, for the person
-        const n = refused === CODEX_REVIEW_ENDED ? QUEUE_WAITS.length : (queueTries.get(tag(click))?.n ?? 0) + 1
+        const n = (queueTries.get(tag(click))?.n ?? 0) + 1
         queueTries.set(tag(click), { n, at: Date.now(), reopening, retry: click.retriedAt ?? 0 })
         stalled.set(line, click.id)
         stalledAt.set(click.id, Date.now())

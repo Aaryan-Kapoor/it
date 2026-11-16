@@ -441,21 +441,33 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     ).toBe(STOPPED)
   })
 
-  test('a Codex turn that Codex interrupted itself, under its reviewer, is said to be that, and not a failure to try again', async () => {
+  test('a Codex turn that Codex interrupted itself, under its reviewer, ran and is not a failure to try again', async () => {
     const kept = path.join(scratch, 'kept-review')
-    const refusing = path.join(scratch, 'refusing')
-    // As `codex exec` ends a turn its reviewer refused too much of: the last line it prints, dimmed, is that the turn was interrupted
-    writeFileSync(refusing, '#!/bin/sh\ncat > /dev/null\necho "exec: a command it ran"\nprintf "\\033[2mturn interrupted\\033[0m\\n" >&2\nexit 1\n')
-    chmodSync(refusing, 0o755)
-    const opts = { keepIn: kept, said: () => {} }
+    const script = (name: string, body: string) => {
+      const file = path.join(scratch, name)
+      writeFileSync(file, `#!/bin/sh\ncat > /dev/null\n${body}`)
+      chmodSync(file, 0o755)
+      return file
+    }
+    // As `codex exec` ends such a turn: that it was interrupted, dimmed, then how many tokens it used, and exit 1
+    const refusing = script(
+      'refusing',
+      'echo "exec: a command it ran"\nprintf "\\033[2mturn interrupted\\033[0m\\n\\033[2mtokens used\\033[0m\\n12,345\\n" >&2\nexit 1\n',
+    )
+    const bare = script('refusing-bare', 'printf "turn interrupted\\r\\n" >&2\nexit 1\n')
+    const opts = { keepIn: kept, said: () => {}, brokeOff: vi.fn() }
     const reviewed = { argv: [refusing], input: 'a click', app: 'Codex', reviewed: true }
     expect(await carryOn(reviewed, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
-    // Without the reviewer, or ended otherwise, it is a failure as any is, and is tried again
+    expect(await carryOn({ ...reviewed, argv: [bare] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
+    // Not a turn that broke off, so the next one is not told it was cut off
+    expect(opts.brokeOff).not.toHaveBeenCalled()
+    // Without the reviewer, ended otherwise, or with something printed after it, it is a failure as any is, and is tried again
     expect(await carryOn({ ...reviewed, reviewed: undefined }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
-    const failing = path.join(scratch, 'failing-reviewed')
-    writeFileSync(failing, '#!/bin/sh\ncat > /dev/null\necho "ERROR: stream disconnected" >&2\nexit 1\n')
-    chmodSync(failing, 0o755)
+    const failing = script('failing-reviewed', 'echo "ERROR: stream disconnected" >&2\nexit 1\n')
     expect(await carryOn({ ...reviewed, argv: [failing] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    const after = script('after-reviewed', 'echo "turn interrupted"\necho "ERROR: and then this"\nexit 1\n')
+    expect(await carryOn({ ...reviewed, argv: [after] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    expect(opts.brokeOff).toHaveBeenCalledTimes(3)
     expect(readdirSync(kept)).toEqual([])
   })
 
