@@ -4,7 +4,7 @@
 // stopped by being asked to and waited for. On Windows, where it cannot be counted on to hear,
 // it is ended once nothing more is asked of it. One program at a time has a folder's data, and
 // the service never moves, replaces or removes a database.
-import { type ChildProcess, type SpawnOptions, spawn } from 'node:child_process'
+import { type ChildProcess, type SpawnOptions, type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
@@ -32,7 +32,7 @@ import path from 'node:path'
 import { STORAGE } from '@it/protocol'
 import { ConvexHttpClient } from 'convex/browser'
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
-import { runSync } from '../child'
+import { runSync, unlessCutShort } from '../child'
 import { FUNCTIONS_HASH, functions } from '../functions.generated'
 import { ask, backendAt, direct, inHome, Problem, psQuote, readJson, VERSION } from '../lib'
 import {
@@ -760,9 +760,11 @@ const LISTED_IN = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8'
 /**
  * How Windows is asked for the list of what runs. PowerShell, and Windows behind it, can be slow
  * or fail once on a machine that is busy, on battery or just woken, so a list that does not come
- * is asked for again: three times in all at most, a moment apart, and within two minutes
- * together. A try is begun only while there is time enough left for it to be of use, so two
- * tries that each ran out of time are the last.
+ * is asked for again, three times in a row at most and a moment apart. Every listing that one
+ * start or one removal makes, however many lists it needs, shares two minutes of listing between
+ * them (`ListingBudget`), the pauses among them. A try is begun only while ten seconds or more of
+ * that are left, and is given no more than is left, so two tries that each ran out of time are
+ * the last.
  */
 const LIST_TRIES = 3
 const LIST_MS = 120_000
@@ -770,24 +772,67 @@ const LIST_EACH_MS = 60_000
 const LIST_LEAST_MS = 10_000
 const LIST_PAUSE_MS = 1_500
 
+/** The listing one start or one removal has had of Windows so far: how long it took, in milliseconds. */
+export interface ListingBudget {
+  spent: number
+}
+export const listingBudget = (): ListingBudget => ({ spent: 0 })
+
+/** Runs the script that lists what runs, with a time limit. */
+const powershell =
+  (script: string) =>
+  (timeout: number): SpawnSyncReturns<string> =>
+    spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout,
+      maxBuffer: 64 * 1024 * 1024,
+    })
+
 /**
  * The rows of what PowerShell printed for `script`, once it has printed the list whole: it
  * ended as asked, with its last word and the word for this very program among the rows. Where
- * it would not, after as many tries as it is given, that is what is said and thrown, with why
- * in a code: `timed_out`, `exit_<n>` for the code PowerShell ended with, or `unreadable` for
- * anything else, such as a list that came without its last word. Nothing PowerShell printed is
- * said, here or in the log.
+ * it would not, after as many tries as it is given or once `budget` is spent, that is what is
+ * said and thrown, with why in a code: `timed_out`, `exit_<n>` for the code PowerShell ended
+ * with, or `unreadable` for anything else, such as a list that came without its last word.
+ * Nothing PowerShell printed is said, here or in the log.
+ *
+ * A child that the runtime ended before its limit is run again, as `runSync` runs it (see
+ * `child.ts`), and only where a second run of the whole limit still fits in what is left. `run`,
+ * `clock` and `pause` are what a test stands in for.
  */
-function listedByWindows(script: string, say?: (line: string) => void): string[] {
-  const until = Date.now() + LIST_MS
-  let why = 'unreadable'
-  for (let tries = 1; ; tries++) {
-    const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: Math.max(1, Math.min(LIST_EACH_MS, until - Date.now())),
-      maxBuffer: 64 * 1024 * 1024,
-    })
+export function listedByWindows(
+  script: string,
+  say: ((line: string) => void) | undefined,
+  budget: ListingBudget,
+  run: (timeout: number) => SpawnSyncReturns<string> = powershell(script),
+  clock: () => number = () => performance.now(),
+  pause: (ms: number) => void = (ms) => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+): string[] {
+  let tries = 0
+  let why = 'timed_out'
+  const refused = () => {
+    const made = `${tries} ${tries === 1 ? 'try' : 'tries'}`
+    say?.(`backend: the list of what runs on this machine could not be had (${why}, ${made}), and no backend program is started`)
+    return new Problem(
+      `It could not look through the programs running on this machine for a backend program left on its folder (${why}, after ${made}), so it starts none.`,
+      'cannot_list_processes',
+      'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run. Where Windows was only slow or busy for a moment, as it can be on a laptop that is on battery or has just woken, run the same command again.',
+    )
+  }
+  for (;;) {
+    const left = LIST_MS - budget.spent
+    if (left < LIST_LEAST_MS) throw refused()
+    const limit = Math.min(LIST_EACH_MS, left)
+    tries += 1
+    const began = clock()
+    const ran = unlessCutShort(
+      () => run(limit),
+      limit,
+      () => LIST_MS - budget.spent - (clock() - began) >= limit,
+      clock,
+    )
+    budget.spent += clock() - began
     if (!ran.error && ran.status === 0) {
       const rows = String(ran.stdout)
         .split(/\r?\n/)
@@ -800,18 +845,11 @@ function listedByWindows(script: string, say?: (line: string) => void): string[]
         : typeof ran.status === 'number' && ran.status !== 0
           ? `exit_${ran.status}`
           : 'unreadable'
-    if (tries >= LIST_TRIES || until - Date.now() - LIST_PAUSE_MS < LIST_LEAST_MS) {
-      say?.(
-        `backend: the list of what runs on this machine could not be had (${why}, ${tries} ${tries === 1 ? 'try' : 'tries'}), and no backend program is started`,
-      )
-      throw new Problem(
-        `It could not look through the programs running on this machine for a backend program left on its folder (${why}, after ${tries} ${tries === 1 ? 'try' : 'tries'}), so it starts none.`,
-        'cannot_list_processes',
-        'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run. Where Windows was only slow or busy for a moment, as it can be on a laptop that is on battery or has just woken, run the same command again.',
-      )
-    }
+    if (tries >= LIST_TRIES || LIST_MS - budget.spent - LIST_PAUSE_MS < LIST_LEAST_MS) throw refused()
     say?.(`backend: the list of what runs on this machine could not be had (${why}, try ${tries} of ${LIST_TRIES}), and is asked for again`)
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, LIST_PAUSE_MS)
+    const paused = clock()
+    pause(LIST_PAUSE_MS)
+    budget.spent += clock() - paused
   }
 }
 
@@ -962,8 +1000,8 @@ function couldBeProgram(shown: string): boolean {
  * started beside it. The same goes on Linux for a process of which the system shows neither
  * the folder nor the files. Where the system cannot be asked at all, that is said, and nothing
  * is started: nothing else tells that the folder is free. Windows is asked again where it gives
- * no list, as `listedByWindows` says, and only a list it gives whole is gone by. `say` is where
- * that is written down.
+ * no list, as `listedByWindows` says, within the time `budget` has left for listing, and only a
+ * list it gives whole is gone by. `say` is where that is written down.
  *
  * The list says that the folder is free only where it could have shown a backend program on
  * it. A process of this account's own of which the system would not say what it was started
@@ -975,7 +1013,12 @@ function couldBeProgram(shown: string): boolean {
  * that is hidden is looked for again before it counts. And a list that does not show this
  * very program is not taken for whole.
  */
-export function programsHere(name: string, platform: NodeJS.Platform = process.platform, say?: (line: string) => void): number[] {
+export function programsHere(
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+  say?: (line: string) => void,
+  budget: ListingBudget = listingBudget(),
+): number[] {
   const found: number[] = []
   if (platform === 'linux' && existsSync('/proc/self/stat')) {
     let listed: string[] | undefined
@@ -1045,7 +1088,7 @@ export function programsHere(name: string, platform: NodeJS.Platform = process.p
         '}',
         "'end'",
       ].join('\n')
-      const rows = listedByWindows(script, say)
+      const rows = listedByWindows(script, say, budget)
       const here: number[] = []
       for (const row of rows) {
         const [, pid, coded] = /^seen (\d+) ([A-Za-z0-9+/=]+)$/.exec(row) ?? []
@@ -1234,14 +1277,20 @@ async function stopLeft(pid: number, say: (line: string) => void, signal?: Abort
  * lock said one was to answer or where this one is about to, is one that the list did not
  * show, and it keeps another from being started. Only this machine's own address is asked.
  */
-async function noneLeft(config: ServiceConfig, say: (line: string) => void, signal?: AbortSignal, left?: Lock): Promise<void> {
+async function noneLeft(
+  config: ServiceConfig,
+  say: (line: string) => void,
+  signal?: AbortSignal,
+  left?: Lock,
+  budget: ListingBudget = listingBudget(),
+): Promise<void> {
   // A service that was gone in the very moment it started the program may have left one that
   // is not yet in the list as the backend program. The lock then says that a start was under
   // way and names no process, and the list is read again a moment later.
   let again = left !== undefined && typeof left.api === 'string' && left.program === undefined
   const name = instanceName(config.instanceSecret)
   for (let round = 0; ; round++) {
-    const found = programsHere(name, process.platform, say)
+    const found = programsHere(name, process.platform, say, budget)
     if (!found.length && again) {
       again = false
       await sleep(1000)
@@ -1309,12 +1358,14 @@ export async function nothingLeft(say: (line: string) => void, remove: () => Pro
       throw new Problem('The backend folder is still here, but its settings are missing.', 'settings', 'Put service.json back before removing It.')
     return await remove()
   }
+  // The two looks share the time Windows is given to list what runs
+  const budget = listingBudget()
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
-    left: (left) => noneLeft(config, say, undefined, left),
+    left: (left) => noneLeft(config, say, undefined, left, budget),
   })
   try {
-    await noneLeft(config, say)
+    await noneLeft(config, say, undefined, undefined, budget)
     await remove()
   } finally {
     lock.release()
@@ -2385,9 +2436,11 @@ export async function loaded(site: string, signal?: AbortSignal, forMs = HEALTH_
  * version of It those came with, which may be run on it again.
  */
 export async function startBackend(config: ServiceConfig, say: (line: string) => void, signal?: AbortSignal): Promise<Running> {
+  // The two looks share the time Windows is given to list what runs
+  const budget = listingBudget()
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
-    left: (left) => noneLeft(config, say, signal, left),
+    left: (left) => noneLeft(config, say, signal, left, budget),
     watching: () => say('backend: the lock on the folder is from elsewhere, and is watched for half a minute in case its holder lives'),
     signal,
   })
@@ -2400,7 +2453,7 @@ export async function startBackend(config: ServiceConfig, say: (line: string) =>
     // earlier must not recreate a backend once removal has reached that lock.
     if (!readConfig()) throw new Problem('It’s settings were removed before the service could start.', 'settings')
     const file = await program(say, signal)
-    await noneLeft(config, say, signal)
+    await noneLeft(config, say, signal, undefined, budget)
     // A copy that holds what was erased goes first where its time is over, and whether a copy
     // made now would hold such is what is kept of the erasings to say
     settleErased(folder, 0, say)

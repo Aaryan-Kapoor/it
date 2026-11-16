@@ -6,7 +6,7 @@
 // on ports of this file's own. Nothing here reaches a remote, but for the one test that runs
 // only on Windows, which fetches the program from its release where CI has not put one on the
 // machine.
-import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process'
+import { type ChildProcess, execFileSync, type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
@@ -44,6 +44,8 @@ import {
   program as fetched,
   fetchProgram,
   HEALTH_MS,
+  listedByWindows,
+  listingBudget,
   loaded,
   nothingLeft,
   programsHere,
@@ -3814,6 +3816,86 @@ describe.skipIf(windows)('where the backend program is fetched from', () => {
     },
     180_000,
   )
+})
+
+describe('how long Windows is given to list what runs', () => {
+  const result = (status: number | null, stdout: string, code?: string): SpawnSyncReturns<string> => ({
+    pid: 1,
+    output: [],
+    stdout,
+    stderr: '',
+    status,
+    signal: code ? 'SIGTERM' : null,
+    ...(code ? { error: Object.assign(new Error(`spawnSync powershell.exe ${code}`), { code }) } : {}),
+  })
+  /**
+   * Asks for the list against a clock of its own, where each run of PowerShell takes as long as
+   * its outcome says: `whole` gives the list in three seconds, `exit` ends with code 5 in two,
+   * `timeout` runs out its whole limit, and `early` is ended by its limit a second before its
+   * time, as the runtime's fault on Windows ends a child. What it gives back is what came of it,
+   * the limit each run was given, and how long it all took.
+   */
+  const asked = (outcomes: string[], budget = listingBudget()) => {
+    let now = 0
+    const limits: number[] = []
+    let next = 0
+    const run = (limit: number) => {
+      limits.push(limit)
+      const outcome = outcomes[next++] ?? 'whole'
+      if (outcome === 'timeout' || outcome === 'early') {
+        now += outcome === 'early' ? limit - 1000 : limit
+        return result(null, '', 'ETIMEDOUT')
+      }
+      if (outcome === 'exit') {
+        now += 2000
+        return result(5, 'Access denied')
+      }
+      now += 3000
+      return result(0, 'self\r\nend\r\n')
+    }
+    let came = 'listed'
+    try {
+      listedByWindows(
+        '',
+        undefined,
+        budget,
+        run,
+        () => now,
+        (ms) => {
+          now += ms
+        },
+      )
+    } catch (err) {
+      came = (err as Problem).message.replace(/^.*\((.+)\).*$/, '$1')
+    }
+    return { came, limits, took: now }
+  }
+
+  test('one list given at once is asked for once, with a minute to give it in and nothing waited for after it', () => {
+    expect(asked(['whole'])).toEqual({ came: 'listed', limits: [60_000], took: 3000 })
+  })
+
+  test('tries that fail are tried again, each given no more than is left of two minutes, and are given up within two minutes in all', () => {
+    expect(asked(['exit', 'whole'])).toEqual({ came: 'listed', limits: [60_000, 60_000], took: 6500 })
+    expect(asked(['exit', 'exit', 'exit'])).toEqual({ came: 'exit_5, after 3 tries', limits: [60_000, 60_000, 60_000], took: 9000 })
+    // Two tries that each ran out of time leave too little for a third
+    expect(asked(['timeout', 'timeout'])).toEqual({ came: 'timed_out, after 2 tries', limits: [60_000, 58_500], took: 120_000 })
+  })
+
+  test('a try the runtime ended before its time is run again only where a whole second run still fits in the two minutes', () => {
+    // Ended a second early at the start: run again, and that run counts toward the two minutes
+    expect(asked(['early', 'timeout'])).toEqual({ came: 'timed_out, after 1 try', limits: [60_000, 60_000], took: 119_000 })
+    // Ended a second early where a second run of a whole minute would go past them: not run again, and the next try is given what is left
+    expect(asked(['exit', 'early', 'timeout'])).toEqual({ came: 'timed_out, after 3 tries', limits: [60_000, 60_000, 56_000], took: 120_000 })
+  })
+
+  test('every list that one start or one removal asks for shares the two minutes, so that however many it needs it waits no longer than that', () => {
+    const budget = listingBudget()
+    expect(asked(['timeout', 'whole'], budget)).toEqual({ came: 'listed', limits: [60_000, 58_500], took: 64_500 })
+    expect(asked(['timeout'], budget)).toEqual({ came: 'timed_out, after 1 try', limits: [55_500], took: 55_500 })
+    // With the two minutes spent, Windows is not asked again, and nothing is started
+    expect(asked(['whole'], budget)).toEqual({ came: 'timed_out, after 0 tries', limits: [], took: 0 })
+  })
 })
 
 describe('the backend programs fetched for earlier releases', () => {

@@ -1722,7 +1722,8 @@ async function uninstall(a: Args) {
         async () => {
           removing = true
           // Only a line that says one was asked to stop says that one was there: the list of what runs being asked for again says nothing of the kind
-          if (heard.some((line) => line.startsWith('backend: one left running'))) say('The backend program that an It which had died left running here is stopped.')
+          if (heard.some((line) => line.startsWith('backend: one left running')))
+            say('The backend program that an It which had died left running here is stopped.')
           // 1. The add-ons, each from where this folder put it. One that could not be taken out is
           // taken out by running this again, which needs the note It keeps of where it put the add-on,
           // and the program: so those are kept, and said, with how it is run once its PATH is gone
