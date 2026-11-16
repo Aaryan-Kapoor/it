@@ -1312,6 +1312,35 @@ async function STOP() {
   check('after Stop, the reopened app is not running', left.length === 0, { stillRunning: left.map((x) => x.args).join(' | ') })
 }
 
+/**
+ * #499: It's service stopped before the agent is asked for a page. What the agent does, whether the
+ * page comes up, and whether anything says the page "could not be confirmed".
+ */
+async function F499S() {
+  const who = app
+  const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
+  let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
+  const pair = /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(6000)
+  sh('systemctl --user stop it.service')
+  step("It's service stopped", { active: sh('systemctl --user is-active it.service').trim() })
+  await startApp(who, counts)
+  await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
+  await settle(who, counts, 600_000, 10_000)
+  let url = null
+  for (let i = 0; i < 20 && !url; i++) {
+    p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
+    if (p.url().includes('/p/') && PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    else await sleep(3000)
+  }
+  const term = sh('tmux capture-pane -p -J -S - -t agent')
+  const lines = term.split('\n').filter((l) => /not running|service|could not be confirmed|it create|it site|started/i.test(l)).map((l) => l.trim()).filter(Boolean)
+  check('the page comes up', !!url, { service: sh('systemctl --user is-active it.service').trim(), agentSaid: [...new Set(lines)].slice(-10).join(' | ').slice(0, 900) })
+  const all = `${term}\n${url ? await p.mainFrame().evaluate(() => document.body.innerText).catch(() => '') : ''}`
+  check('nothing says the page could not be confirmed', !/could not be confirmed/i.test(all))
+}
+
 /** Where the ask for a star shows: five pages made with `it create`, then It's page list and a page. */
 async function STAR() {
   const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
@@ -1504,6 +1533,7 @@ async function main() {
     else if (scenario.startsWith('IMAGE')) await IMAGE()
     else if (scenario === 'STAR') await STAR()
     else if (scenario === 'STOP') await STOP()
+    else if (scenario === 'F499S') await F499S()
     else if (scenario === 'MISC') await MISC()
     else if (scenario === 'WAKEBOOT2') await WAKEBOOT2()
     else check(`no scenario ${scenario}`, false)
