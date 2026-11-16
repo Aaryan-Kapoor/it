@@ -64,7 +64,7 @@ Before downloading the backend, setup checks the agent apps. If every app It can
 4. It enrols this machine as the one your agents run on.
 5. It lists the agent apps it found on this machine, for you to tick the ones to connect, and installs It's add-on into each.
 6. It asks who can reach It: this computer only, anyone on this network, or your tailnet only, which is the choice for a phone. [Screens](screens.md#the-network) says what each lets in. On your tailnet, `it https on` gives It an `https` address too, which a screen needs before a page can record there, as [Screens](screens.md#over-https-on-your-tailnet) says.
-7. It pairs your first screen. On your own computer it opens the site in your browser. Over SSH, inside WSL or a container, or on a machine with no screen, it prints the address for another device to open, with a QR code of it, and waits until a browser has paired or you press Enter.
+7. It pairs your first screen. On your own computer it opens the site in your browser. Over SSH, inside WSL or a container, or on a machine with no screen, it prints the address instead: with the network on, the address for another device to open, with a QR code of it, and with the network off, the address to open in a browser on this computer. Either way it waits until a browser has paired or you press Enter.
 8. It says what is left for you to do, if anything is, and the one sentence to say to your agent: "Give me the It tour."
 
 Then `it site` pairs another browser whenever you want one, as [Screens](screens.md) describes.
