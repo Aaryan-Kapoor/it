@@ -572,11 +572,8 @@ async function WAKEBOOT1() {
   const ctx = (browser ??= await chromium.connectOverCDP('http://127.0.0.1:9222')).contexts()[0]
   let p = ctx.pages().find((x) => !x.url().startsWith('devtools')) ?? (await ctx.newPage())
   const link = () => /https?:\/\/localhost:\d+\/pair#[A-Za-z0-9]+/.exec(sh('~/.it/bin/it site --no-open 2>&1'))?.[0]
-  const pair = link()
-  check('it site gives a pairing link', !!pair)
-  if (pair) await p.goto(pair).catch(() => {})
-  await sleep(8000)
-  // The second screen, a browser of its own, paired by a second link
+  // The second screen first, a browser of its own, so that the laptop's browser is the newest
+  // display and the agent's page comes up there
   sh('setsid -f env DISPLAY=:1 /opt/ms-playwright/chromium-1228/chrome-linux64/chrome --user-data-dir=/opt/person-profile/screen2 --no-sandbox --test-type --no-first-run --no-default-browser-check --password-store=basic --remote-debugging-port=9223 --window-position=1300,300 --window-size=600,700 about:blank >/dev/null 2>&1')
   await sleep(6000)
   const b2 = await chromium.connectOverCDP('http://127.0.0.1:9223')
@@ -585,13 +582,17 @@ async function WAKEBOOT1() {
   if (pair2) await p2.goto(pair2).catch(() => {})
   await sleep(8000)
   check('the second screen is paired', /localhost:4700\/(?!pair)/.test(p2.url()) || !/pair/.test(p2.url()), { url: p2.url().replace(/#.*/, '') })
+  const pair = link()
+  check('it site gives a pairing link', !!pair)
+  if (pair) await p.goto(pair).catch(() => {})
+  await sleep(8000)
   await startApp(who, counts)
   await ask(who, 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.')
   await settle(who, counts, 600_000, 8000)
   let url = null
   for (let i = 0; i < 40 && !url; i++) {
     p = ctx.pages().find((x) => x.url().includes('/p/')) ?? p
-    if (PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
+    if (p.url().includes('/p/') && PIZZA.test(await shown(p).catch(() => ''))) url = p.url()
     else await sleep(3000)
   }
   if (!check('the page is on the screen', !!url)) return
