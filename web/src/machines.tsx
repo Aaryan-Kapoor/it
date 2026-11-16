@@ -524,8 +524,8 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     {/* In Codex's own words for the mode, and what it means with nobody there, said where it can be read */}
                     <span className="row-sub">
                       {reviewed
-                        ? `On. In a conversation It reopens, ${LABEL[h.id] ?? h.id}’s automatic reviewer decides in your place whether a command that would ask you may run, and one it allows can run outside the sandbox`
-                        : `Off. A conversation It reopens runs only what ${LABEL[h.id] ?? h.id}’s sandbox and It’s rule let through, and anything that would ask you is refused`}
+                        ? `On. In a conversation It reopens, ${LABEL[h.id] ?? h.id}’s automatic reviewer, a model, decides in your place whether a command that would ask you may run. It allows what it judges to be of low or medium risk even where you never asked for it, and what it allows can run outside the sandbox`
+                        : `Off. A conversation It reopens runs only what ${LABEL[h.id] ?? h.id}’s sandbox and It’s rule let through, and anything that would ask you is refused. This holds from the next time one is reopened`}
                     </span>
                   </label>
                 )}

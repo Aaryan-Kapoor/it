@@ -329,6 +329,9 @@ describe('the command each agent app is carried on with', () => {
     expect((carrying('codex', thread, 'x', has) as { argv: string[] }).argv).toEqual(plain)
     const reviewed = carrying('codex', thread, 'x', { ...has, review: true }) as { argv: string[]; input: string }
     expect(reviewed.argv).not.toContain('approvals_reviewer="user"')
+    expect((reviewed as { reviewed?: boolean }).reviewed).toBe(true)
+    // It's own note, which says so and allows nothing
+    expect(CODEX_REVIEWED_NOTE).toMatch(/not the person’s, and allows nothing/)
     // Told, after the click and everything else, that the reviewer stands in for the person, and what to do where it refuses
     expect(reviewed.input).toBe(`x\n\n${CODEX_REVIEWED_NOTE}`)
     expect(CODEX_REVIEWED_NOTE).toMatch(/it ack <action id> --failed/)
@@ -438,18 +441,21 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
     ).toBe(STOPPED)
   })
 
-  test('a Codex turn that Codex ended because its reviewer refused too much is said to be that, and not a failure to try again', async () => {
+  test('a Codex turn that Codex interrupted itself, under its reviewer, is said to be that, and not a failure to try again', async () => {
     const kept = path.join(scratch, 'kept-review')
     const refusing = path.join(scratch, 'refusing')
-    writeFileSync(
-      refusing,
-      '#!/bin/sh\ncat > /dev/null\necho "Automatic approval review rejected too many approval requests for this turn (3 consecutive, 3 in the last 50 reviews); interrupting the turn." >&2\nexit 1\n',
-    )
+    // As `codex exec` ends a turn its reviewer refused too much of: the last line it prints, dimmed, is that the turn was interrupted
+    writeFileSync(refusing, '#!/bin/sh\ncat > /dev/null\necho "exec: a command it ran"\nprintf "\\033[2mturn interrupted\\033[0m\\n" >&2\nexit 1\n')
     chmodSync(refusing, 0o755)
     const opts = { keepIn: kept, said: () => {} }
-    expect(await carryOn({ argv: [refusing], input: 'a click', app: 'Codex' }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
-    // The same words from another app are its own failure, and are tried again as any is
-    expect(await carryOn({ argv: [refusing], input: 'a click', app: 'Pi' }, scratch, { harness: 'pi', session: 'x' }, opts)).toBe('Pi exited with 1')
+    const reviewed = { argv: [refusing], input: 'a click', app: 'Codex', reviewed: true }
+    expect(await carryOn(reviewed, scratch, { harness: 'codex', session: 'x' }, opts)).toBe(CODEX_REVIEW_ENDED)
+    // Without the reviewer, or ended otherwise, it is a failure as any is, and is tried again
+    expect(await carryOn({ ...reviewed, reviewed: undefined }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
+    const failing = path.join(scratch, 'failing-reviewed')
+    writeFileSync(failing, '#!/bin/sh\ncat > /dev/null\necho "ERROR: stream disconnected" >&2\nexit 1\n')
+    chmodSync(failing, 0o755)
+    expect(await carryOn({ ...reviewed, argv: [failing] }, scratch, { harness: 'codex', session: 'x' }, opts)).toBe('Codex exited with 1')
     expect(readdirSync(kept)).toEqual([])
   })
 
