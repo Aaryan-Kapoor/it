@@ -116,6 +116,10 @@ const systemAnswers = (m: { bin: string }) => {
   }
 }
 
+/** What is said of the background service inside WSL, where Windows stops the Linux it runs in with its last window. */
+const WSL_SAID = (name: string) =>
+  `This Linux runs in WSL, and Windows stops it, and It with it, within a minute of its last window closing. Keep one ${name} window open while you use It: opening one again brings It back.`
+
 interface Ran {
   code: number | null
   /** The signal that ended the command, where one did. */
@@ -5220,6 +5224,34 @@ describe.skipIf(process.platform === 'win32')(
     })
 
     test.skipIf(process.platform !== 'linux')(
+      'says inside WSL that Windows stops this Linux, and It with it, when its last window closes, and that one window has to stay open',
+      async () => {
+        const m = machine()
+        command(m, 'systemctl', 0)
+        command(m, 'loginctl', 0)
+        const b = await backend(m)
+        const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+        try {
+          const socket = path.join(m.it, 'connector.sock')
+          await new Promise<void>((r) => answers.listen(socket, r))
+          writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+          const ran = await run(m, ['setup', '--yes'], { ...b.env, WSL_DISTRO_NAME: 'Ubuntu-24.04' })
+          expect([ran.code, printed(ran).service]).toEqual([0, expect.objectContaining({ registered: true, note: WSL_SAID('Ubuntu-24.04') })])
+          expect(ran.err.split('\n')).toContain(WSL_SAID('Ubuntu-24.04'))
+          // Not where this Linux is not in WSL, unless the machine running the tests is
+          if (!/microsoft/i.test(os.release())) {
+            const plain = await run(m, ['setup', '--yes'], b.env)
+            expect(plain.err).not.toContain('WSL')
+            expect(printed(plain).service.note).toBeUndefined()
+          }
+        } finally {
+          await new Promise((r) => answers.close(r))
+          await b.close()
+        }
+      },
+    )
+
+    test.skipIf(process.platform !== 'linux')(
       'says that It will stop when the person logs out, where the system would not keep it running past that, at a terminal as in what a program reads',
       async () => {
         const m = machine()
@@ -6169,6 +6201,16 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
       '',
     ])
     expect(JSON.parse((await atTerminal(m, ['service', 'status', '--json'])).shown)).toMatchObject({ registered: true, running: false })
+    // Inside WSL, where Windows stops this Linux and It with it once its last window closes, that is said beside the service
+    if (process.platform === 'linux') {
+      const wsl = { WSL_DISTRO_NAME: 'Ubuntu' }
+      expect((await atTerminal(m, ['service', 'status'], wsl)).shown.split('\n').slice(1)).toEqual([
+        `It is registered with the system to start by itself (${RUNS}).`,
+        WSL_SAID('Ubuntu'),
+        '',
+      ])
+      expect((await atTerminal(m, ['status'], wsl)).shown.split('\n')).toContain(WSL_SAID('Ubuntu'))
+    }
   })
 
   for (const [name, runtime] of RUNTIMES)

@@ -298,7 +298,7 @@ const HELD_SAID =
   'Some conversations are not reopened for now, since a turn of theirs from before may still be running here and could not be checked on or ended. `it runs` says which, and what lets them be reopened: once you have looked that nothing of them is running, `it runs clear` does.'
 /** What a person is told of the background service, and of whether what is done on a page is being handed to the conversations on this machine, which is the connector's doing. */
 function serviceSaid(
-  background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup'] },
+  background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup']; note?: string },
   connector: Record<string, unknown>,
   running: boolean,
 ): string[] {
@@ -315,6 +315,8 @@ function serviceSaid(
       : service.reachable()
         ? 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
         : 'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.',
+    // Something the person should know about how it runs, as inside WSL, where Windows stops it with its last window
+    ...(background.registered && background.note ? [background.note] : []),
     // A machine that joined an It of a version it does not fit hands nothing over, and says which of the two to update
     ...(typeof connector.unfit === 'string' ? [`${connector.unfit} Nothing done on a page is handed to an agent on this machine until then.`] : []),
     ...(connector.unchecked === true
