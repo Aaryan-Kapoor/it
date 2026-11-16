@@ -79,7 +79,16 @@ const shells = [
   ],
   ['PowerShell 7', has('pwsh') && ((words) => ran('pwsh', ['-NoProfile', '-NonInteractive', '-Command', `& '${program}' ${words.map(ps).join(' ')}`]))],
   ['cmd', (words) => ran('cmd.exe', ['/d', '/s', '/c', `""${program}" ${words.map(bare).join(' ')}"`], { windowsVerbatimArguments: true })],
-  ['Git Bash', gitBash && ((words) => ran(gitBash, ['-c', `'${program.replaceAll('\\', '/')}' ${words.map(sh).join(' ')}`]))],
+  // The command is given to Git Bash in a script file, as typed: given with -c on its command line, Git Bash's own reading of that line comes first
+  [
+    'Git Bash',
+    gitBash &&
+      ((words) => {
+        const script = path.join(home, 'command.sh')
+        writeFileSync(script, `'${program.replaceAll('\\', '/')}' ${words.map(sh).join(' ')}\n`)
+        return ran(gitBash, [script])
+      }),
+  ],
 ]
 const ps = (w) => `'${w.replaceAll("'", "''")}'`
 const sh = (w) => `'${w.replaceAll("'", "'\\''")}'`
