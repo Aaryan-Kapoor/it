@@ -560,9 +560,9 @@ trust_level = "trusted"
 
   // It's own It, and a browser paired as the owner's, for the page to come up on. Started before
   // Codex's terminal is, so that the conversation's first turn finds them there. It is started
-  // with a PATH that does not have It's own folder, as a person's service has it after the
-  // install the guide describes, where their agent ran `it setup` from a shell opened before It
-  // was installed. Codex's terminal below is one opened after the install, and has it. So the
+  // without It's own folder on its PATH, as a shell opened before It was installed has it: an
+  // `it serve` started by hand from such a shell, or a service whose definition was written from
+  // one by an It that did not put its folder there itself. Codex's terminal below is one opened after the install, and has it. So the
   // conversation It reopens in step 3 runs `it` by its name only where It itself puts its folder
   // on that conversation's PATH.
   const serviceEnv = {

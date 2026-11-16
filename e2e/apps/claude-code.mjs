@@ -284,9 +284,10 @@ try {
   const connected = setup.json?.harnesses?.find((h) => h.id === 'claude-code')
   must('`it setup --only claude-code` connects Claude Code', setup.code === 0 && connected?.addon === 'connected', setup.out + setup.err)
 
-  // The service is not given It's own folder on its PATH, as a person's service is not after the
-  // install the guide describes, where their agent ran `it setup` from a shell opened before It
-  // was installed. It has another `it` on it instead, as a person may have an older one: a
+  // The service is started without It's own folder on its PATH, as a shell opened before It was
+  // installed has it: an `it serve` started by hand from such a shell, or a service whose
+  // definition was written from one by an It that did not put its folder there itself. It has
+  // another `it` on it instead, as a person may have an older one: a
   // conversation that runs that one fails. It puts its folder first on the PATH of the
   // conversation it reopens, which is how that conversation runs It's own `it` by its name, as
   // Auto-wake's note to it says it can, whatever the add-on adds after it. The conversation this

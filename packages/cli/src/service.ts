@@ -361,7 +361,7 @@ ${Object.entries(env)
 // command and begin another, a quote included: a quote would otherwise switch that reading on
 // and off, and a value with one in it could say what is run next.
 const cmdValue = (v: string) => v.replace(/[\^&|<>()"]/g, '^$&').replace(/%/g, '%%')
-/** Whether the launcher can set a variable to this value: cmd.exe reads no line longer than 8000 characters. */
+/** Whether the launcher sets a variable to this value: it writes no line longer than 8000 characters, which keeps within the 8191 that cmd.exe reads. */
 const launcherHolds = (k: string, v: string) => `set ${k}=${cmdValue(v)}`.length <= 8000
 function cmdWord(w: string): string {
   if (/^[A-Za-z0-9_.-]+$/.test(w)) return w
@@ -405,7 +405,7 @@ export function windowsLauncher(cmd: string[], env: Record<string, string>): str
   for (const [k, v] of Object.entries(env)) {
     // Nothing set is left as the task has it: an empty value would take the variable away
     if (!v || /[\r\n]/.test(v)) continue
-    // cmd.exe reads no line longer than it can hold. A PATH that is, is left as the task has it.
+    // A value too long for a line of the launcher is left as the task has it, as a very long PATH may be.
     if (launcherHolds(k, v)) lines.push(`set ${k}=${cmdValue(v)}`)
   }
   // The program is started again five seconds after it has ended as a failure, as systemd and

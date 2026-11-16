@@ -60,7 +60,7 @@ describe('what a service is given of the shell that registered it', () => {
     Object.defineProperty(process, 'platform', { value: 'win32' })
     try {
       const itHome = path.resolve('person', '.it')
-      // Long enough that `set PATH=` with it fits in the 8000 characters cmd.exe reads, and with It's folder in front does not
+      // Long enough that `set PATH=` with it fits in the 8000 characters a line of the launcher may have, and with It's folder in front does not
       const long = Array.from({ length: 800 }, (_, n) => `C:\\Tools\\t${n}`)
         .join(';')
         .slice(0, 7990 - 'set PATH='.length)
