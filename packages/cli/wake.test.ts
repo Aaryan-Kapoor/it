@@ -525,6 +525,15 @@ describe.skipIf(process.platform === 'win32')('a reopened conversation that is s
       CODEX_MODE_REFUSED,
     )
     expect(Date.now() - began).toBeLessThan(10_000)
+    // Only the settings It gives are watched: requirements that change, say, web search change no mode
+    expect(CODEX_CHANGED_SAID.test('Configured value for `web_search_mode` is disallowed by requirements; falling back to required value Disabled.')).toBe(
+      false,
+    )
+    expect(
+      CODEX_CHANGED_SAID.test(
+        'Configured value for `permission_profile` is disallowed by requirements; falling back from `:read-only` to required value `:workspace`.',
+      ),
+    ).toBe(true)
     expect(heard.length).toBeGreaterThan(0)
     expect(readdirSync(kept)).toEqual([])
   })
