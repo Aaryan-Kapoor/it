@@ -108,6 +108,18 @@ function machine(enrolled = true, here = false) {
   return { home, it, bin }
 }
 
+/** The machine's system answers when asked, and knows of no service of It's. Whether the machine the tests run on has a systemd that can be reached is not what is being tried. */
+const systemAnswers = (m: { bin: string }) => {
+  for (const name of ['systemctl', 'loginctl', 'launchctl']) {
+    writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in *" show-environment "*) exit 0 ;; esac\nexit 1\n`)
+    chmodSync(path.join(m.bin, name), 0o755)
+  }
+}
+
+/** What is said of the background service inside WSL, where Windows stops the Linux it runs in with its last window. */
+const WSL_SAID = (name: string) =>
+  `This Linux runs in WSL, and Windows stops it, and It with it, within a minute of its last window closing. Keep one ${name} window open while you use It: opening one again brings It back.`
+
 interface Ran {
   code: number | null
   /** The signal that ended the command, where one did. */
@@ -528,7 +540,7 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
     expect(ran.shown).toContain('The backend program could not make the key')
   })
 
-  test('taken ports name the manual second-instance command and the single background service', async () => {
+  test('taken ports name setup again from a free port where another program has them, and the manual second-instance command and the single background service where another It has them', async () => {
     for (const another of [false, true]) {
       const m = machine(false)
       const held = await holdBase(25_000, 10)
@@ -539,9 +551,17 @@ describe.skipIf(process.platform === 'win32')('setup prerequisites and diagnosti
         const said = error(ran)
         expect([ran.code, said.code]).toEqual([1, 'port_taken'])
         expect(said.message).toContain(another ? 'Another It is already running' : `Port ${held.base} is in use`)
-        expect(said.hint).toMatch(/IT_PORT=\d+ it setup --none --no-service/)
-        expect(said.hint).toContain('keep IT_HOME set to this folder')
-        expect(said.hint).toContain('setup without --no-service replaces its registration with this folder')
+        if (another) {
+          expect(said.hint).toMatch(/IT_PORT=\d+ it setup --none --no-service/)
+          expect(said.hint).toContain('keep IT_HOME set to this folder')
+          expect(said.hint).toContain('setup without --no-service replaces its registration with this folder')
+        } else {
+          // The person's own It, set up from another port as a background service like any other
+          expect(said.hint).toMatch(
+            /^Nothing was set up\. To set It up on ports nothing else uses, run setup again with IT_PORT before it: `IT_PORT=\d+ it setup`\./,
+          )
+          expect(said.hint).not.toMatch(/second It|--no-service|it serve/)
+        }
         expect(existsSync(path.join(m.it, 'service.json'))).toBe(false)
         expect(existsSync(path.join(m.it, 'machine.json'))).toBe(false)
       } finally {
@@ -2118,6 +2138,60 @@ describe.skipIf(process.platform === 'win32')('a switch written with a value', (
       expect(error(ran).hint).toContain('`it list`')
       expect(JSON.parse(readFileSync(file, 'utf8')).operation).toBe(operation)
       expect(b.asked.filter((x) => x.path === 'publish:begin').map((x) => x.args.operation)).toEqual([operation])
+      expect(b.uploads).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication tried with a leading `--%` that another shell handed on is found again by the same line from PowerShell, which takes it', async () => {
+    const m = machine()
+    const args = ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>']
+    const gone = await backend(m)
+    await gone.close()
+    expect((await run(m, ['--%', ...args], gone.env)).code).toBe(1)
+    const folder = path.join(m.it, 'publication-pending')
+    const receipts = () => readdirSync(folder).filter((name) => name.endsWith('.json'))
+    expect(receipts()).toHaveLength(1)
+    const operation = JSON.parse(readFileSync(path.join(folder, receipts()[0]!), 'utf8')).operation
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:resume'
+        ? new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+        : fn === 'publish:begin'
+          ? { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: `${b.url}/upload/`, grant: 'a-grant' } }
+          : fn === 'publish:finish'
+            ? { slug: 'plan', version: 1, url: `${b.url}/p/plan` }
+            : null,
+    )
+    try {
+      expect((await run(m, args, b.env)).code).toBe(0)
+      expect(b.asked.filter((x) => x.path === 'publish:begin').map((x) => x.args.operation)).toEqual([operation])
+      expect(receipts()).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('a publication begun again after recovery found nothing reports a refusal of what was asked as it is, and lets its receipt go', async () => {
+    const m = machine()
+    const args = ['tour', 'show', 'checklist']
+    const gone = await backend(m)
+    await gone.close()
+    expect((await run(m, args, gone.env)).code).toBe(1)
+    const folder = path.join(m.it, 'publication-pending')
+    expect(readdirSync(folder).filter((name) => name.endsWith('.json'))).toHaveLength(1)
+    const message = 'This id belongs to a page that the tour does not own, or the page changed while the tour was publishing.'
+    const b = await backend(m, ({ path: fn }) =>
+      fn === 'publish:begin'
+        ? new Refusal({ code: 'conflict', message, settled: true } as never)
+        : fn === 'publish:resume'
+          ? new Refusal({ code: 'not_found', message: 'That publication is not recorded.' })
+          : null,
+    )
+    try {
+      const ran = await run(m, args, b.env)
+      expect([ran.code, error(ran).code, error(ran).message]).toEqual([1, 'conflict', message])
+      expect(readdirSync(folder).filter((name) => name.endsWith('.json'))).toEqual([])
       expect(b.uploads).toEqual([])
     } finally {
       await b.close()
@@ -3852,7 +3926,7 @@ syncBuiltinESMExports()
       const said = error(saved)
       expect(said.code).toBe('blocked')
       expect(said.hint).toMatch(
-        /^Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside\. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once\. It may well be running/,
+        /^Codex asks the user before every `it save`, and runs the command they approve inside its sandbox, where `it` cannot reach It, unless you asked for it outside\. Give every `it save` with `sandbox_permissions` set to `"require_escalated"` and a `justification` from the start, and the user is asked once\. If Codex refuses that without asking the user, do not ask again: at once, say so above the page with `it say <page-id> "<words>"`, and carry on with the action text\. Where they have this conversation open in Codex in a terminal and Codex said its automatic review refused it, the words are: Codex would not let me save the file you sent\. If \/permissions in Codex offers “Ask for approval”, choose it and send the file again, and Codex will ask you first\. Anywhere else, they say what Codex said\. It may well be running/,
       )
       expect(existsSync(path.join(m.home, 'x.png'))).toBe(false)
       const read = error(await run(m, ['action', 'k1'], env, process.execPath, sandboxed(m, { network: true })))
@@ -3949,9 +4023,19 @@ describe.skipIf(process.platform === 'win32')('a picture an action carried', () 
       expect(printed(await run(m, ['action', 'k57'], b.env)).data).toEqual(carried)
       // In Codex, reading it says how to save it with the one approval Codex asks for, and only there
       expect(printed(await run(m, ['action', 'k57'], b.env))).not.toHaveProperty('saveInCodex')
-      expect(printed(await run(m, ['action', 'k57'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })).saveInCodex).toContain(
-        'Give every `it save` with `sandbox_permissions` set to `"require_escalated"`',
+      const inCodex = printed(await run(m, ['action', 'k57'], { ...b.env, CODEX_THREAD_ID: 'thread-1' })).saveInCodex
+      expect(inCodex).toContain('Give every `it save` with `sandbox_permissions` set to `"require_escalated"`')
+      // Where Codex refuses the save without asking, the agent says above the page what to change in Codex, in these words
+      expect(inCodex).toContain(
+        'If Codex refuses that without asking the user, do not ask again: at once, say so above the page with `it say <page-id> "<words>"`',
       )
+      expect(inCodex).toContain(
+        'Where they have this conversation open in Codex in a terminal and Codex said its automatic review refused it, the words are: Codex would not let me save the file you sent. If /permissions in Codex offers “Ask for approval”, choose it and send the file again, and Codex will ask you first. Anywhere else, they say what Codex said.',
+      )
+      // And still where Codex may have run it and that cannot be told: a pair another app's add-on
+      // wrote beside Codex's mark, with that app not seen above (as it is not, unless OpenCode runs the tests)
+      const unsure = { ...b.env, CODEX_THREAD_ID: 'thread-1', IT_HARNESS: 'opencode', IT_SESSION: 'conversation-1' }
+      expect(printed(await run(m, ['action', 'k57'], unsure)).saveInCodex).toBe(inCodex)
       // A file of that name that is there already is the person's: it is not written over, and is as it was
       writeFileSync(to, 'the person’s own drawing')
       const over = await run(m, ['save', 'k57', to], b.env)
@@ -5143,6 +5227,16 @@ describe.skipIf(process.platform === 'win32')('the background service, as `it se
     expect(help).toMatch(/^ {2}it service install \| uninstall \| status \| logs$/m)
     expect(help).not.toMatch(/it connector/)
   })
+
+  test('a `--%` that a shell other than PowerShell hands on, straight after `it`, is dropped, and only there and only once', async () => {
+    const m = machine()
+    const plain = await run(m, ['version', '--json'])
+    expect(plain.code).toBe(0)
+    const dropped = await run(m, ['--%', 'version', '--json'])
+    expect([dropped.code, dropped.out]).toEqual([0, plain.out])
+    expect(error(await run(m, ['version', '--%', '--json'])).message).toBe('--% is not something `it` knows.')
+    expect(error(await run(m, ['--%', '--%', 'version', '--json'])).message).toBe('No such command: --%')
+  })
 })
 
 describe.skipIf(process.platform === 'win32')(
@@ -5202,6 +5296,34 @@ describe.skipIf(process.platform === 'win32')(
         await b.close()
       }
     })
+
+    test.skipIf(process.platform !== 'linux')(
+      'says inside WSL that Windows stops this Linux, and It with it, when its last window closes, and that one window has to stay open',
+      async () => {
+        const m = machine()
+        command(m, 'systemctl', 0)
+        command(m, 'loginctl', 0)
+        const b = await backend(m)
+        const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+        try {
+          const socket = path.join(m.it, 'connector.sock')
+          await new Promise<void>((r) => answers.listen(socket, r))
+          writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+          const ran = await run(m, ['setup', '--yes'], { ...b.env, WSL_DISTRO_NAME: 'Ubuntu-24.04' })
+          expect([ran.code, printed(ran).service]).toEqual([0, expect.objectContaining({ registered: true, note: WSL_SAID('Ubuntu-24.04') })])
+          expect(ran.err.split('\n')).toContain(WSL_SAID('Ubuntu-24.04'))
+          // Not where this Linux is not in WSL, unless the machine running the tests is
+          if (!/microsoft/i.test(os.release())) {
+            const plain = await run(m, ['setup', '--yes'], b.env)
+            expect(plain.err).not.toContain('WSL')
+            expect(printed(plain).service.note).toBeUndefined()
+          }
+        } finally {
+          await new Promise((r) => answers.close(r))
+          await b.close()
+        }
+      },
+    )
 
     test.skipIf(process.platform !== 'linux')(
       'says that It will stop when the person logs out, where the system would not keep it running past that, at a terminal as in what a program reads',
@@ -5513,6 +5635,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
   test('on the machine It runs on, when It is not running, every command says that and how to start it, and `it status` says it with what is known from this machine alone', async () => {
     // Set up and enrolled, and nothing is listening: the service is stopped
     const m = machine(true, true)
+    systemAnswers(m)
     const said = {
       code: 'offline',
       message: 'It is not running on this machine.',
@@ -5626,7 +5749,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       const accepted = await run(machine(false), [cmd, ...flags, '--help'])
       expect([cmd, flags, accepted.code, accepted.err]).toEqual([cmd, flags, 0, ''])
     }
-    expect(ran.out).toMatch(/^ {2}it setup \[--all \| --only a,b \| --none\] \[--name <name>\] \[--no-service\]$/m)
+    expect(ran.out).toMatch(/^ {2}it setup \[--all \| --only a,b \| --without a,b \| --none\] \[--name <name>\] \[--no-service\]$/m)
     expect(ran.out).toMatch(/^ {2}it site /m)
     expect(ran.out).toMatch(/^ {2}it serve /m)
     expect(ran.out).toMatch(/^ {2}it login --url <address> --code <invite> \[--name <name>\] \[--no-setup\]$/m)
@@ -5637,6 +5760,7 @@ describe.skipIf(process.platform === 'win32')('what a person is told when someth
       /\[--state '\{…\}' \| --state-file <path>\]/,
       /^ {2}it serve \[--log <file>\] {2,}\S/m,
       /--yes connects\s+every app it would otherwise ask about/,
+      /--only connects\s+the apps named, and --without disconnects them; both\s+leave the other apps as they are/,
       /--no-setup joins and\s+connects no agent app/,
       /With --json,\s+wherever a program reads what they print, and for an agent,\s+they\s+print\s+JSON/,
       /^ {2}it site \[--no-open\] {2,}\S/m,
@@ -5710,6 +5834,7 @@ describe.skipIf(process.platform === 'win32')('an It that is not running, under 
       `under ${name}, a command on the machine It runs on says that It is not running and how to start it, whether it holds a token or has to ask for one`,
       async () => {
         const m = machine(true, true)
+        systemAnswers(m)
         const said = {
           code: 'offline',
           message: 'It is not running on this machine.',
@@ -5863,13 +5988,9 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
   const NOT_REGISTERED = 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
   const NO_SYSTEMD =
     'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.'
-  /** The machine's system answers when asked, and knows of no service of It's. Whether the machine the tests run on has a systemd that can be reached is not what is being tried. */
-  const systemAnswers = (m: { bin: string }) => {
-    for (const name of ['systemctl', 'loginctl', 'launchctl']) {
-      writeFileSync(path.join(m.bin, name), `#!/bin/sh\ncase " $* " in *" show-environment "*) exit 0 ;; esac\nexit 1\n`)
-      chmodSync(path.join(m.bin, name), 0o755)
-    }
-  }
+  /** What is said of It not running where nothing could keep it running: to run `it serve` and leave it, and not to go back to setup, which has said that already. */
+  const NOT_RUNNING_UNKEPT =
+    'It is not running on this machine. Nothing can keep It running in the background on this machine, which has no systemd for your account that can be reached from here, as in a container. Run `it serve` in a terminal of your own and leave that terminal open, or under a supervisor of your own. `it serve` runs It only until the terminal it was started in closes, so an agent should not run it in its own session.'
   /** A machine It is set up on, as far as a command can tell from its folder: its settings, whole, and its identity. Nothing runs there. */
   const setUp = async () => {
     const m = machine(true, true)
@@ -6132,8 +6253,15 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     // Where no systemd can be reached for this person, as in a container, that is said, and `it setup` is not offered as the way to register it
     if (process.platform === 'linux') {
       writeFileSync(path.join(m.bin, 'systemctl'), '#!/bin/sh\nexit 1\n')
-      expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([NOT_RUNNING, NO_SYSTEMD, ''])
+      expect((await atTerminal(m, ['service', 'status'])).shown.split('\n')).toEqual([NOT_RUNNING_UNKEPT, NO_SYSTEMD, ''])
       expect((await atTerminal(m, ['status'])).shown).toContain(NO_SYSTEMD)
+      // And a command that needs It says the same, with nothing that sends the person back to setup
+      const offline = await run(m, ['list'])
+      expect(error(offline)).toEqual({
+        code: 'offline',
+        message: 'It is not running on this machine.',
+        hint: NOT_RUNNING_UNKEPT.replace('It is not running on this machine. ', ''),
+      })
     }
     // Registered, with a stand-in for the system's own command that says the service is active
     for (const name of ['systemctl', 'loginctl', 'launchctl']) {
@@ -6148,6 +6276,21 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
       '',
     ])
     expect(JSON.parse((await atTerminal(m, ['service', 'status', '--json'])).shown)).toMatchObject({ registered: true, running: false })
+    // Inside WSL, where Windows stops this Linux and It with it once its last window closes, that is said beside the service
+    if (process.platform === 'linux') {
+      const wsl = { WSL_DISTRO_NAME: 'Ubuntu' }
+      expect((await atTerminal(m, ['service', 'status'], wsl)).shown.split('\n').slice(1)).toEqual([
+        `It is registered with the system to start by itself (${RUNS}).`,
+        WSL_SAID('Ubuntu'),
+        '',
+      ])
+      expect((await atTerminal(m, ['status'], wsl)).shown.split('\n')).toContain(WSL_SAID('Ubuntu'))
+      // Not where its starting was stopped after it failed, which opening a window does not undo: what is said of that says what would
+      writeFileSync(path.join(m.it, 'startup.json'), JSON.stringify({ key: 'a'.repeat(64), failures: 3, code: 'settings', retryAt: null }))
+      const paused = (await atTerminal(m, ['service', 'status'], wsl)).shown
+      expect(paused).toContain('Automatic startup stopped after 3 failed starts (settings).')
+      expect(paused).not.toContain('WSL')
+    }
   })
 
   for (const [name, runtime] of RUNTIMES)
@@ -7663,7 +7806,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
       expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
       expect(second.err).not.toContain('disconnecting Pi')
       expect(second.err).toContain(
-        'Pi stays connected as well: run from an agent’s conversation, `--only` connects what it names and leaves connected what is connected already.',
+        'Pi stays connected, since `--only` and `--without` leave as it is every app they do not name. `it setup --without pi` disconnects it.',
       )
       expect(second.err).not.toContain('no longer connected')
     } finally {
@@ -7825,12 +7968,14 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
       expect(setup.code).toBe(0)
       // It is told that Pi is still chosen, so that the service does not take Pi's add-on out
       expect(chose.map((c) => [...c].sort())).toEqual([['opencode', 'pi']])
+      // And Pi, which was not found, is not said to be connected
+      expect(setup.err).toContain('Pi stays as it was, since `--only` and `--without` leave as it is every app they do not name.')
     } finally {
       await b.close()
     }
   })
 
-  test('an app that could not be looked at after `--only` took it out is not said to be disconnected', async () => {
+  test('an app that could not be looked at after `--without` took it out is not said to be disconnected', async () => {
     const m = machine()
     pi(m)
     writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
@@ -7853,7 +7998,8 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
           '',
         ].join('\n'),
       )
-      const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode', '--without', 'pi'], b.env)
+      expect(narrower.err).toContain('disconnecting Pi')
       expect(narrower.err).not.toContain('Pi is no longer connected')
       expect(narrower.out).not.toContain('Pi is no longer connected')
     } finally {
@@ -7861,23 +8007,202 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
     }
   })
 
-  test('run anywhere else, `--only` takes out an app it does not name, and says what that means for the person and how to have it back', async () => {
+  /** A machine with Pi and OpenCode, and a backend that keeps what it is told was chosen. */
+  const twoApps = async () => {
     const m = machine()
     const ran = pi(m)
     writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
-    const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted: [] } : null))
+    let wanted: string[] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:choose') wanted = asked.args.harnesses as string[]
+      return asked.path === 'machines:me' ? { id: 'machine-1', name: 'test', wanted } : null
+    })
+    const states = (setup: Awaited<ReturnType<typeof run>>) =>
+      Object.fromEntries(printed(setup).harnesses.map((h: { id: string; addon: string }) => [h.id, h.addon]))
+    return { m, ran, b, states, wanted: () => [...wanted].sort() }
+  }
+
+  test('with one app connected, `--only` the other connects it and leaves the first connected, and says so with how to disconnect it', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
     try {
       expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const second = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(second.code).toBe(0)
+      expect(states(second)).toEqual({ opencode: 'connected', pi: 'connected' })
+      // It is told of both, so that the service does not take Pi out again by itself, and Pi's add-on was not taken out
+      expect(wanted()).toEqual(['opencode', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(second.err).not.toContain('disconnecting Pi')
+      expect(second.err).toContain(
+        'Pi stays connected, since `--only` and `--without` leave as it is every app they do not name. `it setup --without pi` disconnects it.',
+      )
+      expect(second.err).not.toContain('no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('with both apps connected, `--only` one of them leaves both connected', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi,opencode'], b.env)).code).toBe(0)
       const narrower = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
       expect(narrower.code).toBe(0)
-      expect(printed(narrower).harnesses).toContainEqual({ id: 'pi', version: '0.82.0', addon: 'not_connected' })
+      expect(states(narrower)).toEqual({ opencode: 'connected', pi: 'connected' })
+      expect(wanted()).toEqual(['opencode', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(narrower.err).not.toContain('no longer connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--only` leaves an app that was not connected as it was', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      const setup = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(setup.code).toBe(0)
+      expect(states(setup)).toEqual({ opencode: 'connected', pi: 'not_connected' })
+      expect(wanted()).toEqual(['opencode'])
+      expect(ran().some((words) => words.startsWith('install'))).toBe(false)
+      expect(setup.err).not.toContain('stays connected')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--only` another app brings an add-on that it leaves connected up to date, as a plain setup would', async () => {
+    const { m, ran, b, states } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      // Pi's add-on as an earlier It put it in
+      const stamp = path.join(m.it, 'addons', 'pi.json')
+      const note = JSON.parse(readFileSync(stamp, 'utf8')) as { installs: { version: string; by?: string }[] }
+      writeFileSync(stamp, JSON.stringify({ ...note, installs: note.installs.map((i) => ({ ...i, version: '0.0.1', by: '0.0.1' })) }))
+      const installs = ran().filter((words) => words.startsWith('install')).length
+      const second = await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)
+      expect(second.code).toBe(0)
+      expect(states(second)).toEqual({ opencode: 'connected', pi: 'connected' })
+      expect(ran().filter((words) => words.startsWith('install')).length).toBe(installs + 1)
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--without` disconnects the app it names, leaves the others connected, and says what that means for the person and how to have it back', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi,opencode'], b.env)).code).toBe(0)
+      const without = await run(m, ['setup', '--no-service', '--without', 'pi'], b.env)
+      expect(without.code).toBe(0)
+      expect(states(without)).toEqual({ opencode: 'connected', pi: 'not_connected' })
+      expect(wanted()).toEqual(['opencode'])
       expect(ran().some((words) => words.startsWith('remove'))).toBe(true)
       const GONE =
-        'Pi is no longer connected, since `--only` did not name it: what you do on a page that one of its conversations made no longer reaches that conversation. `it setup --only opencode,pi` connects it again.'
-      expect(narrower.err).toContain(GONE)
+        'Pi is no longer connected: what you do on a page that one of its conversations made no longer reaches that conversation. `it setup --only pi` connects it again.'
+      expect(without.err).toContain(GONE)
+      expect(without.err).toContain('OpenCode stays connected, since `--only` and `--without` leave as it is every app they do not name.')
       // And whoever ran it is told to pass it on, whole, with the rest of what is left for the person
-      expect(printed(narrower).tell).toContain(GONE)
-      expect(printed(narrower).next).toContain(GONE)
+      expect(printed(without).tell).toContain(GONE)
+      expect(printed(without).next).toContain(GONE)
+      // The command it gives connects Pi again, and leaves OpenCode connected
+      const again = await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)
+      expect(states(again)).toEqual({ opencode: 'connected', pi: 'connected' })
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--without` an app that is not connected changes nothing in it', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'opencode'], b.env)).code).toBe(0)
+      const without = await run(m, ['setup', '--no-service', '--without', 'pi'], b.env)
+      expect(without.code).toBe(0)
+      expect(states(without)).toEqual({ opencode: 'connected', pi: 'not_connected' })
+      expect(wanted()).toEqual(['opencode'])
+      expect(ran().some((words) => words.startsWith('install') || words.startsWith('remove'))).toBe(false)
+      expect(without.err).not.toContain('no longer connected')
+      expect(without.err).toContain('Pi was not connected, so `--without` left it as it was.')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--none` disconnects every app', async () => {
+    const { m, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi,opencode'], b.env)).code).toBe(0)
+      const none = await run(m, ['setup', '--no-service', '--none'], b.env)
+      expect(none.code).toBe(0)
+      expect(states(none)).toEqual({ opencode: 'not_connected', pi: 'not_connected' })
+      expect(wanted()).toEqual([])
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--only` an app that is not on this machine connects nothing, and leaves the connected app connected', async () => {
+    const { m, ran, b, states, wanted } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const missing = await run(m, ['setup', '--no-service', '--only', 'codex'], b.env)
+      expect(states(missing)).toEqual({ opencode: 'not_connected', pi: 'connected' })
+      expect(missing.err).toContain('Codex was not found on this machine.')
+      expect(wanted()).toEqual(['codex', 'pi'])
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('where It cannot be asked what was chosen, `--only` and `--without` change nothing', async () => {
+    const m = machine()
+    const ran = pi(m)
+    writeFileSync(path.join(m.bin, 'opencode'), '#!/bin/sh\necho 1.18.32\n', { mode: 0o755 })
+    let failing = false
+    const chose: string[][] = []
+    const b = await backend(m, (asked) => {
+      if (asked.path === 'machines:choose') chose.push(asked.args.harnesses as string[])
+      if (asked.path !== 'machines:me') return null
+      return failing ? SERVER_ERROR : { id: 'machine-1', name: 'test', wanted: chose.at(-1) ?? [] }
+    })
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      failing = true
+      const choices = chose.length
+      for (const words of [
+        ['--only', 'opencode'],
+        ['--without', 'opencode'],
+      ]) {
+        const refused = await run(m, ['setup', '--no-service', ...words], b.env)
+        expect(refused.code).not.toBe(0)
+      }
+      expect(chose.length).toBe(choices)
+      expect(ran().some((words) => words.startsWith('remove'))).toBe(false)
+      expect(existsSync(path.join(m.home, 'pi-has'))).toBe(true)
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('`--without` is refused, with nothing changed, beside `--all` or `--none`, for an app named by `--only` too, and for an app It does not know', async () => {
+    const { m, ran, b } = await twoApps()
+    try {
+      expect((await run(m, ['setup', '--no-service', '--only', 'pi'], b.env)).code).toBe(0)
+      const before = ran().length
+      for (const [words, said] of [
+        [['--without', 'pi', '--none'], '--without cannot be given with --none.'],
+        [['--without', 'pi', '--all'], '--without cannot be given with --all.'],
+        [['--only', 'pi', '--without', 'pi'], 'pi cannot be named by both --only and --without.'],
+        [['--without', 'nonesuch'], 'Not an agent app It knows: nonesuch'],
+        [['--without', ''], '--without names the agent apps to disconnect.'],
+      ] as const) {
+        const refused = await run(m, ['setup', '--no-service', ...words], b.env)
+        expect([refused.code, refused.err]).toEqual([2, expect.stringContaining(said)])
+      }
+      expect(ran().length).toBe(before)
     } finally {
       await b.close()
     }

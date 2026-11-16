@@ -2172,8 +2172,13 @@ describe.skipIf(!program || windows)('enrolling this machine', () => {
         'port_taken',
         `Port ${port + PORTS.backendApi} is in use on this machine, and It would use it: it counts its ports from ${port}.`,
       ])
-      // The first port it names is one It could count from, and none of the four from it is taken
-      const offered = Number(HINT.exec(said.hint ?? '')?.[1])
+      // What it says to do is to set this It up from another port, as a background service like
+      // any other: the first port it names is one It could count from, and none of the four from it is taken
+      const offered = Number(
+        /^Nothing was set up\. To set It up on ports nothing else uses, run setup again with IT_PORT before it: `IT_PORT=(\d+) it setup`\. The port is written into its settings, so it is named this once\.$/.exec(
+          said.hint ?? '',
+        )?.[1],
+      )
       expect(offered).toBeGreaterThan(port)
       expect(offered % 100).toBe(port % 100)
     } finally {

@@ -117,11 +117,12 @@ import {
   processes,
   SINCE_TOLD,
   STOPPED,
+  signedOut,
   WAS_CUT_OFF,
   WAS_STOPPED,
-  WOKEN,
   windowsProgram,
   windowsPrograms,
+  wokenNote,
 } from './wake'
 import { wakeWhy } from './wake-why'
 
@@ -634,6 +635,12 @@ export const OPEN_WITHOUT_ADDON =
  */
 export const PI_OPEN_WITHOUT_ADDON =
   'its conversation is open without It’s add-on, as when it was open before It was installed, so It did not start a second copy of it: type /reload in it, or open it again if you closed it, and what you did reaches it'
+/**
+ * What the page says of why a conversation could not be reopened, where its app's last words
+ * show that the app is signed out on this machine (`signedOut`): in It's words, and not the
+ * app's, which for Codex are a status code and a request's id. Shown after "Couldn't wake <app>:".
+ */
+export const signedOutWhy = (app: string): string => `${app} is signed out on this machine, so it could not run: open ${app} and sign in`
 /** What the page says of a click for a Codex conversation that is open and whose last turn the person interrupted (`CODEX_INTERRUPTED` in the protocol). */
 export { CODEX_INTERRUPTED }
 /** What the page says after why a Pi conversation could not be reopened, where it has not loaded It's add-on either (`notLoadedToo`). */
@@ -2780,6 +2787,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const runId = randomUUID()
     runNames.set(key, runId)
     let ended: string | null = 'it did not end'
+    /** The conversation as the log named it when it said it was being reopened, so that how that ended is said too. */
+    let begun: string | undefined
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
       // word that the page says the agent is working, and offers to stop it
@@ -2798,6 +2807,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         ended = NOT_STARTED
         return ended
       }
+      // Written down as it is about to begin and, however it ends, as it ends, by a shortened id, a
+      // count and a fixed word: a reopening that worked otherwise left no line at all, and could not be told from none
+      begun = `${a(agentOf(now.harness))} conversation (${short(now.id)})`
+      say(`${begun} is being reopened for ${ids.length} click${ids.length === 1 ? '' : 's'}`)
       // Everything that could have changed while this was being got ready is looked at once
       // more, at the last moment before anything runs: the connector stopping, the machine
       // ceasing to fit, the hold on what it is reopened for being lost, and the person
@@ -2885,6 +2898,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       }
       return ended
     } finally {
+      // How the reopening said to be beginning ended, however it ended: a run that threw is `other`
+      if (begun)
+        say(
+          `${begun} ended its reopened run (${ended === null ? 'done' : ended === STOPPED ? 'stopped' : ended === NOT_STARTED ? 'not_started' : wakeWhy(ended)})`,
+        )
       reopenedNow.delete(key)
       runNames.delete(key)
       stoppedRun.delete(key)
@@ -2935,7 +2953,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const notReopened = async (session: { harness: string; id: string }, why: string) => {
     const words = saidLast.get(follow(keyOf(session.harness, session.id)))
-    const said = words ? `${why}, and its last words were: ${words}` : why
+    const said =
+      words && signedOut(session.harness, words)
+        ? signedOutWhy(APP_NAMES[session.harness] ?? session.harness)
+        : words
+          ? `${why}, and its last words were: ${words}`
+          : why
     // Why its reopening failed is said all the same, since the conversation may be gone for good,
     // and after it what lets it hear the page where it is still open. A conversation known to be
     // open without the add-on is not reopened at all (`keptShut`), so this is said only of one
@@ -3504,7 +3527,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // not the same note every time.
           await carry(
             click.session!,
-            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${WOKEN}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
+            `${[click, ...withIt].map((c) => describeClick(asClick(c))).join('\n\n')}\n\n${wokenNote(harness)}${stoppedByPerson.has(key) ? `\n\n${WAS_STOPPED}` : ''}${toldCutOff ? `\n\n${WAS_CUT_OFF} ${toldLeft}` : ''}`,
             // Still wanted at the moment it would start: the app connected, reopening switched on
             // for it, and no thread of T3 Code found to hold it, or about to be, meanwhile
             () => {

@@ -229,10 +229,22 @@ describe('what the page’s bar says of the last thing the person did', () => {
     expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
     await act(async () => root.unmount())
     host.remove()
-    // A machine has it in hand and cannot give it to the agent yet: the agent is at work
+    // A machine has it in hand and cannot give it to the agent yet, and a turn of its conversation is known to run: the agent is at work
     recent = [{ at: NOW - 8000, delivery: 'leased', outcome: null }]
+    Object.assign(PAGE, { turn: { since: NOW - 60_000, endedAt: null } })
     await shown()
     expect(said()).toBe('Sent. Pi is busy, and gets it when it is free')
+    await act(async () => root.unmount())
+    host.remove()
+    // With no turn known to run, the conversation may as well have just closed, which looks the same for a few seconds: said as either
+    Object.assign(PAGE, { turn: { since: NOW - 60_000, endedAt: NOW - 30_000 } })
+    await shown()
+    expect(said()).toBe('Sent. Pi has not taken it yet. It may be busy, or its conversation may have just closed')
+    await act(async () => root.unmount())
+    host.remove()
+    Object.assign(PAGE, { turn: null })
+    await shown()
+    expect(said()).toBe('Sent. Pi has not taken it yet. It may be busy, or its conversation may have just closed')
     await act(async () => root.unmount())
     host.remove()
     Object.assign(PAGE, { wakeFailed: { at: NOW - 1000, why: 'the folder its conversation was held in is not known on this machine, or is gone' } })
@@ -274,10 +286,10 @@ describe('what the page’s bar says of the last thing the person did', () => {
     host.remove()
     // Taken by an agent, it is on its way, and is not said to be held back
     recent = [{ at: NOW - 8000, delivery: 'leased', outcome: null, heldBack: null }]
-    Object.assign(PAGE, { pending: 0 })
+    Object.assign(PAGE, { pending: 0, turn: { since: NOW - 60_000, endedAt: null } })
     await shown()
     expect(said()).toBe('Sent. Claude Code is busy, and gets it when it is free')
-    Object.assign(PAGE, { agent: 'pi' })
+    Object.assign(PAGE, { agent: 'pi', turn: null })
   })
 
   test('a click whose machine is asking T3 Code whether a thread holds its conversation is said to wait for that, and not that Claude Code could not be woken', async () => {
@@ -657,6 +669,49 @@ describe('what the page’s bar says of the last thing the person did', () => {
     Object.assign(PAGE, { pending: 0 })
   })
 
+  test('a click on a page that no conversation of an app It knows has is said to reach the agent when it waits on the page, and no add-on is spoken of', async () => {
+    // Made by an agent app It has no add-on for, which hears of what is done on a page with `it wait`
+    const was = { ...PAGE }
+    Object.assign(PAGE, { agent: null, session: null, wake: null, pending: 1 })
+    recent = [{ at: NOW - 2000, delivery: 'pending', outcome: null }]
+    try {
+      await shown()
+      expect(said()).toBe('Sent. Waiting for your agent')
+      await act(async () => root.unmount())
+      host.remove()
+      recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+      await shown()
+      expect(said()).toBe('Sent. Your agent gets this when it next waits on this page: it wait --id plan')
+      expect(buttons('Wake it')).toEqual([])
+      await act(async () => root.unmount())
+      host.remove()
+      recent = [
+        { at: NOW - 60_000, delivery: 'pending', outcome: null },
+        { at: NOW - 70_000, delivery: 'pending', outcome: null },
+      ]
+      Object.assign(PAGE, { pending: 2 })
+      await shown()
+      expect(said()).toBe('Sent (2). Your agent gets this when it next waits on this page: it wait --id plan')
+      await act(async () => root.unmount())
+      host.remove()
+      // However long ago it was done: there is no conversation to be next open
+      recent = [{ at: NOW - 2 * 24 * 60 * 60_000, delivery: 'pending', outcome: null }]
+      Object.assign(PAGE, { pending: 1 })
+      await shown()
+      expect(said()).toBe('Sent. Your agent gets this when it next waits on this page: it wait --id plan')
+      await act(async () => root.unmount())
+      host.remove()
+      // A page that has a conversation is spoken of as before
+      Object.assign(PAGE, { agent: 'pi', session: { harness: 'pi', id: 'conversation-1' }, pending: 1 })
+      recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
+      await shown()
+      expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+    } finally {
+      delete (PAGE as { session?: unknown }).session
+      Object.assign(PAGE, was)
+    }
+  })
+
   test('to wake the agent is offered only for something done in the last day, which is what a conversation is reopened for', async () => {
     Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false }, pending: 1 })
     recent = [{ at: NOW - 60_000, delivery: 'pending', outcome: null }]
@@ -706,10 +761,13 @@ describe('what the page’s bar says of the last thing the person did', () => {
     ])
     await act(async () => root.unmount())
     host.remove()
+    // Off: the person turned it off, which is said as that, and not as a fault of the add-on
     Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'claude-code', on: false } })
+    // A screen cannot open Machines, and is told where it can be done
+    const OFF = 'Sent. Auto-wake is off for Claude Code on the laptop, so this waits until its conversation is open.'
     expect(await each()).toEqual([
-      ['Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines', true],
-      ['Sent. Claude Code is not listening. Open its conversation and check the add-on under Machines', false],
+      [`${OFF} You can turn Auto-wake on under Machines`, true],
+      [`${OFF} It can be turned on under Machines, in a browser paired as yours`, false],
     ])
     Object.assign(PAGE, { wake: null, pending: 0 })
   })
@@ -739,7 +797,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
       ]
       Object.assign(PAGE, { wake: { machineId: 'machine-1', harness: 'pi', on: false } })
       await drawnAgain()
-      expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+      expect(said()).toBe('Sent. Auto-wake is off for Pi on the laptop, so this waits until its conversation is open. You can turn Auto-wake on under Machines')
       expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Wake it')).toBe(true)
     } finally {
       Object.assign(PAGE, { agent: 'claude-code', wake: null, pending: 0 })
@@ -836,7 +894,8 @@ describe('what the page’s bar says of the last thing the person did', () => {
       await act(async () => root.render(createElement(PageView, { slug: 'plan', user: 'user-1', owner: false })))
       expect(inventoryAsked).not.toHaveBeenCalled()
     } finally {
-      Object.assign(PAGE, { agent: 'claude-code', session: null })
+      Object.assign(PAGE, { agent: 'claude-code' })
+      delete (PAGE as { session?: unknown }).session
     }
   })
 
@@ -855,7 +914,8 @@ describe('what the page’s bar says of the last thing the person did', () => {
       expect(said()).not.toContain('conversation looks closed')
       expect(said()).not.toContain('could not connect')
     } finally {
-      Object.assign(PAGE, { agent: 'claude-code', session: null })
+      Object.assign(PAGE, { agent: 'claude-code' })
+      delete (PAGE as { session?: unknown }).session
     }
   })
 
@@ -952,7 +1012,7 @@ describe('what the page’s bar says of the last thing the person did', () => {
     // Fitting again, it is said as anything else that waits
     Object.assign(PAGE, { machinePaused: null, pending: 1 })
     await shown()
-    expect(said()).toBe('Sent. Pi is not listening. Open its conversation and check the add-on under Machines')
+    expect(said()).toBe('Sent. Auto-wake is off for Pi on the laptop, so this waits until its conversation is open. You can turn Auto-wake on under Machines')
     Object.assign(PAGE, { wake: null, pending: 0, agent: 'claude-code' })
   })
 

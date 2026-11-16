@@ -63,6 +63,23 @@ export const WOKEN =
   '[It] It reopened this conversation for what is above, which a page of yours sent while the conversation was closed: each part of it says whether someone had just used the page. You can do here what you could do while they were with you: the same commands, run the same way. Two things differ. Nobody is watching, so nobody can answer a question or approve anything, and what you would have asked them about first still waits for them: say on the page that it does. And It started you here, and not their terminal, so what that terminal had switched on may not be here: an activated virtual environment, a version chosen with a version manager, a variable they typed or exported there. Check, and run the project’s own tools by their paths or switch them on yourself before you run its commands, and if you cannot, say so on the page. Run `it` by that name alone, with no folder in front of it and no `export` before it: it is on your PATH, and in that form it is never held for approval. Do what was asked and nothing more, show on the page that you have, and then end your turn: do not wait for anything else to be done, since It reopens this conversation for whatever is done next. Try what the work needs before you conclude that you may not. Only if a command is in fact refused, say so where they will see it, with `it notify` or the page’s state, and run `it ack <action id> --failed`.'
 
 /**
+ * What a conversation of Codex is told as well, after `WOKEN`, when It reopens it on Windows.
+ * Codex runs its commands there in PowerShell, and lets one out of its sandbox, where alone `it`
+ * reaches It, only where its rule for `it` matches it. It matches only a command it reads as
+ * plain words, and it cannot read one with `--%` in it or any of ’ ‘ “ ” – — ―, which it then
+ * refuses where nobody can approve it, as here. A woken Codex that wrote JSON with `--%`, as it
+ * had been told to in PowerShell, was refused, and the page said only "Your agent could not do
+ * that" (the Windows rehearsal, Codex 0.167.2). JSON in single quotes is read whole however
+ * PowerShell hands it on (`windows-args.ts`), so it is told to write JSON as it would anywhere.
+ */
+export const WOKEN_POWERSHELL =
+  "[It] Codex runs your commands here in PowerShell, and runs an `it` command in this turn only where it can read it as plain words: write JSON in single quotes as you would anywhere, with an apostrophe as two (`''`), never after `--%`, and with ’ ‘ “ ” – — ― written as `\\u2019`, `\\u2018`, `\\u201c`, `\\u201d`, `\\u2013`, `\\u2014` and `\\u2015`, since any of those in a command has Codex refuse it."
+
+/** What a conversation of an app is told when It reopens it on a system: `WOKEN`, and for Codex on Windows `WOKEN_POWERSHELL` after it. */
+export const wokenNote = (harness: string, platform: NodeJS.Platform = process.platform): string =>
+  harness === 'codex' && platform === 'win32' ? `${WOKEN}\n\n${WOKEN_POWERSHELL}` : WOKEN
+
+/**
  * What a conversation is told when it is reopened for something a second time, because It
  * itself was stopped or restarted in the middle of its turn. The turn was ended with It, and
  * what it was reopened for is given again: without a word of that, an agent does again what
@@ -250,6 +267,17 @@ export function lastWords(text: string): string | null {
   if (!last) return null
   const plain = last.replace(/[A-Za-z0-9_+/=-]{24,}/g, '…')
   return plain.length > 160 ? `${plain.slice(0, 159)}…` : plain
+}
+
+/**
+ * Whether the last words an agent app printed as it ended badly (`lastWords`) show plainly that
+ * it is not signed in on this machine: Codex's refusal by its service with 401 Unauthorized, and
+ * Claude Code's "Not logged in" or its word to run /login. Nothing else is taken for it.
+ */
+export function signedOut(harness: string, words: string): boolean {
+  if (harness === 'codex') return /\b401\b/.test(words) && /\bunauthori[sz]ed\b/i.test(words)
+  if (harness === 'claude-code') return /\bnot logged in\b|(?:^|\s)\/login\b/i.test(words)
+  return false
 }
 
 /**

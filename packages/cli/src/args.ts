@@ -42,6 +42,7 @@ export const VALUED = new Set([
   'timeout',
   'if-revision',
   'only',
+  'without',
   'name',
   'url',
   'code',
@@ -78,7 +79,7 @@ export const OPTIONS: Record<string, readonly string[]> = {
   action: [],
   save: ['number'],
   ack: ['failed'],
-  setup: ['all', 'only', 'none', 'name', 'no-service', 'yes', 'refresh'],
+  setup: ['all', 'only', 'without', 'none', 'name', 'no-service', 'yes', 'refresh'],
   login: ['url', 'code', 'name', 'no-setup', 'all', 'only', 'none', 'no-service', 'yes'],
   logout: ['force'],
   uninstall: ['yes'],
@@ -130,6 +131,14 @@ export function optionsFor(cmd: string | undefined, a: Args): void {
     if (unused) throw new Problem(`--${unused} cannot be used with --no-setup.`, 'invalid', 'Leave out --no-setup to connect agent apps after joining.')
   }
 }
+
+/**
+ * The words a command was given, without Windows PowerShell's stop-parsing word `--%` where it
+ * stands first. The tour has an agent write `it --% tour answer …` in PowerShell, which takes the
+ * word for itself; cmd and Git Bash hand it on. It is dropped there alone, once, so that the same
+ * line works from any shell, and anywhere else it is refused as any switch It does not know is.
+ */
+export const commandLine = (argv: string[]): string[] => (argv[0] === '--%' ? argv.slice(1) : argv)
 
 /** Finds the output preference even when another option prevents the rest from parsing. */
 export function outputArgs(argv: string[]): Args {

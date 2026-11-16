@@ -42,7 +42,7 @@ import {
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
-import { type Args, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
+import { type Args, commandLine, fileText, json, loose, need, nested, OPTIONS, optionsFor, outputArgs, parse, setValue, text } from './args'
 import {
   type Arrives,
   afterSetupForAgent,
@@ -82,6 +82,7 @@ import {
   call,
   changeWhole,
   closedToNetwork,
+  codexMayAsk,
   direct,
   doorRefusal,
   elsewhere,
@@ -168,7 +169,7 @@ import {
 import { printEnv } from './shell-env'
 import { zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
-import { answerAction, dropPicture, dropPictures, keepPicture, picturesFile, START_SLUG } from './tour-answer'
+import { answerAction, dropPicture, dropPictures, keepPicture, pictureLeft, picturesFile, START_SLUG } from './tour-answer'
 import { inUnloadedOpenCode } from './unclaimed'
 import { finishInstallationRemoval, installationFile, removeInstallationFiles, stepOutOf, withInstallationLock } from './uninstall-files'
 import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from './upgrade'
@@ -176,6 +177,7 @@ import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
 import { listActions, watchActions } from './watch-actions'
+import { recoveredArgs } from './windows-args'
 
 // Everything is written through `written`, which follows each write until it has left the
 // process, and nothing here ends the process before all of it has: see `end` and `left`.
@@ -298,7 +300,7 @@ const HELD_SAID =
   'Some conversations are not reopened for now, since a turn of theirs from before may still be running here and could not be checked on or ended. `it runs` says which, and what lets them be reopened: once you have looked that nothing of them is running, `it runs clear` does.'
 /** What a person is told of the background service, and of whether what is done on a page is being handed to the conversations on this machine, which is the connector's doing. */
 function serviceSaid(
-  background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup'] },
+  background: { registered: boolean; state: string; startup?: service.ServiceStatus['startup']; note?: string },
   connector: Record<string, unknown>,
   running: boolean,
 ): string[] {
@@ -315,6 +317,8 @@ function serviceSaid(
       : service.reachable()
         ? 'It is not registered to start by itself. `it setup` registers it, and `it serve` runs it in a terminal until then.'
         : 'Nothing starts It by itself on this machine: no systemd for your account can be reached from here. `it serve` runs it, in a terminal or under a supervisor of your own.',
+    // Something the person should know about how it runs, as inside WSL, where Windows stops it with its last window
+    ...(background.registered && background.note ? [background.note] : []),
     // A machine that joined an It of a version it does not fit hands nothing over, and says which of the two to update
     ...(typeof connector.unfit === 'string' ? [`${connector.unfit} Nothing done on a page is handed to an agent on this machine until then.`] : []),
     ...(connector.unchecked === true
@@ -514,7 +518,7 @@ function notTaken(
 ): Problem {
   const which = whichDisplay(target)
   const nothing = what === 'sent' ? 'Nothing was sent.' : 'It was shown nowhere.'
-  // The link as \`it create\` gives it, with why it is not at the place chosen for links where it is not
+  // The link as `it create` gives it, with why it is not at the place chosen for links where it is not
   const link = address.url ? ` Or give the user its link: ${address.url}${address.urlNote ? ` ${address.urlNote}` : ''}` : ''
   const instead = `Leave out --on and --on-id to ${what === 'sent' ? 'send it to' : 'show it on'} the display in use.${link}`
   if (code === 'locked')
@@ -732,7 +736,7 @@ const WORDS: Record<string, [most: number, usage: string]> = {
   uninstall: [0, 'uninstall [--yes]'],
   whoami: [0, 'whoami'],
   status: [0, 'status'],
-  setup: [0, 'setup [--all | --only a,b | --none] [--name <name>] [--no-service]'],
+  setup: [0, 'setup [--all | --only a,b | --without a,b | --none] [--name <name>] [--no-service]'],
   site: [0, 'site [--no-open]'],
   network: [1, 'network [on | off | tailscale | internet]'],
   https: [1, 'https [on | off]'],
@@ -1202,13 +1206,15 @@ function pictureFolderFor(c: { session: { harness: string; id: string } | null }
  * \u0027, which JSON reads as one. It used to be a here-document given as `"$(cat <<'EOF' …)"`,
  * which no apostrophe could end either, but a command so wrapped is not a plain `it …` to Codex,
  * whose rule lets only that out of its sandbox: every answer then asked the person (seen in the
- * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 takes the quotes out of an
- * argument it hands a program, and sends what it pipes in ASCII, so that × arrived as "?" on the
- * tour's whiteboard (the Windows rehearsal): there `--%` hands the rest of the line over as it is
- * written, in a command line that holds every letter.
+ * rehearsals, with Codex in "Ask for approval"). Windows PowerShell 5.1 hands the JSON on without
+ * its quotes kept, which It reads back whole from its command line (`windows-args.ts`), and sends
+ * what it pipes in ASCII, so that × arrived as "?" on the tour's whiteboard (the Windows
+ * rehearsal). In PowerShell the JSON is in the same single quotes, where an apostrophe is two,
+ * and with none of `--%`, ’, “, ” or a long dash, which Codex reads as a command it cannot match to
+ * its rule for `it`, and refuses where nobody can approve it, as in a conversation It reopened.
  */
 export const PLAIN_ANSWER = (id: string) =>
-  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In Windows PowerShell, put \`--%\` after \`it\` and write the JSON in double quotes with its own written as \`\\"\`: \`it --% tour answer ${id} "{\\"say\\":\\"That’s it.\\"}"\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
+  `Give the JSON as one argument in single quotes, on one line, with every apostrophe in its words written as ’ or as \\u0027: \`it tour answer ${id} '{"say":"That’s it."}'\`. In PowerShell, write it the same way, with each apostrophe as two, ’ ‘ “ ” – — ― as \`\\u2019\`, \`\\u2018\`, \`\\u201c\`, \`\\u201d\`, \`\\u2013\`, \`\\u2014\` and \`\\u2015\`, and no \`--%\`: \`it tour answer ${id} '{"say":"That''s it."}'\`. Do not pipe it in there, which turns every letter outside ASCII into a question mark.`
 async function tourAnswer(a: Args, counted: (code?: string) => void) {
   const USAGE = "tour answer <action-id> [- | '<json>' | --file <path>] [--wait | --no-wait] [--timeout <seconds>]"
   if (a._[0] === 'answer') {
@@ -1246,14 +1252,7 @@ async function tourAnswer(a: Args, counted: (code?: string) => void) {
     const dropped = await dropPicture(done.request)
     const answered = {
       answered: done.part ?? null,
-      ...(dropped.left.length || dropped.unread
-        ? {
-            pictureLeft: dropped.left,
-            pictureHint: dropped.unread
-              ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so the picture for this action, if there is one, was left where it is. Say nothing of it during the tour.`
-              : 'This file has changed since It wrote it, so It left it where it is. Say nothing of it during the tour.',
-          }
-        : {}),
+      ...pictureLeft(dropped),
     }
     // Told to end its turn only where It knows that the next thing arrives by itself: anywhere else the command waits for it
     const byItself = a.flags.wait === true ? false : (await arrivalHere(START_SLUG, true))?.byItself === true
@@ -1324,6 +1323,18 @@ async function tour(a: Args, counted: (code?: string) => void) {
             picturesHint: pictures.unread
               ? `It's record of the pictures the tour wrote (${picturesFile()}) could not be read, so no picture was removed. These files are named as the tour names its pictures, and are left where they are. Ask the person before deleting any of them.`
               : 'These files are named as the tour names its pictures, and It did not write them as they are now, so they are left where they are. Ask the person before deleting any of them.',
+          }
+        : {}),
+      ...(pictures.stuck
+        ? {
+            picturesStuck: pictures.stuck,
+            picturesStuckHint:
+              'These pictures It wrote could not be removed, as on Windows while another program has the file open. They are still noted, and `it tour clear` run again removes them once nothing has them open.',
+          }
+        : {}),
+      ...(pictures.unchanged
+        ? {
+            picturesUnchanged: `It could not change its record of the pictures the tour wrote (${picturesFile()}) just now, so some of them may be left. Run \`it tour clear\` again in a moment to remove them.`,
           }
         : {}),
     })
@@ -1581,11 +1592,14 @@ async function pathLine(): Promise<string | undefined> {
  * after the same ports as the person's own. The same where the backend is named by IT_URL and
  * this machine is not one of its machines.
  *
- * Which apps to connect is the person's to say: with `--all`, with `--only`, or by answering
- * for each at a terminal, which `--yes` answers for them. Where there is no terminal to ask
- * at and none of those was given, nothing is connected that was not already: what the person
- * chose before stays chosen, what is connected stays connected, and the command that connects
- * the rest is said.
+ * Which apps to connect is the person's to say: with `--all`, with `--only` and `--without`,
+ * or by answering for each at a terminal, which `--yes` answers for them. `--only` connects the
+ * apps it names and `--without` disconnects them, and both leave every other app as it stands:
+ * one connected or chosen before stays so, and one that was not stays not. A second agent app
+ * that follows the install guide names itself alone, and would otherwise take It out of the
+ * first. Where there is no terminal to ask at and none of those was given, nothing is connected
+ * that was not already: what the person chose before stays chosen, what is connected stays
+ * connected, and the command that connects the rest is said.
  *
  * `joined` says that this machine joined an It a moment ago, with `it login`, which goes on
  * here. That is a first run on this machine whatever is to be connected: with `--none` too the
@@ -2035,12 +2049,11 @@ async function refreshing(a: Args) {
 
 async function setup(a: Args, joined = false) {
   if (a.flags.refresh) {
-    if (a.flags.all || a.flags.none || a.flags.yes || text(a, 'only') !== undefined || text(a, 'name') !== undefined)
+    if (a.flags.all || a.flags.none || a.flags.yes || text(a, 'only') !== undefined || text(a, 'without') !== undefined || text(a, 'name') !== undefined)
       throw new Problem('`it setup --refresh` brings the add-ons up to date and does nothing else, so it takes no other switch.', 'invalid')
     return refreshing(a)
   }
-  const only = text(a, 'only')
-  if (only !== undefined && !a.flags.none) appsNamed(only)
+  appsAsked(a)
   // Take the folder's setup lock first where one is needed, so concurrent setups keep their
   // usual waiting message and allowance. Every path checks the program before its writes.
   const current = <T>(run: () => Promise<T>) =>
@@ -2243,7 +2256,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
   const kept: string[] = []
   const quiet = (line: string) => void kept.push(line)
   // The name is said once: by the install script where that ran, by the question of where It is where that was asked, and else here
-  if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && !a.flags.yes)) flow.banner('setup')
+  if (!process.env.IT_INSTALL_FLOW && !(begunAlready && !a.flags.all && text(a, 'only') === undefined && text(a, 'without') === undefined && !a.flags.yes))
+    flow.banner('setup')
   const found = await setupApps(a, true)
   await noneAbandoned()
   const inBackground = !a.flags['no-service']
@@ -2289,8 +2303,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // ---------- the agent apps
     const usable = found.filter((h) => supported(h.id) && h.addon !== 'too_old')
     let wanted: Harness[]
-    const only = text(a, 'only')
-    if (only !== undefined) wanted = appsNamed(only)
+    const choice = await namedChoice(a, found, quiet)
+    if (choice) wanted = choice.wanted
     else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     // Nothing is asked where there is nothing to choose: no app was found, or none that It can connect
     else if (!usable.length) wanted = []
@@ -2313,8 +2327,9 @@ async function settingUpLed(a: Args, begunAlready = false) {
     // Asked only where an app is chosen: with none, reopening comes on for none
     const wokenBefore = wanted.length ? await wokenNow() : null
     let woken = await chosen(wanted).catch(() => null)
-    // A person is leading this setup, so an app they chose that has It's add-on turned off is turned on again: that is them asking
-    const outcomes = await reconcile(wanted, quiet, false, wanted)
+    // A person is leading this setup, so an app they chose that has It's add-on turned off is turned on again: that is them asking.
+    // With `--only` or `--without`, only the apps named are asked for, and one they leave as it is stays turned off
+    const outcomes = await reconcile(wanted, quiet, false, choice?.named ?? wanted)
     woken ??= await chosen(wanted)
     const after = await detectAll()
     await call('mutation', api.machines.inventory, { harnesses: after })
@@ -2329,8 +2344,10 @@ async function settingUpLed(a: Args, begunAlready = false) {
       const why = h.detail ?? said
       left.push(`${KNOWN[h.id].label} could not be connected${why ? `: ${why.replace(/\.$/, '')}.` : '.'}`)
     }
-    // An app that `--only` took out, said as what it means for the person
-    const gone = only !== undefined ? disconnectedSaid(found, after, wanted) : null
+    // What `--only` and `--without` left as it was, and an app that `--without` took out, said as what it means for the person
+    const stayed = choice && kept.find((line) => line.includes('leave as it is every app they do not name'))
+    if (stayed) left.push(stayed)
+    const gone = choice ? disconnectedSaid(found, after, wanted) : null
     if (gone) left.push(gone)
     // What decides whether Codex's first page appears at all is said by itself, and first
     const shut = codexShut(after)
@@ -2496,7 +2513,8 @@ async function settingUpLed(a: Args, begunAlready = false) {
  */
 async function joinedInstead(a: Args): Promise<boolean> {
   // Asked only where nothing is here yet, and of a person who has not already said what they want set up
-  if (existsSync(settingsFile()) || enrolledHere() || a.flags.all || text(a, 'only') !== undefined || a.flags.yes) return false
+  if (existsSync(settingsFile()) || enrolledHere() || a.flags.all || text(a, 'only') !== undefined || text(a, 'without') !== undefined || a.flags.yes)
+    return false
   if (!process.env.IT_INSTALL_FLOW) flow.banner('setup')
   const where = await flow.pick<'here' | 'join'>('Where is your It?', [
     { value: 'here', label: 'On this computer', hint: 'set it up here' },
@@ -2547,39 +2565,77 @@ async function joinedInstead(a: Args): Promise<boolean> {
 const listed = (names: readonly string[]): string => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : (names[0] ?? ''))
 
 /**
- * The apps that an agent's `--only` leaves connected beside the ones it names: each that is
- * connected here, its hooks waiting on the person or not, and each that the person chose and
- * It has on record, as a setup with nobody to ask keeps them, whether or not it was found just
- * now: an app whose command failed this once, or is not on the agent's PATH, stays chosen, and
- * putting its add-on right is left to the connecting, as it is everywhere else. Where It cannot
- * be asked what was chosen, what is connected here is kept.
+ * The apps that `--only` and `--without` leave as they are, beside the ones they name: each that
+ * has It's add-on here, its hooks waiting on the person, turned off in the app or neither, and
+ * each that the person chose and It has on record, as a setup with nobody to ask keeps them,
+ * whether or not it was found just now: an app whose command failed this once, or is not on the
+ * PATH this runs with, stays chosen, and putting its add-on right, or bringing it up to date, is
+ * left to the connecting, as it is everywhere else: the background service would put it right by
+ * itself. It is asked first, so that nothing is changed where it cannot be: an app that was chosen
+ * and is too old or could not be looked at just now would otherwise be taken out.
  */
 async function keptConnected(found: readonly HarnessStatus[], named: readonly Harness[]): Promise<Harness[]> {
-  const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me).catch(() => null))?.wanted ?? []
-  const connected = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval').map((h) => h.id)
-  return [...new Set([...connected, ...chosen])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness))
+  const chosen = (await call<{ wanted?: string[] } | null>('query', api.machines.me))?.wanted ?? []
+  const here = found.filter((h) => h.addon === 'connected' || h.addon === 'needs_approval' || h.addon === 'disabled').map((h) => h.id)
+  return [...new Set([...here, ...chosen])].filter((id): id is Harness => (HARNESSES as readonly string[]).includes(id) && !named.includes(id as Harness))
 }
 
 /**
- * What a person is told of the apps that were connected before a setup with `--only` and are
- * seen now not to be, since it did not name them: that what they do on a page one of those apps'
- * conversations made no longer reaches it, and the command that connects them all again. An app
- * that could not be looked at afterwards is not said to be disconnected, since its add-on may
- * still be in it: what went wrong with it was said as it happened. Null where none was.
+ * What `--only` and `--without` choose: the apps `--only` names, every app that is connected or
+ * chosen already, and none that `--without` names. Undefined where neither was given. What it
+ * left as it was is said in a sentence, with how to disconnect it.
+ */
+async function namedChoice(
+  a: Args,
+  found: readonly HarnessStatus[],
+  say: (line: string) => void,
+): Promise<{ wanted: Harness[]; named: Harness[] } | undefined> {
+  const asked = appsAsked(a)
+  if (!asked) return undefined
+  const { named, without } = asked
+  const before = await keptConnected(found, named)
+  const kept = before.filter((id) => !without.includes(id))
+  // An app that `--without` names and that was neither connected nor chosen is said to be left so, and nothing is done to it
+  const absent = without.filter((id) => !before.includes(id))
+  if (absent.length)
+    say(
+      `${listed(absent.map((id) => KNOWN[id].label))} ${absent.length === 1 ? 'was' : 'were'} not connected, so \`--without\` left ${absent.length === 1 ? 'it as it was' : 'them as they were'}.`,
+    )
+  if (kept.length) {
+    // Said as connected only where it is: one turned off in the app, or chosen and not found just now, is said to stay as it was
+    const on = kept.filter((id) => found.some((h) => h.id === id && (h.addon === 'connected' || h.addon === 'needs_approval')))
+    const rest = kept.filter((id) => !on.includes(id))
+    const stays = (ids: readonly Harness[]) => `${listed(ids.map((id) => KNOWN[id].label))} ${ids.length === 1 ? 'stays' : 'stay'}`
+    const what = [
+      on.length ? `${stays(on)} connected` : undefined,
+      rest.length ? `${stays(rest)} as ${rest.length === 1 ? 'it was' : 'they were'}` : undefined,
+    ].filter(Boolean)
+    say(
+      `${what.join(', and ')}, since \`--only\` and \`--without\` leave as it is every app they do not name. \`${itForAgent()} setup --without ${kept.join(',')}\` disconnects ${kept.length === 1 ? 'it' : 'them'}.`,
+    )
+  }
+  return { wanted: [...named, ...kept], named }
+}
+
+/**
+ * What a person is told of the apps that were connected before a setup with `--without` and are
+ * seen now not to be: that what they do on a page one of those apps' conversations made no longer
+ * reaches it, and the command that connects them again. An app that could not be looked at
+ * afterwards is not said to be disconnected, since its add-on may still be in it: what went wrong
+ * with it was said as it happened. Null where none was.
  */
 function disconnectedSaid(found: readonly HarnessStatus[], after: readonly HarnessStatus[], wanted: readonly Harness[]): string | null {
-  const on = (h: HarnessStatus) => h.addon === 'connected' || h.addon === 'needs_approval'
+  const on = (h: HarnessStatus) => h.addon === 'connected' || h.addon === 'needs_approval' || h.addon === 'disabled'
   const gone = found.filter((h) => on(h) && !wanted.includes(h.id) && after.some((now) => now.id === h.id && now.addon === 'not_connected')).map((h) => h.id)
   if (!gone.length) return null
   const one = gone.length === 1
-  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected, since \`--only\` did not name ${one ? 'it' : 'them'}: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`${itForAgent()} setup --only ${[...wanted, ...gone].join(',')}\` connects ${one ? 'it' : 'them'} again.`
+  return `${listed(gone.map((id) => KNOWN[id].label))} ${one ? 'is' : 'are'} no longer connected: what you do on a page that one of ${one ? 'its' : 'their'} conversations made no longer reaches that conversation. \`${itForAgent()} setup --only ${gone.join(',')}\` connects ${one ? 'it' : 'them'} again.`
 }
 
 /**
  * The agent apps that `--only` names. A name It does not know is refused, and so is an app
  * whose add-on is held back and that nobody has asked for: in words, with nothing changed.
- * Carried on with, such a setup would connect nothing and take out every app that was not
- * named, the one asked for among them.
+ * Carried on with, such a setup would connect nothing of what it was asked to connect.
  */
 function appsNamed(only: string): Harness[] {
   const wanted = only
@@ -2593,13 +2649,42 @@ function appsNamed(only: string): Harness[] {
   return wanted
 }
 
+/**
+ * The agent apps that `--only` and `--without` name, looked at before anything is begun. An app
+ * named by `--without` may be one whose add-on is held back, since one installed before it was
+ * held back can still be taken out, but it must be one It knows. Naming an app in both, or
+ * giving `--without` with `--all` or `--none`, which choose every app or none, is refused.
+ * Undefined where neither was given, or where `--none` is, which chooses for itself.
+ */
+function appsAsked(a: Args): { named: Harness[]; without: Harness[] } | undefined {
+  const only = text(a, 'only')
+  const leave = text(a, 'without')
+  if (leave !== undefined && (a.flags.all || a.flags.none))
+    throw new Problem(
+      `--without cannot be given with --${a.flags.all ? 'all' : 'none'}.`,
+      'invalid',
+      '`it setup --without <app>` disconnects that app and leaves the others as they are.',
+    )
+  if (a.flags.none || (only === undefined && leave === undefined)) return undefined
+  const named = only === undefined ? [] : appsNamed(only)
+  const without = (leave ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean) as Harness[]
+  if (leave !== undefined && !without.length) throw new Problem('--without names the agent apps to disconnect.', 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+  const bad = without.filter((id) => !(HARNESSES as readonly string[]).includes(id))
+  if (bad.length) throw new Problem(`Not an agent app It knows: ${bad.join(', ')}`, 'invalid', `It knows: ${HARNESSES.join(', ')}`)
+  const both = named.filter((id) => without.includes(id))
+  if (both.length) throw new Problem(`${both.join(', ')} cannot be named by both --only and --without.`, 'invalid')
+  return { named, without }
+}
+
 /** The whole of a setup, once it is known that something is to be set up here: see `setup`. */
 async function settingUp(a: Args, joined: boolean) {
   // What `--only` names is looked at before anything is begun. A first run fetches the backend
   // program, makes this machine's settings and starts It, and one that was then refused for
   // what it was asked to connect would have done all of that and changed what it said it had not.
-  const only = text(a, 'only')
-  if (only !== undefined && !a.flags.none) appsNamed(only)
+  appsAsked(a)
   // Said already by the question of where It is, where that was asked
   const asked = !joined && led(a) && !existsSync(settingsFile()) && !enrolledHere()
   if (asked && (await joinedInstead(a))) return settingUp(a, true)
@@ -2635,26 +2720,13 @@ async function settingUp(a: Args, joined: boolean) {
       )
 
     let wanted: Harness[]
+    /** What `--only` and `--without` chose, where one was given and `--none` was not. */
+    const choice = await namedChoice(a, found, say)
     /** What is said of the apps that were found and left unconnected because nobody was there to be asked. */
     let unasked: string | undefined
     if (a.flags.none) wanted = []
-    else if (only !== undefined) {
-      wanted = appsNamed(only)
-      // Run by an agent, `--only` names the app the agent runs in, as the install guide has it,
-      // and leaves the apps that are connected already as they are: an agent installing It into
-      // a second app would otherwise take It out of the first, and the person would learn of it
-      // only from a page that no longer answers. Changing which apps are connected otherwise is
-      // the person's to do, in a terminal.
-      if (sessionAsked()) {
-        const kept = await keptConnected(found, wanted)
-        if (kept.length) {
-          wanted = [...wanted, ...kept]
-          say(
-            `${listed(kept.map((id) => KNOWN[id].label))} ${kept.length === 1 ? 'stays' : 'stay'} connected as well: run from an agent’s conversation, \`--only\` connects what it names and leaves connected what is connected already. \`${itForAgent()} setup\`, run in a terminal, changes which apps are connected.`,
-          )
-        }
-      }
-    } else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
+    else if (choice) wanted = choice.wanted
+    else if (a.flags.all || a.flags.yes) wanted = usable.map((h) => h.id)
     else if (!process.stdin.isTTY) {
       // Nobody is here to be asked. What the person chose before stays chosen, and what is
       // connected stays connected: It is asked first, so that nothing is changed where it cannot be
@@ -2688,7 +2760,8 @@ async function settingUp(a: Args, joined: boolean) {
     // person runs this at a terminal: never from an agent's conversation, nor where nobody is
     // there to have asked, as when an upgrade runs setup by itself
     const byPerson = sessionAsked() === undefined && process.stdin.isTTY === true
-    const outcomes = await reconcile(wanted, say, false, byPerson ? wanted : [])
+    // and only the apps it names: one that `--only` or `--without` leaves as it is stays turned off
+    const outcomes = await reconcile(wanted, say, false, byPerson ? (choice?.named ?? wanted) : [])
     woken ??= await chosen(wanted)
     const after = await detectAll()
     // The site is told what was found, and no more than that. Whether this machine can hear a
@@ -2754,8 +2827,8 @@ async function settingUp(a: Args, joined: boolean) {
       if (h.addon === 'needs_approval') note(`${KNOWN[h.id].label}: ${h.detail}`, h.id)
       else if (h.addon === 'connected' && wanted.includes(h.id) && AFTER[h.id] && !before.has(h.id)) note(`${KNOWN[h.id].label}: ${AFTER[h.id]}`, h.id)
     }
-    // An app that `--only` took out, said as what it means for the person, and not only as the progress line that took it out
-    const gone = only !== undefined ? disconnectedSaid(found, after, wanted) : null
+    // An app that `--without` took out, said as what it means for the person, and not only as the progress line that took it out
+    const gone = choice ? disconnectedSaid(found, after, wanted) : null
     if (gone) note(gone)
     // The things left for the person to do, unless everything was just taken out again from
     // an It that was already here
@@ -3568,10 +3641,12 @@ What the person did
   it ack <action-id> [--failed]
 
 This machine
-  it setup [--all | --only a,b | --none] [--name <name>] [--no-service]
+  it setup [--all | --only a,b | --without a,b | --none] [--name <name>] [--no-service]
                                  Set It up on this machine, keep it running in the
                                  background, and connect your agent apps. --yes connects
-                                 every app it would otherwise ask about.
+                                 every app it would otherwise ask about. --only connects
+                                 the apps named, and --without disconnects them; both
+                                 leave the other apps as they are.
   it site [--no-open]            Open It's site in a browser on this machine, and pair that browser.
                                  --no-open only prints the address.
   it network [on | off | tailscale | internet]
@@ -3636,10 +3711,13 @@ few sentences. With --json, wherever a program reads what they print, and for an
 they print JSON.
 `
 
-async function main(argv: string[]): Promise<void> {
+async function main(given: string[]): Promise<void> {
+  // On Windows, JSON that Windows PowerShell 5.1 spoilt on its way in is read whole from the command line, before anything is done with it
+  const argv = await recoveredArgs(given)
   const [cmd, ...rest] = argv
-  // What is said where It is not running names the background service where this folder registered one
-  askRegisteredWith(() => service.installedHereOr('unknown'))
+  // What is said where It is not running names the background service where this folder registered one,
+  // and `it serve` where nothing on the machine could keep It running
+  askRegisteredWith(() => service.installedHereOr('unknown'), service.reachable)
   // Run as a script, it is held to the Node it needs before anything else is done. The standalone program has its own runtime.
   if (!('Bun' in globalThis)) {
     const old = nodeTooOld(process.versions.node)
@@ -4272,12 +4350,14 @@ async function main(argv: string[]): Promise<void> {
     }
     case 'action':
     case 'save': {
+      // Not said to another agent app known to have been started from inside a Codex conversation, which carries Codex's mark too
+      const askedInCodex = () => Boolean(process.env.CODEX_THREAD_ID) && codexMayAsk(sessionAsked())
       // One action in full, by the id an agent was given: for data too long to have been shown, or to check a repeat
       const id = need(a._[0], 'which action', 'action <action-id>')
       const c = await call<Listed & { delivery: string; route: string | null; outcome: string | null }>('query', api.delivery.get, { id }).catch((err) => {
         // Codex asks the person before every `it save`, and runs what they approve inside its
         // sandbox unless the agent asked for it outside: told so, the agent asks that way from then on
-        if (cmd === 'save' && process.env.CODEX_THREAD_ID && err instanceof Problem && err.code === 'blocked')
+        if (cmd === 'save' && askedInCodex() && err instanceof Problem && err.code === 'blocked')
           throw new Problem(err.message, err.code, `${CODEX_SAVE_ESCALATE} ${err.hint ?? ''}`.trim())
         throw err
       })
@@ -4298,7 +4378,7 @@ async function main(argv: string[]): Promise<void> {
       const all = { ...printed(c), delivery: c.delivery, route: c.route, outcome: c.outcome, text: describeClick(click, Number.MAX_SAFE_INTEGER) }
       // In Codex, how to save what it carried with one approval, said where there is something to save
       const carries = Boolean(c.files?.length) || firstFile(click.payload) !== undefined
-      if (cmd === 'action') return out(process.env.CODEX_THREAD_ID && carries ? { ...all, saveInCodex: CODEX_SAVE_ESCALATE } : all)
+      if (cmd === 'action') return out(carries && askedInCodex() ? { ...all, saveInCodex: CODEX_SAVE_ESCALATE } : all)
       const to = a._[1]!
       const number = text(a, 'number') === undefined ? 1 : Number(text(a, 'number'))
       if (c.files?.length) return out({ ...all, saved: await saveAttached(id, number, to) })
@@ -4353,6 +4433,7 @@ async function main(argv: string[]): Promise<void> {
 // a pipe, what was written is still on its way for a moment after it was written.
 const whileItRuns = setInterval(() => {}, 1000)
 const began = Date.now()
+const words = commandLine(process.argv.slice(2))
 /**
  * Counts that a command was run: which of It's commands, who ran it (a person at a terminal, an
  * agent app in a conversation, or a script), how it ended and how long it took, in bands. Never
@@ -4361,7 +4442,7 @@ const began = Date.now()
  */
 function counted(code?: string): void {
   try {
-    const cmd = process.argv[2]
+    const cmd = words[0]
     if (cmd === 'hook' || cmd === 'shell-env' || cmd === 'shell-profile' || cmd === 'serve' || takenOff) return
     const harness = sessionAsked()?.session.harness
     const by = harness
@@ -4374,13 +4455,13 @@ function counted(code?: string): void {
     usage.record('command.run', { command: usage.commandOf(cmd), by, result: usage.resultOf(code), took: usage.timeBand(Date.now() - began) })
   } catch {}
 }
-main(process.argv.slice(2)).then(
+main(words).then(
   () => {
     clearInterval(whileItRuns)
     // A command that did a part of what it was asked, said which part it did not, and set how it
     // ends has not ended well: it is counted by how it ends, and not by its having come back
     counted(process.exitCode ? (process.exitCode === 2 ? 'invalid' : 'error') : undefined)
-    if (!['wait', 'serve'].includes(process.argv[2] ?? '')) process.exitCode ??= 0
+    if (!['wait', 'serve'].includes(words[0] ?? '')) process.exitCode ??= 0
     return left()
   },
   (err) => {
@@ -4388,7 +4469,7 @@ main(process.argv.slice(2)).then(
     // A write into It's folder that the system refused is a sandbox's doing, and is said as that, never in the system's own words
     const p = err instanceof Problem ? err : writeRefused(err) ? readOnlyHere() : new Problem(String((err as Error)?.message ?? err))
     counted(p.code)
-    failure(p, outputArgs(process.argv.slice(3)))
+    failure(p, outputArgs(words.slice(1)))
     return end(p.code === 'invalid' ? 2 : 1)
   },
 )

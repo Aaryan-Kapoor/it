@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
-import { added, shellEnv, shellFlags } from './src/shell-env'
+import { added, loginShell, shellEnv, shellFlags } from './src/shell-env'
 
 const made: string[] = []
 afterEach(() => {
@@ -50,6 +50,41 @@ describe.skipIf(process.platform === 'win32' || !bash)('what bash would give a p
     const began = Date.now()
     expect(await shellEnv({ shell: bash!, self, env, timeoutMs: 400 })).toBeNull()
     expect(Date.now() - began).toBeLessThan(5000)
+  })
+})
+
+describe.skipIf(process.platform === 'win32' || !bash)('the shell that is asked', () => {
+  test('is the account’s login shell as the system has it now, before the SHELL the service was started with', async () => {
+    // The person moved from the old shell to bash with chsh, and their settings are in bash's files.
+    // The service's SHELL still names the old one, which here answers nothing
+    const { home, self, env } = homeWith({ '.profile': `${PROFILE}export MODEL_KEY=from-the-new-shell\n` })
+    const old = path.join(home, 'old-shell')
+    writeFileSync(old, '#!/bin/sh\nexit 0\n')
+    chmodSync(old, 0o755)
+    const found = await shellEnv({ self, env: { ...env, SHELL: old }, login: () => bash! })
+    expect(found).toMatchObject({ MODEL_KEY: 'from-the-new-shell' })
+  })
+
+  test('is the SHELL the service was started with where the system names no login shell', async () => {
+    const { self, env } = homeWith({ '.profile': `${PROFILE}export MODEL_KEY=from-shell\n` })
+    expect(await shellEnv({ self, env: { ...env, SHELL: bash! }, login: () => undefined })).toMatchObject({ MODEL_KEY: 'from-shell' })
+  })
+})
+
+describe('the login shell the system names', () => {
+  test('is taken where it is one a person can log in with', () => {
+    expect(loginShell(() => ({ shell: '/usr/bin/zsh' }))).toBe('/usr/bin/zsh')
+  })
+  test('is nothing where it refuses every login, is not a full path, is missing, or cannot be read', () => {
+    expect(loginShell(() => ({ shell: '/usr/sbin/nologin' }))).toBeUndefined()
+    expect(loginShell(() => ({ shell: '/bin/false' }))).toBeUndefined()
+    expect(loginShell(() => ({ shell: 'zsh' }))).toBeUndefined()
+    expect(loginShell(() => ({ shell: null }))).toBeUndefined()
+    expect(
+      loginShell(() => {
+        throw new Error('no entry for this user')
+      }),
+    ).toBeUndefined()
   })
 })
 

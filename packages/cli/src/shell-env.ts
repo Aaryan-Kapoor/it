@@ -102,21 +102,35 @@ function ask(shell: string, flags: string[], self: string[], env: NodeJS.Process
 }
 
 /**
+ * The account's login shell as the system has it now, where it names one a person can log in
+ * with. Undefined where it names none, or names a shell that refuses every login.
+ */
+export function loginShell(info: () => { shell: string | null } = () => os.userInfo()): string | undefined {
+  try {
+    const shell = info().shell
+    return shell && path.isAbsolute(shell) && !/^(nologin|false)$/.test(path.basename(shell)) ? shell : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Asks the person's shell for the environment it gives a program. Null where it could not be
  * asked: on Windows, where a service has the person's variables already, with a shell this
  * does not know, or with one that did not answer in time.
+ *
+ * The shell asked is the account's login shell as the system has it now, before the SHELL this
+ * program was given. A service's SHELL is the one the system's manager for the person's
+ * services read when it started, and that manager can run for as long as the computer does: a
+ * person who has since moved to another shell with `chsh`, as oh-my-zsh's installer does for
+ * them, keeps their settings in the new shell's files, and the old shell's files have none of them.
  */
 export async function shellEnv(
-  opts: { shell?: string; self?: string[]; env?: NodeJS.ProcessEnv; timeoutMs?: number; platform?: NodeJS.Platform } = {},
+  opts: { shell?: string; self?: string[]; env?: NodeJS.ProcessEnv; timeoutMs?: number; platform?: NodeJS.Platform; login?: () => string | undefined } = {},
 ): Promise<NodeJS.ProcessEnv | null> {
   if ((opts.platform ?? process.platform) === 'win32') return null
   const env = opts.env ?? process.env
-  let shell = opts.shell ?? env.SHELL
-  if (!shell) {
-    try {
-      shell = os.userInfo().shell ?? undefined
-    } catch {}
-  }
+  const shell = opts.shell ?? (opts.login ?? loginShell)() ?? env.SHELL
   if (!shell || !path.isAbsolute(shell)) return null
   const ways = shellFlags(shell)
   if (!ways) return null
