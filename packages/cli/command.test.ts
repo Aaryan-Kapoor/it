@@ -5402,7 +5402,7 @@ describe.skipIf(process.platform === 'win32')(
 )
 
 describe.skipIf(process.platform === 'win32')('a page shown when no display is paired', () => {
-  const HINT = `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${SITE} in a browser on this machine and pair that browser. Other displays are added from there.`
+  const HINT = `No display is paired yet, so there is nowhere to show it. If you are an agent, run \`it site\` yourself: it opens ${SITE} in a browser on this machine where it can and pairs that browser, and prints the link to give the user. Other displays are added from there.`
   const answers = (displays: string[]) => (asked: Asked) =>
     asked.path === 'publish:begin'
       ? { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: 'http://127.0.0.1:9/upload/', grant: 'a-grant' } }
@@ -6861,10 +6861,9 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
         )
         expect(b.asked.filter((x) => x.path === 'sessions:inviteOwner')).toEqual([{ path: 'sessions:inviteOwner', args: {} }])
         expect(await waitFor(opened)).toBe(url)
-        // What is kept of it is when, and how it went, and nothing of the address
+        // What is kept of it is when, and nothing of the address
         const note = readFileSync(path.join(m.it, 'browser-opened.json'), 'utf8')
-        expect(Object.keys(JSON.parse(note)).sort()).toEqual(['at', 'result'])
-        expect(JSON.parse(note).result).toBe('opened')
+        expect(Object.keys(JSON.parse(note))).toEqual(['at'])
         expect(note).not.toContain('Ab3dEf6hIj9kLm2nOp5q')
       } finally {
         await b.close()
@@ -6921,13 +6920,55 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
         // The address is handed over as one word, and only the first run's
         expect(await waitFor(opened)).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
         // Ten minutes on, a paired browser seen a minute ago is open to It already, and none is opened
-        writeFileSync(path.join(m.it, 'browser-opened.json'), JSON.stringify({ at: Date.now() - 11 * 60_000, result: 'opened' }))
+        writeFileSync(path.join(m.it, 'browser-opened.json'), JSON.stringify({ at: Date.now() - 11 * 60_000 }))
         displays = [{ id: 'd1', name: 'Firefox on Linux', paired: true, lastSeenAt: Date.now() - 60_000 }]
         expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
         // Nor where It could not say which displays there are
         displays = null
         expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
         expect(readFileSync(opened, 'utf8')).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
+      } finally {
+        await b.close()
+      }
+    },
+  )
+
+  test.skipIf(screenless)(
+    'an OpenCode that has not loaded It’s add-on, which marks no command, is known by the process above and opens a tab as any agent does',
+    async () => {
+      const m = machine(true, true)
+      const opened = path.join(m.home, 'opened')
+      const standIn = path.join(m.home, 'stand-in.mjs')
+      writeFileSync(standIn, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(opened)}, process.argv.slice(2).join(' ') + '\\n')\n`)
+      // OpenCode as an install leaves it, a script run by Node from a folder called bin, which runs the command its agent was given and nothing else
+      const launcher = path.join(m.home, 'opencode-ai', 'bin', 'opencode')
+      mkdirSync(path.dirname(launcher), { recursive: true })
+      writeFileSync(
+        launcher,
+        "const { spawnSync } = require('node:child_process')\nconst r = spawnSync(process.execPath, process.argv.slice(2), { stdio: 'inherit' })\nprocess.exit(r.status ?? 1)\n",
+      )
+      const b = await backend(m, inviting(['Ab3dEf6hIj9kLm2nOp5q']))
+      try {
+        const env = {
+          PATH: m.bin,
+          HOME: m.home,
+          IT_HOME: m.it,
+          IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+          ...b.env,
+          DISPLAY: ':0',
+          IT_BROWSER_OPENER: JSON.stringify([process.execPath, standIn]),
+        }
+        const out = await new Promise<string>((resolve, reject) =>
+          execFile(process.execPath, [launcher, program, 'site'], { cwd: m.home, env, timeout: 60_000 }, (err, stdout) =>
+            err ? reject(err) : resolve(String(stdout)),
+          ),
+        )
+        const said = JSON.parse(out)
+        const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
+        expect([said.url, said.opened]).toEqual([url, true])
+        expect(said.tell).toContain('A tab of the browser on this computer has just been opened at this url')
+        expect(said.tell).toContain('run `it site` again for a new one')
+        expect(await waitFor(opened)).toBe(`${url}\n`)
       } finally {
         await b.close()
       }
@@ -7370,7 +7411,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           url: `${b.url}/p/plan`,
           tell: TELL,
           shownOn: [],
-          hint: `The page is published and not shown on any display. No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine and pair that browser. Other displays are added from there. Then run \`it open plan\` to show it.`,
+          hint: `The page is published and not shown on any display. No display is paired yet, so there is nowhere to show it. If you are an agent, run \`it site\` yourself: it opens ${b.url} in a browser on this machine where it can and pairs that browser, and prints the link to give the user. Other displays are added from there. Then run \`it open plan\` to show it.`,
         },
       ])
       expect(b.uploads).toEqual([{ path: '/upload/u/index.html', bytes: 9 }])

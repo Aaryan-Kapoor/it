@@ -592,7 +592,7 @@ async function onDisplay<T extends object>(
  * nor an agent would otherwise learn why nothing appeared anywhere.
  */
 const noDisplay = () =>
-  `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${siteAddress() ?? 'the site'} in a browser on this machine and pair that browser. Other displays are added from there.`
+  `No display is paired yet, so there is nowhere to show it. If you are an agent, run \`it site\` yourself: it opens ${siteAddress() ?? 'the site'} in a browser on this machine where it can and pairs that browser, and prints the link to give the user. Other displays are added from there.`
 /**
  * What It answers when asked to show a page: the displays it is now shown on, and each other one
  * with why it is not shown there. `chosen` says, where no display was named, whether the one
@@ -1110,11 +1110,12 @@ const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me
  * included, until the waiting was over. In a Claude Code or Pi conversation that has not loaded
  * the add-on, where that app's add-on is connected on this machine, the same message carries the
  * words the person is to type to load it. Where the url was opened in a browser here, the agent
- * is told to say so, and to give the url all the same.
+ * is told to say so, to give the url all the same, and that the tab spent the url's one code. An
+ * OpenCode that has not loaded It's add-on marks no command, and is told by the process above.
  */
-async function linkToTell(opened = false): Promise<{ tell?: string }> {
-  if (!sessionAsked()) return {}
-  const give = `Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.${opened ? ' A tab of the browser on this computer has just been opened at this url, so tell them in that message that it has opened, and that the url is for when no tab appeared.' : ''}`
+async function linkToTell(opened: boolean, byAgent: boolean): Promise<{ tell?: string }> {
+  if (!byAgent) return {}
+  const give = `Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.${opened ? ' A tab of the browser on this computer has just been opened at this url, so tell them in that message that it has opened, and that the url is for when no tab appeared. The tab and the url share one code that works once, so if they open the url somewhere else and it is refused, run `it site` again for a new one.' : ''}`
   const me = await call<{ harnesses?: { id: string; addon: string }[] } | null>('query', api.machines.me).catch(() => null)
   const line = await lineHere((harness) => me?.harnesses?.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')) === true)
   return { tell: line ? `${give} In that same message, tell them this, word for word: “${line}”` : give }
@@ -4024,15 +4025,23 @@ async function main(given: string[]): Promise<void> {
       // As the network stands, and not only as the settings ask for it: an address the door could not listen at is no address to give
       const stands = await networkAsItStands(true)
       const elsewhereToo = stands.addresses.map((address) => `${address}/pair#${code}`)
+      // An agent ran this: one whose app marked it, or an OpenCode that has not loaded It's add-on yet, as in the conversation that installs It
+      const asking = sessionAsked()
+      const byAgent = asking !== undefined || inUnloadedOpenCode(asking)
       const opening = await openPairing(url, {
         noOpen: a.flags['no-open'] === true,
         terminal: process.stdout.isTTY === true,
-        agent: sessionAsked() !== undefined,
+        agent: byAgent,
         joined: joinedAnother(),
         displays: () => call('query', api.displays.list),
       })
       if (!forPerson(a))
-        return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}), ...(opening ? { opened: true } : {}), ...(await linkToTell(opening)) })
+        return out({
+          url,
+          ...(elsewhereToo.length ? { urls: elsewhereToo } : {}),
+          ...(opening ? { opened: true } : {}),
+          ...(await linkToTell(opening, byAgent)),
+        })
       if (opening) return tell(['It’s site is opening in your browser, and this link pairs it:', `  ${url}`])
       // No browser was opened here: nobody is at this machine's own screen, or it has none, or
       // it was asked not to. The address to open is then the one another device can reach,
