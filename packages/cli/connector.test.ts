@@ -1322,6 +1322,25 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(noted()).toEqual(['pi:conversation-1'])
   })
 
+  test('the note of It’s Claude Code runs is kept small without a run of It’s ever ceasing to be one, and a conversation that may still run is kept whole', async () => {
+    const { trimClaudeRuns } = await import('./src/connector')
+    const runs = new Map<string, [number, number | null][]>([['a', Array.from({ length: 23 }, (_, n) => [n * 10, n * 10 + 5] as [number, number | null])]])
+    trimClaudeRuns(runs, 20, 2)
+    // Twenty left, the oldest kept as one that covers what they covered
+    expect(runs.get('a')).toHaveLength(20)
+    expect(runs.get('a')![0]).toEqual([0, 35])
+    // Past the most conversations, one that has ended leaves its last end for every conversation; one still running stays
+    runs.set('b', [[300, null]])
+    runs.set('c', [[400, 405]])
+    trimClaudeRuns(runs, 20, 2)
+    expect([...runs.keys()].sort()).toEqual(['*', 'b', 'c'])
+    expect(runs.get('*')).toEqual([[0, 225]])
+    runs.set('d', [[500, null]])
+    trimClaudeRuns(runs, 20, 2)
+    expect(runs.has('b') && runs.has('d')).toBe(true)
+    expect(runs.get('*')).toEqual([[0, 405]])
+  })
+
   test('a Claude Code run the connector before it noted the beginning of, and not the run itself, is taken to have ended once it starts; one that note of runs names is not, until it is made sure of', async () => {
     const ID = '11111111-2222-4333-8444-555555555555'
     const HELD = '66666666-7777-4888-8999-000000000000'

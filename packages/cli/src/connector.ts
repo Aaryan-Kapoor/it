@@ -273,6 +273,29 @@ const runsFile = () => inHome('runs.json')
 const stoppedFile = () => inHome('stopped.json')
 /** When It began and ended each of its last runs of each Claude Code conversation: see `claudeModeOf`. */
 const claudeRunsFile = () => inHome('claude-runs.json')
+/**
+ * Keeps the note of It's runs of each Claude Code conversation small without ever letting a turn
+ * that one of them began count as anyone's choice of mode (see `claudeModeOf`). A conversation
+ * with more than `most` runs has its oldest two kept as one, from the first one's beginning to the
+ * second one's end. Beyond `conversations`, a conversation all of whose runs have ended is let go
+ * of, and leaves its last end behind under `*`, before which every turn begun without a window is
+ * taken for one that may be It's, in every conversation. One that may still be running is kept.
+ */
+export function trimClaudeRuns(runs: Map<string, [number, number | null][]>, most = 20, conversations = 300): void {
+  for (const [id, list] of runs)
+    while (id !== '*' && list.length > most) {
+      const [first, second] = list.splice(0, 2) as [[number, number | null], [number, number | null]]
+      list.unshift([first[0], second[1]])
+    }
+  for (let over = [...runs.keys()].filter((id) => id !== '*').length - conversations; over > 0; over--) {
+    const id = [...runs.keys()].find((k) => k !== '*' && runs.get(k)!.every(([, to]) => to !== null))
+    if (id === undefined) break
+    const ends = runs.get(id)!.map(([, to]) => to as number)
+    runs.delete(id)
+    const before = runs.get('*')?.[0]?.[1] ?? 0
+    runs.set('*', [[0, Math.max(before, ...ends)]])
+  }
+}
 /** A word with the article it takes: "an opencode conversation", "a codex conversation". */
 const a = (word: string) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
 const lockFile = () => inHome('connector.lock')
@@ -341,9 +364,21 @@ function claimedAndLeft(): string[] {
  * fuller report lately (`plain`), it is given the plainest alone, and where it refused those words
  * lately (`unsaid`), it is given the rest.
  */
-export function reports<T extends object, U extends object>(platform: string, full: T, plainest: U, lately: { plain: boolean; unsaid: boolean }): (T | U)[] {
+export function reports<T extends object, U extends object>(
+  platform: string,
+  full: T,
+  plainest: U,
+  lately: { plain: boolean; unsaid: boolean; unmoded?: boolean },
+): (T | U)[] {
   if (lately.plain) return [plainest]
-  return lately.unsaid ? [full, plainest] : [{ ...full, ...(platform === 'win32' ? { reopens: true } : {}), modes: true }, full, plainest]
+  // Each word is let go of by itself: an It that takes the word from Windows and is older than the choice of mode is still told the first
+  const windows = platform === 'win32' && !lately.unsaid
+  return [
+    ...(lately.unmoded ? [] : [{ ...full, ...(windows ? { reopens: true } : {}), modes: true }]),
+    ...(windows ? [{ ...full, reopens: true }] : []),
+    full,
+    plainest,
+  ]
 }
 /** Whether It refused a call for what it said, as an It that is older than this program refuses a field it does not know, and not because the call did not reach it or was not answered. */
 export const refusedFor = (err: unknown): boolean => ['error', 'invalid'].includes((err as { code?: string })?.code ?? '')
@@ -2497,18 +2532,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   const keepClaudeRuns = (): boolean => {
     if (!claudeRuns || over) return true
     try {
-      for (const [id, runs] of claudeRuns)
-        while (id !== '*' && runs.length > 20) {
-          const [first, second] = runs.splice(0, 2) as [[number, number | null], [number, number | null]]
-          runs.unshift([first[0], second[1]])
-        }
-      while ([...claudeRuns.keys()].filter((id) => id !== '*').length > 300) {
-        const id = [...claudeRuns.keys()].find((k) => k !== '*')!
-        const ends = claudeRuns.get(id)!.map(([, to]) => to ?? Date.now())
-        claudeRuns.delete(id)
-        const before = claudeRuns.get('*')?.[0]?.[1] ?? 0
-        claudeRuns.set('*', [[0, Math.max(before, ...ends)]])
-      }
+      trimClaudeRuns(claudeRuns)
       if (claudeRuns.size) writePrivate(claudeRunsFile(), Object.fromEntries(claudeRuns))
       else rmSync(claudeRunsFile(), { force: true })
       return true
@@ -3065,8 +3089,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // A Claude Code run is noted as It's from now, before it starts, so that a turn begun in it
       // by anything it starts is not taken for anyone's choice of mode
       const runFrom = Date.now()
-      const ofRuns =
-        now.harness === 'claude-code' && claudeRuns ? [...(claudeRuns.get(now.id) ?? []), [runFrom, null] as [number, number | null]].slice(-20) : null
+      const ofRuns = now.harness === 'claude-code' && claudeRuns ? [...(claudeRuns.get(now.id) ?? []), [runFrom, null] as [number, number | null]] : null
       if (ofRuns && claudeRuns) {
         claudeRuns.delete(now.id)
         claudeRuns.set(now.id, ofRuns)
@@ -3116,7 +3139,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           say(
             `${a(now.harness)} conversation (${short(key)}) was refused Bypass Permissions by Claude Code, as It runs as root; it is reopened in the mode below`,
           )
-          void noted('refused', 'bypassPermissions', instead.mode)
+          await noted('refused', 'bypassPermissions', instead.mode)
           how = instead
           stopLooking = lookFor(how)
           ended = await reopen(how)
@@ -5206,6 +5229,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   let plainUntil = 0
   /** And until when a machine on Windows leaves out of its report that it reopens conversations there, for the same reason. */
   let unsaidUntil = 0
+  /** Until when the word that this It reopens in the mode chosen is left out of reports, where It refused it lately. */
+  let unmodedUntil = 0
   const lookForNewer = async () => {
     if (!looksForNewer()) latestKnown = ''
     else {
@@ -5377,7 +5402,11 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     }
     // And on Windows that it reopens closed conversations there, which an It from before one did
     // takes nothing of: each report that It refuses is made again with less, down to the plainest
-    const tries = reports(process.platform, full, legacy, { plain: Date.now() < plainUntil, unsaid: Date.now() < unsaidUntil })
+    const tries = reports(process.platform, full, legacy, {
+      plain: Date.now() < plainUntil,
+      unsaid: Date.now() < unsaidUntil,
+      unmoded: Date.now() < unmodedUntil,
+    })
     await (async () => {
       for (const [n, args] of tries.entries())
         try {
@@ -5389,6 +5418,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // report that did not reach It, or was not answered, says nothing of that, and made again
           // without the word just after an update, it would have It take the word away
           if ('modes' in args) {
+            if (!refusedFor(err)) throw err
+            unmodedUntil = Date.now() + 10 * 60_000
+          } else if ('reopens' in args) {
             if (!refusedFor(err)) throw err
             unsaidUntil = Date.now() + 10 * 60_000
           } else plainUntil = Date.now() + 10 * 60_000

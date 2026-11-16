@@ -934,9 +934,17 @@ describe('what a machine tells It of itself, to an It that may be older', () => 
   const plainest = { connectorVersion: '0.2.0', harnesses: [] }
 
   test('on Windows the fullest report says too that the machine reopens closed conversations there, and in the mode chosen, and each refused is made again with less', () => {
-    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([{ ...full, reopens: true, modes: true }, full, plainest])
+    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([
+      { ...full, reopens: true, modes: true },
+      { ...full, reopens: true },
+      full,
+      plainest,
+    ])
+    // An It older than the choice of mode that takes the word from Windows is still given that word
+    expect(reports('win32', full, plainest, { plain: false, unsaid: false, unmoded: true })).toEqual([{ ...full, reopens: true }, full, plainest])
     // An It that refused the word from Windows lately is given the rest, and one that refused the fuller report the plainest
-    expect(reports('win32', full, plainest, { plain: false, unsaid: true })).toEqual([full, plainest])
+    expect(reports('win32', full, plainest, { plain: false, unsaid: true })).toEqual([{ ...full, modes: true }, full, plainest])
+    expect(reports('win32', full, plainest, { plain: false, unsaid: true, unmoded: true })).toEqual([full, plainest])
     expect(reports('win32', full, plainest, { plain: true, unsaid: false })).toEqual([plainest])
   })
 
@@ -944,6 +952,7 @@ describe('what a machine tells It of itself, to an It that may be older', () => 
     for (const platform of ['linux', 'darwin']) {
       const said = { ...full, system: platform }
       expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([{ ...said, modes: true }, said, plainest])
+      expect(reports(platform, said, plainest, { plain: false, unsaid: false, unmoded: true })).toEqual([said, plainest])
       expect(reports(platform, said, plainest, { plain: true, unsaid: false })).toEqual([plainest])
     }
   })

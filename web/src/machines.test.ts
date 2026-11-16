@@ -228,7 +228,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
       ['dontAsk', 'Don’t Ask'],
       ['conversation', 'The conversation’s own'],
     ])
-    expect(line('Claude Code')).toBe('Edits in its folder run freely; Claude Code’s safety check decides most of the rest.')
+    expect(line('Claude Code')).toBe('Claude Code’s safety check decides most actions that would otherwise ask you.')
     expect(asked.filter((a) => a.name === 'machines:wakeMode')).toEqual([])
     // Auto picked is a choice of the person's own, which a machine on an older It then holds to
     await choose('Claude Code', 'auto')

@@ -460,7 +460,7 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       {
         id: 'auto',
         label: 'Auto',
-        says: 'Edits in its folder run freely; Claude Code’s safety check decides most of the rest.',
+        says: 'Claude Code’s safety check decides most actions that would otherwise ask you.',
       },
       {
         id: 'acceptEdits',
