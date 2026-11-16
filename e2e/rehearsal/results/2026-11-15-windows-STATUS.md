@@ -88,6 +88,41 @@ Published 0.1.42, as GitHub publishes it (fetched through the stand-in, which al
 - **Codex 0.169.0 (run 0440):** Codex **asked for approval** before `it upgrade` ("requires approval: This command can change It on this machine rather than use it"; It's rule). The person said yes; "Updated It to 0.1.43. The running service will use it after a restart." After the restart, **a press in the still-open window was answered** ("Codex is working" → "Done" in 29 s).
 - **Verdict:** an update in the middle of the event, done the way It offers it, keeps open conversations and open pages working with both apps. The person sees "Can't reach It" during the restart, and the tab comes back by itself.
 
+## What a woken Codex may run on Windows: the facts (for the worker on the other machine; 05:30-05:50 UTC)
+
+**The rule file It writes for Codex** (`<CODEX_HOME>\rules\it.rules`; the copy in run 0115's throwaway CODEX_HOME, written by 0.1.42; `packages/cli/src/codex-settings.ts` is unchanged in candidate 8af67f7c), whole:
+```
+# Written by It when `it setup` connected Codex. It lets the `it` command run outside Codex's
+# sandbox, so that it can reach It on this machine. Every other command stays in the sandbox,
+# and the `it` commands that change It itself still ask you first. `it save` also asks first,
+# because it writes a file a page sent to a path on this machine. `it action` only reads.
+# It brings this file up to date with its add-on, and removes it when Codex is disconnected or
+# It is uninstalled. Once you change it, it is yours, and It leaves it alone.
+prefix_rule(pattern=["it"], decision="allow")
+prefix_rule(pattern=["it", ["setup", "uninstall", "upgrade", "login", "logout", "serve", "service", "network", "runs", "telemetry", "updates", "shell-profile", "https"]], decision="prompt", justification="This command can change It on this machine rather than use it.")
+prefix_rule(pattern=["it", "save"], decision="prompt", justification="This command writes a file a page sent to a path on this machine.")
+```
+**A woken turn** is `codex exec resume …`. Codex's rollout records it as approval "never", sandbox "read-only" (It passes `-c sandbox_mode="workspace-write"`; the turn context says read-only all the same). **Codex runs every command as `powershell.exe -Command "<the command>"`**, and a refusal reads, decoded from the rollout (`codex-refusals.mjs`):
+- run 0415: ``CreateProcess { message: "Rejected(\"`\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -Command Get-Location` rejected: blocked by policy\")" }``
+- run 0425: ``Rejected("`"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -Command "it.exe patch lock-test --% \"{\\\"status\\\":\\\"Ready.\\\",\\\"entries\\\":{\\\"j57cz0ht…\\\":{\\\"pressedAt\\\":\\\"2026-11-16T04:25:02.191Z\\\",\\\"answer\\\":\\\"Pressed at 11:25:02.191 PM EST on November 15, 2026.\\\"}}}\""` rejected: blocked by policy")`` (Codex asked for: `it.exe patch lock-test --% "{\"status\":\"Ready.\",…}"`)
+- run 0505: the same for `it --% tour answer <id> "{\"read\":\"144\",\"right\":true,\"answer\":\"144\",\"hint\":\"Area = side × side\",\"say\":\"Correct: 12 × 12 gives an area of 144 square metres.\"}"`.
+So the argv Codex judges is `["C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe", "-Command", "<script>"]`, and the rule applies to the command Codex reads out of the script.
+
+**Each form tried in a woken turn** (run 0540, 0.1.43 = 8af67f7c, Codex 0.169.0, one press per form, Codex told the exact form to use):
+
+| Form, as Codex ran it | Woken turn | What arrived |
+|---|---|---|
+| `it set lock-test b 'say "ok" now'` (ASCII, inner double quotes) | **allowed** | `b: "say ok now"`: **the inner quotes are lost** (Windows PowerShell 5.1 strips `"` from native arguments) |
+| `it set lock-test a 'Café — 12×12 = 144'` (non-ASCII, no quotes) | **refused** "blocked by policy" | nothing |
+| `it set lock-test b 'Café — 12×12 = 144 "ok"'` | **refused** | nothing |
+| `it patch lock-test '{"a":"plain"}'` (ASCII JSON in single quotes, no `--%`) | **allowed** | **not whole**: "The patch is not valid JSON: it has no double quotes, as when a shell takes them out of an argument, which Windows PowerShell 5.1 does." Hint: "Write the JSON to a file and run `it patch lock-test --file <path>`, which works the same in every shell." (Also so with the conversation open: an open turn's `it patch lock-test '{"a":"Café …"}'` got "The patch is not valid JSON.") |
+| `'{"a":"piped"}' \| it patch lock-test -` (piped into standard input) | **refused** | nothing |
+| `it.exe patch … --% "{…}"` and `it --% tour answer …` (runs 0425, 0505) | **refused** | nothing |
+| `it notify '…' --id lock-test`, `it ack <id>`, `it ack <id> --failed`, `it.exe state lock-test`, `it set … "plain ASCII sentence"` (runs 0207, 0235, 0320, 0415, 0425, 0540) | allowed | as written |
+| `Get-Location` (run 0415) | refused | - |
+
+**So a woken Codex on Windows can send It no JSON at all, and no letter outside ASCII.** As an argument the quotes are lost, with `--%` it is refused, piped it is refused, and `--file` needs a file the read-only turn cannot write. **What gets through: `it set <page> <key> '<plain ASCII>'` (inner double quotes lost), `it notify`, `it ack`, `it state`.** Every tour answer (`it tour answer <id> <json>`) and every `it patch` is therefore impossible for a woken Codex on Windows, on 0.1.42 and on the candidate. That is why run 0505's tour click was never answered. A page in another language fails at its first accented letter. With the conversation open, Codex on its default settings asks the person instead (approval "on-request"). The harness's Codex runs with its sandbox off (`danger-full-access`), so the open turns here ran everything.
+
 ## Run 0505: scenario 1 with Codex 0.167.2 on the candidate 0.1.43, installed by the agent the guide's way, then Codex quit, ten quiet minutes and a click (04:51-05:27 UTC, recorded, a person)
 
 The flow of run 2236, on fe8f6e1d. The person (Claude Opus 5.5 high, eyes and hands only, `person-log.md`, video) asked Codex to install It from https://itcan.do/install.md. The install script read IT_INSTALL_BASE from the shell and took 0.1.43 from the stand-in. Codex ran `it setup --only codex` (the guard made it `--no-service` and started `it serve` with the launcher PATH). Reporting was off.
