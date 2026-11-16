@@ -382,11 +382,17 @@ function connection(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): Conne
 }
 
 /** The reopened run of a page's conversation, where its machine says one is under way. */
-function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean; identity: string } | null {
+function running(machine: Doc<'machines'> | null, a: Doc<'artifacts'>): { since: number; stopping: boolean; identity: string; note: string | null } | null {
   if (!machine || machine.revoked || !a.session) return null
   const run = (machine.runs ?? []).find((r) => r.harness === a.session?.harness && r.sessionId === a.session?.id)
   return run
-    ? { since: run.since, stopping: run.stop === true, identity: JSON.stringify([machine._id, run.harness, run.sessionId, run.run ?? run.since]) }
+    ? {
+        since: run.since,
+        stopping: run.stop === true,
+        identity: JSON.stringify([machine._id, run.harness, run.sessionId, run.run ?? run.since]),
+        // How it was reopened, where that is not as the person chose: the bar says it beside the run
+        note: run.note ?? null,
+      }
     : null
 }
 

@@ -88,7 +88,13 @@ async function record(
   // they said are not to be reopened on this computer is not one that reopening comes on for
   // when setup connects it anew. Without it the new identity would know of no such word, and
   // bringing a computer back would have switched on again what only the person switches on.
-  if (old && (inherits || waitsFor)) await ctx.db.patch(machineId, { replaces: old._id, ...(old.wakesOff?.length ? { wakesOff: old.wakesOff } : {}) })
+  // So with them comes the mode they chose for each app's reopened conversations.
+  if (old && (inherits || waitsFor))
+    await ctx.db.patch(machineId, {
+      replaces: old._id,
+      ...(old.wakesOff?.length ? { wakesOff: old.wakesOff } : {}),
+      ...(old.wakeModes?.length ? { wakeModes: old.wakeModes } : {}),
+    })
   if (old && inherits) {
     // The old identity is told who took its place: a hand-over still on its way to it, from
     // an identity before it, then goes on to this one

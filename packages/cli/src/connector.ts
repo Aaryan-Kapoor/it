@@ -32,6 +32,8 @@ import {
   TURNS_ON,
   WAKE_MOST,
   WAKES,
+  wakeModeBelow,
+  wakeModeOf,
   wakesOn,
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
@@ -97,12 +99,17 @@ import { agentOf, begin, record, startSender, thisMachine, thisProgram, three, t
 import {
   Budget,
   bootId,
+  type Carrying,
+  CODEX_CHANGED_SAID,
+  CODEX_MODE_REFUSED,
+  CODEX_REVIEW_ENDED,
   carrying,
   carryOn,
   claudeModeOf,
   claudeWroteAt,
   codexHolder,
   codexInterruptedAt,
+  codexMode,
   endTree,
   fromAnotherStart,
   LEFT_ENDED,
@@ -419,6 +426,17 @@ export function codexCommand(platform: string, pathVar: string, exists: (file: s
   if (platform !== 'win32') return ['codex']
   for (const found of windowsPrograms('codex', pathVar, exists, read)) if (found) return found
   return null
+}
+/** The permission mode chosen for each app's reopened conversations on this machine, as It last said (`wakeModes`). */
+let wakeModesNow: readonly { harness: string; mode: string }[] = []
+/**
+ * The permission mode a conversation of `harness` that this machine reopens is to run in, as the
+ * person chose it under Machines (`WAKE_MODES`): the mode's name, the app's default where nothing
+ * was chosen or It has not said yet, or null for an app that has no choice. A connector is one
+ * machine, so this is this machine's. The run itself asks It again as it begins (`runBegan`).
+ */
+export function wakeModeFor(harness: string): string | null {
+  return wakeModeOf(wakeModesNow, harness)
 }
 /** The words that start Codex with the environment it is given, for a click queued in an open Codex and for a closed conversation reopened alike. */
 export const codexIn = (env: NodeJS.ProcessEnv): string[] | null =>
@@ -2643,19 +2661,28 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     await shellLearned()
     const env = profileEnvironment(now.harness, conversationProfile(now) ?? conversationProfile(session), harnessEnv())
     if (typeof env === 'string') return env
-    const how = carrying(now.harness, now.id, text, {
-      codex: codexIn(env),
-      // On Windows an app is started by where its program is, which its name alone does not say there
-      ...(process.platform === 'win32' && now.harness !== 'codex'
-        ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
-        : {}),
-      itHome: home(),
-      // The mode the person last had the conversation in, and where `it` is installed
-      mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, claudeFolder(env)) ?? claudeModeOf(session.id, cwd, claudeFolder(env))) : null,
-      itAt: [
-        ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
-      ],
-    })
+    // In the mode chosen for it under Machines, as far as this app here can be: for Codex, without
+    // its reviewer where this Codex may not have one
+    const codexVersion = found.find((h) => h.id === 'codex')?.version
+    let chosen = wakeModeFor(now.harness)
+    const runIn = (mode: string | null) => (now.harness === 'codex' && mode !== null ? codexMode(codexVersion, mode) : { mode, unreviewed: false })
+    const carryingWith = (mode: string | null) =>
+      carrying(now.harness, now.id, text, {
+        codex: codexIn(env),
+        ...(mode !== null ? { wakeMode: mode } : {}),
+        // On Windows an app is started by where its program is, which its name alone does not say there
+        ...(process.platform === 'win32' && now.harness !== 'codex'
+          ? { start: windowsProgram(PROGRAM[now.harness] ?? now.harness, env.PATH ?? env.Path ?? '', existsSync, (f) => readFileSync(f, 'utf8')) }
+          : {}),
+        itHome: home(),
+        // The mode the person last had the conversation in, and where `it` is installed
+        mode: now.harness === 'claude-code' ? (claudeModeOf(now.id, cwd, claudeFolder(env)) ?? claudeModeOf(session.id, cwd, claudeFolder(env))) : null,
+        itAt: [
+          ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
+        ],
+      })
+    let runMode = runIn(chosen)
+    let how = carryingWith(runMode.mode)
     if (typeof how === 'string') return how
     if (reopenedNow.has(key)) return 'it is being reopened already'
     // This connector is stopping, or does not fit the It it joined: nothing is started
@@ -2679,9 +2706,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     try {
       // It is told first, and nothing is started where it could not be told: it is by that
       // word that the page says the agent is working, and offers to stop it
-      const told = await call<{ stopped?: boolean; off?: boolean } | null>('mutation', api.machines.runBegan, { for: session, run: runId, ids }).then(
+      let saidMode = undefined as string | undefined
+      const told = await call<{ stopped?: boolean; off?: boolean; mode?: string } | null>('mutation', api.machines.runBegan, {
+        for: session,
+        run: runId,
+        ids,
+        // This It reopens a conversation in the mode chosen for it
+        modes: true,
+      }).then(
         // Stopped meanwhile, or reopening switched off since this machine last heard: either way nothing is started
-        (said) => (said?.stopped || said?.off ? ('stopped' as const) : true),
+        (said) => {
+          saidMode = said?.mode
+          return said?.stopped || said?.off ? ('stopped' as const) : true
+        },
         () => false,
       )
       if (!told) {
@@ -2716,52 +2753,101 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         ended = NOT_STARTED
         return ended
       }
+      // The mode as It has it now, where the person chose another a moment ago, before this machine
+      // heard of it: what they chose last is what this run is in
+      // (Read as this It reads a mode: one a newer It names that this one does not know is the one that allows least)
+      if (saidMode !== undefined && saidMode !== chosen) {
+        chosen = wakeModeOf([{ harness: now.harness, mode: saidMode }], now.harness)
+        runMode = runIn(chosen)
+        const again = carryingWith(runMode.mode)
+        if (typeof again === 'string') {
+          ended = again
+          return ended
+        }
+        how = again
+      }
+      // Said on the page beside the run, where it is not run in the mode the person chose, by a code
+      // and the modes' names: the page says it in It's words (`wakeNoteText`)
+      const noted = (why: 'refused' | 'unreviewed', mode: string, instead: string) =>
+        call('mutation', api.machines.runNoted, { for: session, run: runId, why, mode, instead }).catch(() => {})
+      if (runMode.unreviewed && chosen) void noted('unreviewed', chosen, runMode.mode ?? '')
+      // Codex saying, as it starts, that its administrator's requirements put a value of their own in
+      // place of one It gave, which may allow more than was chosen: the run is ended there
+      const noticed = now.harness === 'codex' ? (printed: string) => (CODEX_CHANGED_SAID.test(printed) ? CODEX_MODE_REFUSED : undefined) : undefined
       saidLast.delete(key)
-      ended = await carryOn(
-        how,
-        cwd,
-        { harness: now.harness, session: now.id, run: runId },
-        {
-          env,
-          signal: stop.signal,
-          // Ended without the system saying what of it was left: it stays noted, and is looked at again before its conversation is next reopened
-          unsure: () => {
-            const run = running.get(key)
-            if (run) unsettled.set(key, { ...run, unsure: true })
+      // Whether an attempt ended without the system saying that all of it was gone: nothing more is started beside it
+      let uncertain = false
+      const reopen = (how: Carrying) =>
+        carryOn(
+          how,
+          cwd,
+          { harness: now.harness, session: now.id, run: runId },
+          {
+            env,
+            ...(noticed ? { noticed } : {}),
+            signal: stop.signal,
+            // Ended without the system saying what of it was left: it stays noted, and is looked at again before its conversation is next reopened
+            unsure: () => {
+              uncertain = true
+              const run = running.get(key)
+              if (run) unsettled.set(key, { ...run, unsure: true })
+            },
+            // Ended because its fifteen minutes were over, in the middle of whatever it was
+            // doing: what it was reopened for is tried again, and the turn that tries it is told
+            // that an earlier one was cut off and may have done part of the work
+            overtime: () => {
+              cutOff.add(key)
+              keepCutOff()
+            },
+            // Killed, or failing, in the middle of its turn: what it was reopened for is tried
+            // again, and the turn that tries it is told, as after a restart, that the one before
+            // was cut off and may have done part of the work
+            brokeOff: () => {
+              cutOff.add(key)
+              keepCutOff()
+            },
+            keepIn: inHome('logs'),
+            said: (words) => saidLast.set(key, words),
+            // Written down before it is given anything to do, or it is not to run: see `carryOn`
+            began: (pid, since, cgroup) => {
+              if (since === undefined) throw new Error('which process it is could not be told')
+              const boot = bootId()
+              // This conservative copy predates every signal and every possible disk failure.
+              // Only a verified ending removes it. A crash cannot turn missing evidence into
+              // permission to reopen beside a detached command.
+              running.set(key, { pid, since, told: SINCE_TOLD, run: runId, unsure: true, ...(boot ? { boot } : {}), ...(cgroup ? { cgroup } : {}) })
+              try {
+                keepRuns(true)
+              } catch (err) {
+                running.delete(key)
+                throw err
+              }
+            },
           },
-          // Ended because its fifteen minutes were over, in the middle of whatever it was
-          // doing: what it was reopened for is tried again, and the turn that tries it is told
-          // that an earlier one was cut off and may have done part of the work
-          overtime: () => {
-            cutOff.add(key)
-            keepCutOff()
-          },
-          // Killed, or failing, in the middle of its turn: what it was reopened for is tried
-          // again, and the turn that tries it is told, as after a restart, that the one before
-          // was cut off and may have done part of the work
-          brokeOff: () => {
-            cutOff.add(key)
-            keepCutOff()
-          },
-          keepIn: inHome('logs'),
-          said: (words) => saidLast.set(key, words),
-          // Written down before it is given anything to do, or it is not to run: see `carryOn`
-          began: (pid, since, cgroup) => {
-            if (since === undefined) throw new Error('which process it is could not be told')
-            const boot = bootId()
-            // This conservative copy predates every signal and every possible disk failure.
-            // Only a verified ending removes it. A crash cannot turn missing evidence into
-            // permission to reopen beside a detached command.
-            running.set(key, { pid, since, told: SINCE_TOLD, run: runId, unsure: true, ...(boot ? { boot } : {}), ...(cgroup ? { cgroup } : {}) })
-            try {
-              keepRuns(true)
-            } catch (err) {
-              running.delete(key)
-              throw err
-            }
-          },
-        },
-      )
+        )
+      ended = await reopen(how)
+      // Codex would not run in the mode given, as its administrator's requirements forbid it: it is
+      // reopened at once in the next mode down, which allows less, and so on, never in one that
+      // allows more, and the page says so. Where there is none below, it is a failure as any is
+      while (ended === CODEX_MODE_REFUSED && !stop.signal.aborted && !uncertain && runMode.mode !== null) {
+        const below = wakeModeBelow(now.harness, runMode.mode)
+        if (below === null) break
+        const refused = runMode.mode
+        const fallback = runIn(below)
+        const instead = carryingWith(fallback.mode)
+        if (typeof instead === 'string' || fallback.mode === null) break
+        say(`${a(now.harness)} conversation (${short(key)}) was refused its mode by Codex's requirements; it is reopened in the one below`)
+        void noted('refused', refused, fallback.mode)
+        runMode = fallback
+        ended = await reopen(instead)
+      }
+      // Codex interrupted the turn under its reviewer: it ran, its refusals are in the conversation,
+      // and it is handed over as any turn that ran, so that the same request is not put to the
+      // reviewer again (see `CODEX_REVIEW_ENDED`)
+      if (ended === CODEX_REVIEW_ENDED) {
+        say(`${a(now.harness)} conversation (${short(key)}) was reopened and Codex interrupted its turn under its reviewer; it is taken as handed over`)
+        ended = null
+      }
       // It ran: what was set aside for this conversation after too many tries is its to be given again
       if (ended === null) revive(now.harness, now.id)
       // It ended badly by itself: a key it lacked may be in the person's shell by the next try
@@ -4960,6 +5046,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     (me: {
       wanted: string[]
       wakes?: { harness: string; since: number }[]
+      wakeModes?: { harness: string; mode: string }[]
       runs?: { harness: string; sessionId: string; stop?: boolean; run?: string }[]
       upgrade?: { state: string; version?: string } | null
       turnOn?: { harness: string; state: string; at?: number }[]
@@ -5000,6 +5087,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       // Read each time, whatever else changed or did not: it changes nothing that is installed
       const before = [...wakesNow.keys()].sort().join(',')
       wakesNow = new Map((me.wakes ?? []).map((w) => [w.harness, w.since]))
+      wakeModesNow = me.wakeModes ?? []
       if ([...wakesNow.keys()].sort().join(',') !== before) {
         watch()
         void route()
