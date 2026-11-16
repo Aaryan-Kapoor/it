@@ -2209,12 +2209,14 @@ export function claudeModeOf(
   if (!file) return null
   let mode: string | null = null
   modeRows(file, (row) => {
+    const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : Number.NaN
+    // A turn begun while It was running the conversation is passed over however it was begun, as
+    // one that It's run may have started itself (through the Agent SDK as well as the command)
+    if (runs !== null && Number.isFinite(at) && runs.some(([from, to]) => at >= from && (to === null || at <= to))) return false
     if (row.entrypoint === 'sdk-cli') {
       if (runs === null || messageText(row).includes(WOKEN_MARK)) return false
-      const at = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : Number.NaN
       // One whose time cannot be read cannot be told not to be of a run of It's
       if (!Number.isFinite(at)) return false
-      if (runs.some(([from, to]) => at >= from && (to === null || at <= to))) return false
     }
     mode = row.permissionMode as string
     return true

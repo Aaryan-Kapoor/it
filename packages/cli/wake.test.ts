@@ -1588,12 +1588,16 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     )
     const runs = [[at(19), at(25)]] as const
     expect(claudeModeOf(UUID, '/home/someone/mixed', config, runs)).toBe('acceptEdits')
+    // A turn begun inside It's run through the Agent SDK is passed over too, as one the run may have started
+    writeFileSync(file, readFileSync(file, 'utf8') + row(22, { permissionMode: 'bypassPermissions', entrypoint: 'sdk-ts' }))
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, runs)).toBe('acceptEdits')
     // A run that has not been seen to end holds everything after it
     expect(claudeModeOf(UUID, '/home/someone/mixed', config, [[at(19), null]])).toBe('acceptEdits')
     // Without the note of the runs, the turn that resumed it from inside It's run would be taken for a choice
     expect(claudeModeOf(UUID, '/home/someone/mixed', config, [])).toBe('bypassPermissions')
-    // With a note that could not be read, no turn without a window counts: only the person's own in a window
-    expect(claudeModeOf(UUID, '/home/someone/mixed', config, null)).toBe('default')
+    // With a note that could not be read, no turn of the command for running without a window counts; one through the
+    // Agent SDK, as T3 Code holds a conversation, counts as it always did
+    expect(claudeModeOf(UUID, '/home/someone/mixed', config, null)).toBe('bypassPermissions')
     // The person opens it in a window afterwards: their mode is the one from then on
     writeFileSync(file, readFileSync(file, 'utf8') + row(30, { permissionMode: 'plan', entrypoint: 'cli' }))
     expect(claudeModeOf(UUID, '/home/someone/mixed', config, runs)).toBe('plan')

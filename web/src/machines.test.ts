@@ -208,7 +208,7 @@ describe('how a reopened conversation runs, chosen beside an app’s Auto-wake',
     await shown()
     expect(pick('Codex')!.value).toBe('read-only')
     expect(options('Codex').map(([v]) => v)).not.toContain('')
-    expect(line('Codex')).toBe('Can read and answer on the page, and change nothing else.')
+    expect(line('Codex')).toBe('Reads and answers on the page; only commands you have allowed can change anything.')
     act(() => root.unmount())
     host.remove()
     machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'something-newer' }] })]
