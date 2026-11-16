@@ -5641,6 +5641,34 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
     }
   }, 30_000)
 
+  test('a click for a conversation that was open without It’s add-on is given ten seconds for T3 Code once that is no longer so, however long that took', async () => {
+    withT3Code()
+    stand.t3.slow = true
+    const clock = heldClock()
+    try {
+      const [claude] = await closedClaude()
+      // It published its page while It's add-on did not run in it, so it is not reopened
+      await noteConversation(claude!.session, home, undefined, false)
+      await until(() => stand.t3.asked.length >= 1)
+      for (let i = 0; i < 6; i++) {
+        clock.on(10_000)
+        await pause(1100)
+      }
+      expect(reopenedFor()).toEqual([])
+      expect(holdsBack().some((h) => h.why === T3_CHECKING)).toBe(false)
+      // Then it is: its add-on was heard in it, and T3 Code has still not said
+      await noteConversation(claude!.session, home, undefined, true)
+      await until(() => holdsBack().some((h) => h.why === T3_CHECKING), 5000)
+      clock.on(9_000)
+      await pause(1500)
+      expect(reopenedFor()).toEqual([])
+      clock.on(1_500)
+      await until(() => reopenedFor().length === 1, 5000)
+    } finally {
+      clock.restore()
+    }
+  }, 30_000)
+
   test('clicks whose searches drop each other again and again, as large searches do where they hold more thread ids than they may together, are reopened within fifteen seconds all the same', async () => {
     const { T3_HELD_MOST } = await import('./src/t3')
     withT3Code()

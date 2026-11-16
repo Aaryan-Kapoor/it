@@ -3147,7 +3147,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    */
   const keptShut = (click: Offered, open: readonly OpenClaude[]): boolean => {
     if (!unloaded(click.session!, open)) {
-      if (click.heldBack !== undefined) tellHeld(click, null)
+      // What T3 Code's word holds back is told, and taken away, by `t3HoldsBack` and the pass
+      if (click.heldBack !== undefined && click.heldBack !== T3_CHECKING) tellHeld(click, null)
       return false
     }
     tellHeld(click, click.session!.harness === 'pi' ? PI_OPEN_WITHOUT_ADDON : OPEN_WITHOUT_ADDON)
@@ -4029,11 +4030,13 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
                   runtimes.blocksWake(session.harness)
                 )
                   return false
-                heldForT3 = t3HoldsBack(click, key)
-                if (heldForT3) return false
-                // Asked last, since it tells the page: only of a click that would otherwise be reopened for
+                // Asked last, since each tells the page: only of a click that would otherwise be
+                // reopened for. One that is open without It's add-on is not reopened whatever T3
+                // Code says, and its wait for T3 Code begins only once nothing else keeps it shut
                 shut = keptShut(click, openThisPass)
-                return !shut
+                if (shut) return false
+                heldForT3 = t3HoldsBack(click, key)
+                return !heldForT3
               },
             })
         // A Codex that has the conversation open, and whose last turn the person interrupted,
