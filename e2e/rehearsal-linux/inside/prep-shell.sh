@@ -34,6 +34,7 @@ if [ "$kind" = tmuxfirsti ]; then sed -i '1i [[ $- == *i* ]] \&\& [ -z "$TMUX" ]
 # The user manager and It's service started again, with the shell as it now is
 systemctl restart user@1000.service; sleep 3
 # That ended the terminal's session too: the person opens a terminal again, in their own login shell
-su -l -w REHEARSAL_HARNESS ana -s /bin/bash -c 'tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work' > /var/lib/rehearsal-flow/prep-shell.log 2>&1
+# The terminal in the person's own login shell (tmux takes its shell from SHELL)
+su -l -w REHEARSAL_HARNESS ana -s /bin/bash -c 'SHELL=$(getent passwd ana | cut -d: -f7) tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work' > /var/lib/rehearsal-flow/prep-shell.log 2>&1
 su -l -w REHEARSAL_HARNESS ana -s /bin/bash -c 'tmux list-sessions; tmux display -p -t agent "pane shell: #{pane_current_command}"'
 su -l -w REHEARSAL_HARNESS ana -s /bin/bash -c 'systemctl --user start it.service; sleep 15; ~/.it/bin/it service logs 2>&1 | grep -i "reopens are given" | tail -1'

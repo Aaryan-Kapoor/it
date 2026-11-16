@@ -71,6 +71,8 @@ async function press(p, re, nth = 0) {
   for (const sel of ['button, [role=button]', '.card, label']) {
     for (const b of await f.$$(sel)) {
       const t = ((await b.innerText().catch(() => '')) ?? '').trim()
+      // A page's own send button ("Pair my pizza →", "Send my pick") is not a pick
+      if (sel.startsWith('button') && /^(pair|send|order|submit|tell|get|what|go|see|show|confirm)\b/i.test(t)) continue
       if (t && re.test(t) && (await b.isVisible().catch(() => false))) named.push({ b, t })
     }
     if (named.length) break
