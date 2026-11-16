@@ -181,6 +181,49 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     expect(run(`"${IT}" patch board {"a":"b c"} --if-revision=3`)).toEqual(['patch', 'board', '{"a":"b c"}', '--if-revision=3'])
     expect(run(`"${IT}" tour answer k57abc {"say":"a b"} --no-wait`)).toEqual(['tour', 'answer', 'k57abc', '{"say":"a b"}', '--no-wait'])
   })
+  test('JSON with a space outside its strings and a dash after a space inside one is read whole, as models write it', () => {
+    for (const json of [
+      '{"title": "Plan - draft", "n": 1}',
+      '{"note": "run with --verbose"}',
+      '{"n": "a -1"}',
+      '{"n": -1}',
+      '{"a": 1, "b": "x - y", "c": ["p -q", "--r=s"]}',
+      '[{"step": "build - test"}, {"step": "ship -now"}]',
+      // The runtime hands this on as `--json}`, which names no option, and the command would refuse it
+      '{"a": "pass --json"}',
+    ])
+      for (const args of [
+        ['patch', 'board', json],
+        ['patch', 'board', json, '--if-revision', '7'],
+        ['patch', 'board', '--replace', json],
+        ['set', 'board', 'steps', json],
+        ['tour', 'answer', 'k57abc', json, '--no-wait'],
+        ['create', 'Plan', '--state', json, '--open'],
+      ])
+        expect([args, run(windowsPowerShell(args))]).toEqual([args, args])
+  })
+  test('a word inside such JSON that the command would read as its own is never taken, nor is anything after the JSON', () => {
+    // A string that holds the name of an option It knows, or `--`, which ends a command's options, as the runtime hands it on: as it was
+    for (const json of ['{"note": "use --replace now"}', '{"note": "see --if-revision 3"}', '{"a": "x -- y"}', '{"note": "add --json here"}']) {
+      const line = windowsPowerShell(['patch', 'board', json])
+      expect([json, wholeJson(line, given(line))]).toEqual([json, null])
+    }
+    // An option after the JSON stays an option; one It does not know leaves every word as it came, and the command refuses that option
+    expect(run(windowsPowerShell(['patch', 'board', '{"t": "a - b"}', '--replace']))).toEqual(['patch', 'board', '{"t": "a - b"}', '--replace'])
+    const unknown = windowsPowerShell(['patch', 'board', '{"t": "a - b"}', '--verbose'])
+    expect(wholeJson(unknown, given(unknown))).toBeNull()
+    // JSON typed bare in cmd, which no PowerShell put in quotes of its own, is not read past a dash
+    const bare = `"${IT}" patch board {"a": "x - y"}`
+    expect(wholeJson(bare, given(bare))).toBeNull()
+    // Nor is a value given where the command takes no JSON, nor a key
+    for (const args of [
+      ['patch', 'board', '--file', '{"t": "a --b"}'],
+      ['set', 'board', '{"t": "a --b"}', 'x'],
+    ]) {
+      const line = windowsPowerShell(args)
+      expect([args, wholeJson(line, given(line))]).toEqual([args, null])
+    }
+  })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()
     expect(wholeJson(`${IT} status`, ['status'])).toBeNull()
