@@ -974,7 +974,9 @@ async function OTHERAPP() {
   for (let i = 0; i < 60; i++) {
     await sleep(2000)
     const tail = screen().replace(/\s+$/, '').split('\n').slice(-12).join('\n')
-    if (i >= 5 && /Type your message|for shortcuts|\/help for commands|ctrl\+o|^\s*[❯>]\s*$|~\/work\s*$/m.test(tail)) break
+    // The app's own words, never the shell's prompt it starts from
+    const ready = who === 'hermes' ? /Type your message|\/ commands · @ files/ : /Type your message|for shortcuts|\/help for commands|ctrl\+o|anthropic\/claude|^\s*[❯>]\s*$/m
+    if (i >= 3 && ready.test(tail) && !/\$\s*$/.test(tail)) break
   }
   await sleep(3000)
   const askText = scenario === 'OTHERAPP-skill' ? 'Use your it skill to make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.' : 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
