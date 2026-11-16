@@ -290,6 +290,7 @@ await tw.page.click('#t').catch(() => {})
 log('the terminal is open', `in ${f.work}`)
 
 let recording = false
+let vscodeChild = null
 let stopping = null
 // The bar above the page (#491): whether it says that the agent is working, against whether the
 // agent's terminal shows a turn running ("esc to interrupt"), each change written down with its
@@ -446,6 +447,22 @@ http
       }
       return reply('recording')
     }
+    // vscode: the portable VS Code under WORK (its own `data` folder, nothing of the owner's),
+    // started in the project folder with the run's whole environment, as a person's VS Code
+    // opened from their shell; with a debugging port for vsc.mjs. vscode-quit: ended by its id
+    if (q.cmd === 'vscode') {
+      if (vscodeChild && vscodeChild.exitCode === null) return reply(`already running ${vscodeChild.pid}`)
+      const exe = path.join(WORK, 'vscode-portable', 'Code.exe')
+      vscodeChild = spawn(exe, [`--remote-debugging-port=${controlPort + 3}`, '--new-window', f.work], { env: { ...env, ...appEnv }, cwd: f.work, stdio: 'ignore' })
+      log('VS Code (portable, throwaway data) started in the project folder', `pid ${vscodeChild.pid}, debugging port ${controlPort + 3}`)
+      return reply(`started ${vscodeChild.pid}`)
+    }
+    if (q.cmd === 'vscode-quit') {
+      if (!vscodeChild) return reply('not running')
+      killTree(vscodeChild.pid)
+      log('VS Code ended by its process id', String(vscodeChild.pid))
+      return reply('ended')
+    }
     if (q.cmd === 'stop') {
       reply('stopping')
       stopping = q
@@ -471,6 +488,7 @@ writeFileSync(path.join(f.results, 'terminal.txt'), transcript.text)
 writeFileSync(path.join(f.results, 'terminal-plain.txt'), transcript.text.replace(/\x1b\[[0-9;?<>=]*[A-Za-z~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[=>()78][A-Za-z0-9]?/g, ''))
 // Everything the run started, by its own id
 killTree(pty.pid)
+if (vscodeChild) killTree(vscodeChild.pid)
 await sleep(1000)
 if (swapping) clearInterval(swapping)
 const serves = [serveChild?.pid, ...(existsSync(path.join(f.top, 'serve-pids.txt')) ? readFileSync(path.join(f.top, 'serve-pids.txt'), 'utf8').split(/\s+/).map(Number) : [])].filter(Boolean)
