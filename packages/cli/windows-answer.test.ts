@@ -46,7 +46,7 @@ describe.runIf(process.platform === 'win32')('an answer of the tour, as PowerShe
       expect(args.slice(0, 3)).toEqual(['tour', 'answer', 'k57abc'])
       expect(json(args[3]!, 'The answer', undefined, true)).toEqual(MEANT)
       // And `it patch` and `it set`, which read their JSON the same way
-      const patch = given(shell, `${program} patch plan ' {"steps":{"build":"done, at last"}}'`)
+      const patch = given(shell, String.raw`${program} patch plan ' {\"steps\":{\"build\":\"done, at last\"}}'`)
       expect(json(patch[2]!, 'The patch', 'it patch plan --file <path>')).toEqual({ steps: { build: 'done, at last' } })
       // Text for `it set` in single quotes needs no JSON, and arrives as one word, spaces and all
       expect(given(shell, `${program} set plan status 'Pressed at noon, and done'`)).toEqual(['set', 'plan', 'status', 'Pressed at noon, and done'])
