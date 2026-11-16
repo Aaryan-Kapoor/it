@@ -967,7 +967,13 @@ async function OTHERAPP() {
   }
   step(`types ${who} in the terminal`)
   await type(who)
-  await sleep(15_000)
+  // Its own input line first: a first start can take a minute (Hermes builds its caches)
+  for (let i = 0; i < 60; i++) {
+    await sleep(2000)
+    const tail = screen().replace(/\s+$/, '').split('\n').slice(-12).join('\n')
+    if (i >= 5 && /Type your message|for shortcuts|\/help for commands|ctrl\+o|^\s*[❯>]\s*$|~\/work\s*$/m.test(tail)) break
+  }
+  await sleep(3000)
   const askText = 'Make me a page with It where I can pick one of three pizzas, and tell me on the page what you would order with it.'
   for (let i = 0; i < 3; i++) {
     step(`types to ${who}: a page${i ? ' (again: it had not taken it)' : ''}`)
@@ -1014,7 +1020,7 @@ async function OTHERAPP() {
   await sleep(2000)
   await key('C-d')
   await sleep(5000)
-  step('after leaving', { shell: /\$\s*$/.test(screen().replace(/\s+$/, '')), processes: sh(`ps -u ana -o args= | grep -c '${who}'`).trim() })
+  step('after leaving', { shell: /\$\s*$/.test(screen().replace(/\s+$/, '')), appProcesses: sh(`ps -u ana -o pid=,args= | grep -E '(^|[ /])${who}( |$)' | grep -v grep`).trim().slice(0, 300), itStatus: sh('~/.it/bin/it status 2>&1').replace(/\s+/g, ' ').slice(0, 900) })
   await sleep(25_000)
   await click('the app closed', 180_000)
 }

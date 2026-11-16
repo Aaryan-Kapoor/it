@@ -12,3 +12,5 @@ su -l ana -s /bin/bash -c "sh /build/harness/install-it.sh >/dev/null 2>&1; ~/.i
 if [ "$app" = hermes ]; then
   su -l ana -s /bin/bash -c 'tmux kill-server 2>/dev/null; for i in 1 2 3 4 5; do sleep 1; tmux new-session -d -s agent -x 104 -y 56 -c /home/ana/work 2>/dev/null && break; done'
 fi
+# What `it setup` tells the person to run once for Hermes (its words, as the agent passes them on)
+if [ "$app" = hermes ]; then su -l ana -s /bin/bash -c 'hermes config set plugins.entries.it-bridge.allow_gateway_injection true 2>&1 | tail -1'; fi
