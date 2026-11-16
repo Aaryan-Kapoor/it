@@ -64,6 +64,8 @@ interface Machine {
   wanted: string[]
   wakes: { harness: string; since: number }[]
   wakeModes?: { harness: string; mode: string }[]
+  /** The apps its It reopens in the mode chosen for them: an app it does not name, it runs as an It from before the choice. */
+  modes?: string[]
 }
 
 /**
@@ -471,6 +473,9 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             // The mode its reopened conversations run in: only for an app that offers a choice, and only said where Auto-wake is on
             const modes = wakeable && wakes ? WAKE_MODES[h.id as AppName] : undefined
             const mode = wakeModeOf(m.wakeModes, h.id)
+            // Whether the person has chosen a mode for it here, or the app's default is in force only because nothing was chosen.
+            // Showing the choice never chooses: only a click does
+            const chosenHere = (m.wakeModes ?? []).some((w) => w.harness === h.id)
             return (
               <li key={h.id} className="row">
                 <label className="row-main switch-row">
@@ -523,26 +528,44 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                   </label>
                 )}
                 {modes && (
-                  <fieldset className="row-detail wake-modes">
-                    <legend className="wake-name wake-modes-name">How it is reopened</legend>
-                    {modes.choices.map((c) => (
-                      <label key={c.id} className="wake-mode">
-                        <input
-                          className="wake-mode-pick"
-                          type="radio"
-                          name={`wake-mode-${machineId}-${h.id}`}
-                          value={c.id}
-                          checked={mode === c.id}
-                          onChange={() => act(chooseMode({ machineId, harness: h.id, mode: c.id }))}
-                        />
-                        <span className="wake-mode-name">
-                          {c.label}
-                          {c.recommended && <span className="wake-mode-tag">Recommended</span>}
-                        </span>
-                        <span className="row-sub wake-mode-say">{c.says}</span>
-                      </label>
-                    ))}
-                  </fieldset>
+                  <div className="row-detail wake-modes">
+                    <label className="wake-name wake-modes-name" htmlFor={`wake-mode-${machineId}-${h.id}`}>
+                      How {LABEL[h.id] ?? h.id} is reopened
+                    </label>
+                    {modes.choices.length === 1 ? (
+                      // One mode is no choice: its name, as plain text
+                      <span id={`wake-mode-${machineId}-${h.id}`} className="wake-mode-one">
+                        {modes.choices[0]!.label}
+                      </span>
+                    ) : (
+                      <select
+                        id={`wake-mode-${machineId}-${h.id}`}
+                        className="grid-sort wake-mode-pick"
+                        // Nothing chosen shows the starting value as that, and choosing the same mode makes it a choice of the person's own
+                        value={chosenHere ? (mode ?? '') : ''}
+                        onChange={(e) => {
+                          if (e.target.value) act(chooseMode({ machineId, harness: h.id, mode: e.target.value }))
+                        }}
+                      >
+                        {!chosenHere && (
+                          <option value="">{`Starting value: ${modes.choices.find((c) => c.id === modes.default)?.label ?? modes.default}`}</option>
+                        )}
+                        {modes.choices.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.recommended ? `${c.label} (recommended)` : c.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {/* One line, for the mode in force now: on a machine whose It is from before the choice, what that It does instead */}
+                    <span className="row-sub wake-mode-say">
+                      {!(m.modes ?? []).includes(h.id)
+                        ? chosenHere
+                          ? 'This machine runs an older It, which holds to this choice only once it is updated.'
+                          : `This machine runs an older It, which reopens ${LABEL[h.id] ?? h.id} as it always did until it is updated.`
+                        : (modes.choices.find((c) => c.id === mode)?.says ?? modes.choices[0]!.says)}
+                    </span>
+                  </div>
                 )}
                 {couldWake && !wakeable && <span className="row-detail row-sub">{noWakeHere(m.system)}</span>}
               </li>

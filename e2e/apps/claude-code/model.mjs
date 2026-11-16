@@ -59,10 +59,19 @@ export function readTurn(body, headers) {
 /** An answer of a few words, which ends the turn. */
 export const words = (text) => ({ content: [{ type: 'text', text }], stop: 'end_turn' })
 /** An answer that asks Claude Code to run one shell command with its Bash tool, which it then answers with the result. */
-export const runs = (command, why = 'Running it.') => ({
+export const runs = (command, why = 'Running it.', id = `toolu_${randomBytes(12).toString('hex')}`) => ({
   content: [
     { type: 'text', text: why },
-    { type: 'tool_use', id: `toolu_${randomBytes(12).toString('hex')}`, name: 'Bash', input: { command, description: why } },
+    { type: 'tool_use', id, name: 'Bash', input: { command, description: why } },
+  ],
+  stop: 'tool_use',
+})
+
+/** An answer that asks Claude Code to write a file with its Write tool, under the id given, which it then answers with the result. */
+export const writes = (file, content, id = `toolu_${randomBytes(12).toString('hex')}`) => ({
+  content: [
+    { type: 'text', text: 'Writing it.' },
+    { type: 'tool_use', id, name: 'Write', input: { file_path: file, content } },
   ],
   stop: 'tool_use',
 })
@@ -149,7 +158,9 @@ export function standInModel(script) {
       } catch (err) {
         faults.push(err.message)
       }
-      answer(reply ?? words('Nothing more to do.'))
+      // An answer that keeps the turn waiting a while first, as a slow model does
+      if (reply?.after) setTimeout(() => answer(reply), reply.after)
+      else answer(reply ?? words('Nothing more to do.'))
     })
   })
   return new Promise((resolve) => {

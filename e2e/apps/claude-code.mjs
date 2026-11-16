@@ -24,14 +24,14 @@
 // asked of the same stand-in, changes the page again. `--setup-only` stops before the loop.
 import { spawn, spawnSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { chromium } from 'playwright'
 import { root, sleep, stopped } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
-import { runs, standInModel, words } from './claude-code/model.mjs'
+import { runs, standInModel, words, writes } from './claude-code/model.mjs'
 import { commandNames, homeOnWindows, nodeAlone, patience, runRoot, systemPath, windows } from './windows.mjs'
 
 printCleanly()
@@ -76,7 +76,11 @@ const must = (name, ok, detail) => {
   if (!check(name, ok, detail)) throw new Stop(name)
 }
 
-const scratch = mkdtempSync(path.join(runRoot(os.tmpdir()), 'it-cc-'))
+// By its whole name: on Windows the temporary folder may be named by its short name, as
+// C:\Users\RUNNER~1 on GitHub's runners, and Claude Code asks before it writes to a path with
+// such a name in it, in every permission mode but Bypass Permissions, so a reopened turn could
+// write nothing there
+const scratch = realpathSync.native(mkdtempSync(path.join(runRoot(os.tmpdir()), 'it-cc-')))
 const folders = Object.fromEntries(
   Object.entries({ home: 'home', claude: 'claude', it: 'it', work: 'work', none: 'no-t3-code', browser: 'browser' }).map(([k, v]) => [
     k,
@@ -233,6 +237,12 @@ let claudeSaid = ''
 
 let sessionAtFirst = null
 const clickTurns = []
+/** What Claude Code gave back of each step of each reopened turn, by the turn's number among the clicks and the step's name. */
+const wokenSteps = {}
+/** The number of the reopened turn whose first answer the stand-in keeps waiting, so that the bar can be looked at while it runs. */
+let slowTurn = 2
+/** What a reopened turn sets the page's state to: the first as before, and each after it by its number. */
+const pressedBy = (n) => (n === 2 ? 'again' : `woken-${n}`)
 
 try {
   // The script the stand-in answers by. The person's message makes a page; the page's result
@@ -251,7 +261,19 @@ try {
     }
     if (!result && turn.text.startsWith('[It]')) {
       clickTurns.push(turn)
-      return runs(`it patch ${PAGE} '{"pressed":"${clickTurns.length === 1 ? 'yes' : 'again'}"}'`, 'Marking the page as pressed.')
+      const n = clickTurns.length
+      if (n === 1) return runs(`it patch ${PAGE} '{"pressed":"yes"}'`, 'Marking the page as pressed.')
+      // A reopened turn does what the owner's did not get to do: it writes a file in its project's
+      // folder with Claude Code's own Write tool, runs an ordinary command there, and then changes the page
+      const reply = writes(path.join(folders.work, `woken-${n}.txt`), `written by reopened turn ${n}\n`, `toolu_wake_write_${n}`)
+      return n === slowTurn ? { ...reply, after: patience(8000) } : reply
+    }
+    if (result && String(result.tool_use_id).startsWith('toolu_wake_')) {
+      const [, , step, n] = result.tool_use_id.split('_')
+      wokenSteps[n] = { ...wokenSteps[n], [step]: { is_error: result.is_error === true, said: resultText.slice(0, 300) } }
+      if (step === 'write') return runs(`touch ran-${n}.txt`, 'Running a command.', `toolu_wake_touch_${n}`)
+      if (step === 'touch') return runs(`it patch ${PAGE} '{"pressed":"${pressedBy(Number(n))}"}'`, 'Marking the page as pressed.', `toolu_wake_patch_${n}`)
+      return words('Done.')
     }
     // A turn the person starts, which works for a while: a few seconds, or until it is stopped.
     // Claude Code refuses a long `sleep` by itself, so a long one is several short ones
@@ -569,6 +591,45 @@ try {
       woken !== undefined,
       JSON.stringify({ action: second, turns: model.turns.map((t) => t.text.slice(0, 120) || `(${t.results.length} results)`) }),
     )
+    // The conversation was begun without a window and with no mode, which Claude Code 2.1.302 and later start in Manual, and
+    // earlier ones in Auto. Reopened in Auto, the starting value, a Manual conversation is said on the bar to run in more than
+    // it was in, once Claude Code has written down that it does; one that was in Auto is said nothing of
+    const firstMode = (() => {
+      for (const folder of readdirSync(path.join(folders.claude, 'projects'))) {
+        const file = path.join(folders.claude, 'projects', folder, `${session}.jsonl`)
+        if (!existsSync(file)) continue
+        for (const row of readFileSync(file, 'utf8').split('\n')) {
+          try {
+            const r = JSON.parse(row)
+            if (r.type === 'user' && r.permissionMode) return r.permissionMode
+          } catch {}
+        }
+      }
+      return null
+    })()
+    const raised =
+      'This conversation was last in Manual, and It reopened it in Auto. To keep it in Manual, choose Manual beside Claude Code’s Auto-wake under Machines'
+    const barNow = async (ms) => {
+      const end = Date.now() + ms
+      let said = ''
+      while (Date.now() < end) {
+        said = await tab
+          .locator('.page-nav')
+          .innerText({ timeout: 1000 })
+          .catch(() => '')
+        if (said.includes(raised)) return said
+        await sleep(250)
+      }
+      return said
+    }
+    const barThen = await barNow(firstMode === 'default' ? patience(20_000) : 4000)
+    check(
+      firstMode === 'default'
+        ? 'reopened in Auto, a conversation last in Manual is said on the bar to run in more, and how to keep it in Manual'
+        : 'reopened in Auto, a conversation last in Auto is said nothing of on the bar',
+      firstMode === 'default' ? barThen.includes(raised) : !barThen.includes('This conversation was last in'),
+      JSON.stringify({ firstMode, barThen }),
+    )
     check(
       'its newest user message is that click in It’s wording, `[It] … [action <id>]`, with It’s note on reopening after it',
       second?.id &&
@@ -601,6 +662,83 @@ try {
         .then(() => true)
         .catch(() => false),
     )
+    // What the owner met on 15 November: a reopened turn of a conversation held in the mode that
+    // asks could not write in its own project. Reopened in auto mode, which It asks for where the
+    // person chose nothing else, Claude Code writes the file and runs the command without asking
+    // anyone, by its own mode, before its safety check is needed. (The stand-in is no part of that check)
+    const done = (n) => existsSync(path.join(folders.work, `woken-${n}.txt`)) && existsSync(path.join(folders.work, `ran-${n}.txt`))
+    check(
+      'the reopened turn wrote a file in its project’s folder with Claude Code’s Write tool, and ran an ordinary command there',
+      done(2) && readFileSync(path.join(folders.work, 'woken-2.txt'), 'utf8') === 'written by reopened turn 2\n' && wokenSteps[2]?.write?.is_error === false,
+      JSON.stringify(wokenSteps[2] ?? null),
+    )
+
+    // Auto mode not offered: an organization or the person's own settings can turn it off, and
+    // Claude Code then starts the run in the mode that asks, without a word. It sees that in what
+    // Claude Code writes of the run, and the bar says so while the run goes on
+    // Each reopened run is let end before the page is pressed again: a press while it still runs
+    // would go to that run's own add-on, and not to a run of its own. While It runs a reopened
+    // conversation the bar above its page offers to stop it
+    const runOver = async () => {
+      const stop = tab.locator('.page-nav button[aria-label="Stop the agent"]')
+      const end = Date.now() + patience(60_000)
+      while ((await stop.count()) > 0 && Date.now() < end) await sleep(250)
+      return (await stop.count()) === 0
+    }
+    must('the reopened run ends by itself once its turn is over', await runOver())
+    const settingsFile = path.join(folders.claude, 'settings.json')
+    const settingsBefore = existsSync(settingsFile) ? readFileSync(settingsFile, 'utf8') : null
+    const settings = settingsBefore ? JSON.parse(settingsBefore) : {}
+    writeFileSync(settingsFile, JSON.stringify({ ...settings, permissions: { ...(settings.permissions ?? {}), disableAutoMode: 'disable' } }, null, 2))
+    try {
+      slowTurn = 3
+      await frame.locator('#go').click()
+      const barSaid = async (words, ms) => {
+        const end = Date.now() + ms
+        let now = ''
+        while (Date.now() < end) {
+          now = await tab
+            .locator('.page-nav')
+            .innerText({ timeout: 1000 })
+            .catch(() => '')
+          if (now.includes(words)) return now
+          await sleep(250)
+        }
+        return now
+      }
+      const said = await barSaid('Claude Code would not run in Auto here, so It reopened it in Manual, which allows less', patience(60_000))
+      check(
+        'where Claude Code would not start the reopened run in auto mode, the bar says so in a sentence while it runs',
+        said.includes('Claude Code would not run in Auto here, so It reopened it in Manual, which allows less'),
+        said,
+      )
+      const third = await until(
+        (ms) => it('state', PAGE, { ms }),
+        (r) => r.json?.state?.pressed === pressedBy(3),
+        patience(60_000),
+      )
+      check(
+        'and that run did what the mode that asks allows: `it`, and not the write',
+        third.json?.state?.pressed === pressedBy(3) && !existsSync(path.join(folders.work, 'woken-3.txt')) && wokenSteps[3]?.write?.is_error === true,
+        JSON.stringify({ state: third.json?.state, steps: wokenSteps[3] ?? null }),
+      )
+      // The next run is asked for the next lesser mode, Accept edits, which Claude Code gives: it writes again
+      must('that run ends by itself too', await runOver())
+      await frame.locator('#go').click()
+      const fourth = await until(
+        (ms) => it('state', PAGE, { ms }),
+        (r) => r.json?.state?.pressed === pressedBy(4),
+        patience(90_000),
+      )
+      check(
+        'and the next reopened run is started in the next lesser mode, Accept edits, in which it writes its file and runs the command',
+        fourth.json?.state?.pressed === pressedBy(4) && done(4) && wokenSteps[4]?.write?.is_error === false,
+        JSON.stringify({ state: fourth.json?.state, steps: wokenSteps[4] ?? null }),
+      )
+    } finally {
+      if (settingsBefore === null) rmSync(settingsFile, { force: true })
+      else writeFileSync(settingsFile, settingsBefore)
+    }
     if (model.faults.length) check('the stand-in for the model answered every request', false, model.faults.join('; '))
   }
 } catch (err) {

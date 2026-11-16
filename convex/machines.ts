@@ -1,8 +1,10 @@
 import {
   ALIVE,
+  CONVERSATIONS_OWN,
   HARNESSES,
   type Harness,
   LIMITS,
+  modesKnown,
   newer,
   noWakeHere,
   QUOTA,
@@ -45,6 +47,8 @@ const view = (m: Doc<'machines'>) => ({
   harnesses: m.harnesses ?? [],
   wanted: m.wanted ?? [],
   reopens: m.reopens ?? false,
+  // Whether its It reopens a conversation in the mode chosen for it, as it says in its reports: one from before the choice runs each app as it always did
+  modes: modesKnown(m.modes),
   // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
   wakes: wakesOn(m.system, m.reopens) ? (m.wakes ?? []) : [],
   // The permission mode each app's reopened conversations run in, where one was chosen: any other is `automatic` (see `wakeModeOf`)
@@ -327,15 +331,15 @@ export const turningOn = mutation({
 /** How many conversations a machine may say it is running at once. Its connector runs only a few commands at a time. */
 const RUNS_MOST = 20
 
-/** Why a machine whose It is from before the choice of mode was not let reopen a conversation, as the page says it. */
-const OLDER_IT =
-  'this machine runs an It from before the choice of mode, which cannot reopen it in the one chosen: update It on that machine, or choose another mode under Machines'
+/** Why a machine whose It is from before the choice of mode was not let reopen a conversation, as the page says it: which machine to update, and how. */
+const olderIt = (name: string) =>
+  `${name} runs an It from before the choice of mode, which cannot reopen this conversation in the mode chosen for it. Run \`it upgrade\` on ${name} for the choice to hold there, or choose another mode under Machines`
 
 /** The machine says that it has reopened a conversation, which is running from now until it says otherwise. */
 export const runBegan = mutation({
   /** `run` names this run among all there have been of the conversation, so that the ending of an earlier one, told late, does not take this one's place away. */
   /** `modes` says the machine's It reopens a conversation in the mode chosen for it: one from before that does not say so, and reopens it in `WAKE_MODE_LEGACY` whatever is chosen. */
-  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())), modes: v.optional(v.boolean()) },
+  args: { for: session, run: v.optional(v.string()), ids: v.optional(v.array(v.string())), modes: v.optional(v.union(v.boolean(), v.array(v.string()))) },
   handler: async (ctx, { for: s, run, ids, modes }) => {
     const { machine } = await requireMachine(ctx)
     // What it is reopened for may have been stopped while the machine was getting ready: a
@@ -360,16 +364,31 @@ export const runBegan = mutation({
     // a moment ago holds for this run
     const mode = wakeModeOf(machine.wakeModes, s.harness)
     // A machine whose It is from before the choice runs the app in its old mode whatever is chosen.
-    // Where what is chosen allows less than that, it is not let start a run, and says why on the
-    // page; where it allows more, the run goes ahead and the page says the machine runs less
-    const legacy = WAKE_MODE_LEGACY[s.harness as Harness]
+    // Where the person has chosen a mode that allows less than that, it is not let start a run, and
+    // the page says which machine to update; where it allows more, the run goes ahead and the page
+    // says the machine runs less. Where they have chosen nothing, it runs as that It always ran it,
+    // and nothing is said: an update of the It a machine joined never takes Auto-wake away from it
+    // An app with modes and no ceiling of its own is taken to be one an older It may run in its most permissive mode
+    const legacy = WAKE_MODE_LEGACY[s.harness as Harness] ?? WAKE_MODES[s.harness as Harness]?.choices.find((c) => c.id !== CONVERSATIONS_OWN)?.id
+    const chosen = (machine.wakeModes ?? []).some((m) => m.harness === s.harness)
     let said = {}
-    if (mode !== null && legacy && !modes && mode !== legacy) {
+    // An app the machine does not say it knows the modes of is one it runs as an It from before the choice
+    const knows = modesKnown(modes).includes(s.harness)
+    if (mode !== null && legacy && !knows && chosen && mode !== legacy) {
       if (wakeModeRank(s.harness, mode) > wakeModeRank(s.harness, legacy)) {
         const others = (machine.fails ?? []).filter((f) => f.harness !== s.harness || f.sessionId !== s.id)
         // Kept through that It's word that nothing ran (`runEnded`), which would otherwise take it away
         await ctx.db.patch(machine._id, {
-          fails: [...others, { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), at: Date.now(), why: OLDER_IT, kept: true }].slice(-RUNS_MOST),
+          fails: [
+            ...others,
+            {
+              harness: s.harness.slice(0, 40),
+              sessionId: s.id.slice(0, 200),
+              at: Date.now(),
+              why: olderIt((machine.name ?? 'This machine').slice(0, 60)),
+              kept: true,
+            },
+          ].slice(-RUNS_MOST),
         })
         return { stopped: false, off: true }
       }
@@ -605,8 +624,10 @@ export const report = mutation({
     system: v.optional(v.string()),
     paused: v.optional(v.string()),
     reopens: v.optional(v.boolean()),
+    /** The apps its It reopens in the mode chosen for them, or `true` from an It that knew Codex's alone: one from before the choice does not say. */
+    modes: v.optional(v.union(v.boolean(), v.array(v.string()))),
   },
-  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused, reopens }) => {
+  handler: async (ctx, { connectorVersion, harnesses, latest, system, paused, reopens, modes }) => {
     const { machine } = await requireMachine(ctx)
     const clean = kept(harnesses)
     // The newest version it has learned of is kept until it learns of another: a report made before it has looked says nothing of it
@@ -624,6 +645,15 @@ export const report = mutation({
     // That it reopens closed conversations on Windows, likewise: kept from a report that does not
     // say, as the plainer report does not, and only where it comes from the same version
     const can = reopens === undefined ? (moved ? undefined : machine.reopens) : reopens || undefined
+    // That it reopens a conversation in the mode chosen for it, likewise
+    const chooses =
+      modes === undefined
+        ? moved
+          ? undefined
+          : machine.modes
+        : modesKnown(modes)
+            .slice(0, 20)
+            .map((h) => h.slice(0, 40))
     const first = firstWord(machine, on, can)
     // Turning an add-on back on is over, done or not, once the machine no longer has it turned off: nothing is left to say of it
     const turns = (machine.turnOn ?? []).filter(
@@ -637,6 +667,7 @@ export const report = mutation({
       machine.system === on &&
       machine.paused === held &&
       machine.reopens === can &&
+      JSON.stringify(machine.modes ?? null) === JSON.stringify(chooses ?? null) &&
       !first
     // Written each time it says so, less a little for a report that comes a moment early: the
     // site calls a machine off once it has been quiet for a few of these
@@ -650,6 +681,7 @@ export const report = mutation({
         system: on,
         paused: held,
         reopens: can,
+        modes: chooses,
         turnOn: turns.length ? turns : undefined,
         ...(first ?? {}),
         // An upgrade that was asked for on the site is over once the machine runs another version:

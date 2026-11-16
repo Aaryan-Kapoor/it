@@ -1322,6 +1322,52 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(noted()).toEqual(['pi:conversation-1'])
   })
 
+  test('the note of It’s Claude Code runs is kept small without a run of It’s ever ceasing to be one, and a conversation that may still run is kept whole', async () => {
+    const { trimClaudeRuns } = await import('./src/connector')
+    const runs = new Map<string, [number, number | null][]>([['a', Array.from({ length: 23 }, (_, n) => [n * 10, n * 10 + 5] as [number, number | null])]])
+    trimClaudeRuns(runs, 20, 2)
+    // Twenty left, the oldest kept as one that covers what they covered
+    expect(runs.get('a')).toHaveLength(20)
+    expect(runs.get('a')![0]).toEqual([0, 35])
+    // Past the most conversations, one that has ended leaves its last end for every conversation; one still running stays
+    runs.set('b', [[300, null]])
+    runs.set('c', [[400, 405]])
+    trimClaudeRuns(runs, 20, 2)
+    expect([...runs.keys()].sort()).toEqual(['*', 'b', 'c'])
+    expect(runs.get('*')).toEqual([[0, 225]])
+    runs.set('d', [[500, null]])
+    trimClaudeRuns(runs, 20, 2)
+    expect(runs.has('b') && runs.has('d')).toBe(true)
+    expect(runs.get('*')).toEqual([[0, 405]])
+  })
+
+  test('a Claude Code run the connector before it noted the beginning of, and not the run itself, is taken to have ended once it starts; one that note of runs names is not, until it is made sure of', async () => {
+    const ID = '11111111-2222-4333-8444-555555555555'
+    const HELD = '66666666-7777-4888-8999-000000000000'
+    const noted = () => JSON.parse(readFileSync(path.join(home, 'claude-runs.json'), 'utf8'))
+    await start('socket', {}, (home) => {
+      writeFileSync(
+        path.join(home, 'claude-runs.json'),
+        JSON.stringify({
+          [ID]: [
+            [1000, 2000],
+            [3000, null],
+          ],
+          [HELD]: [[4000, null]],
+        }),
+      )
+      // A run of the other that the system cannot be asked about: it stays held, and so does its open run
+      writeFileSync(
+        path.join(home, 'runs.json'),
+        JSON.stringify({ [`claude-code:${HELD}`]: { pid: 2 ** 22 - 7, since: 'not a start this system gives', unsure: true } }),
+      )
+    })
+    await until(() => noted()[ID][1][1] !== null)
+    expect(noted()[ID][0]).toEqual([1000, 2000])
+    expect(noted()[ID][1][1]).toBeGreaterThan(3000)
+    expect(noted()[HELD]).toEqual([[4000, null]])
+  })
+
   test('with reopening switched on, a closed conversation is reopened with the click itself, and Codex’s queue is never used for it', async () => {
     await start()
     stand.closed.add('thread-1')
@@ -5918,6 +5964,16 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
       // Made by a timer on the page, with nobody there: such a conversation is reopened three times in five minutes at most
       const claude = { ...click(9), attended: false, session: { harness: 'claude-code', id: '11111111-2222-4333-8444-000000000009' } }
       noteConversation(claude.session, home)
+      // Held by the person in Claude Code's ordinary mode, which asks: a run of it in Auto, the starting value, is one the page says is raised
+      const record = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', home.replace(/[^A-Za-z0-9]/g, '-'))
+      mkdirSync(record, { recursive: true })
+      writeFileSync(
+        path.join(record, `${claude.session.id}.jsonl`),
+        `${JSON.stringify({ type: 'user', permissionMode: 'default', entrypoint: 'cli', timestamp: new Date(Date.now() - 3_600_000).toISOString(), message: { role: 'user', content: 'hello' } })}\n`,
+      )
+      // Quiet for an hour, as a closed conversation is: one written a moment ago is left alone
+      const anHourAgo = new Date(Date.now() - 3_600_000)
+      utimesSync(path.join(record, `${claude.session.id}.jsonl`), anHourAgo, anHourAgo)
       offered(claude)
       await until(() => stand.t3.asked.length === 1)
       stand.t3.asked[0]!.answer(undefined, true, true)
@@ -5930,6 +5986,9 @@ describe.skipIf(process.platform === 'win32')('a click for a Codex conversation,
         await pause(300)
         search.near = true
       }
+      // None of those ran, so nothing was said of a mode it ran in, and no run of It's was noted in the conversation's record
+      expect(stand.calls.filter((c) => c.name === 'machines:runNoted')).toEqual([])
+      expect(existsSync(path.join(home, 'claude-runs.json'))).toBe(false)
       // And then T3 Code has said, and nothing stands in the way: it is reopened once more
       await until(() => begins === 5, 8000)
       begun!()

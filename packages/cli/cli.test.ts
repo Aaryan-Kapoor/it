@@ -22,7 +22,7 @@ import http from 'node:http'
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { briefClick, describeClick, LIMITS, PORTS, STORAGE, sizeSaid } from '@it/protocol'
+import { briefClick, describeClick, LIMITS, PORTS, STORAGE, sizeSaid, WAKE_MODES } from '@it/protocol'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { ADDONS, SKILL } from './src/addons.generated'
 import { agentApp, agentAppsAbove, appsFrom, linuxProc, type Proc, psAbove, psTable, psWords } from './src/ancestry'
@@ -933,17 +933,26 @@ describe('what a machine tells It of itself, to an It that may be older', () => 
   const full = { connectorVersion: '0.2.0', harnesses: [], system: 'win32', paused: '' }
   const plainest = { connectorVersion: '0.2.0', harnesses: [] }
 
-  test('on Windows the fullest report says too that the machine reopens closed conversations there, and each refused is made again with less', () => {
-    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([{ ...full, reopens: true }, full, plainest])
+  test('on Windows the fullest report says too that the machine reopens closed conversations there, and in the mode chosen, and each refused is made again with less', () => {
+    expect(reports('win32', full, plainest, { plain: false, unsaid: false })).toEqual([
+      { ...full, reopens: true, modes: Object.keys(WAKE_MODES) },
+      { ...full, reopens: true },
+      full,
+      plainest,
+    ])
+    // An It older than the choice of mode that takes the word from Windows is still given that word
+    expect(reports('win32', full, plainest, { plain: false, unsaid: false, unmoded: true })).toEqual([{ ...full, reopens: true }, full, plainest])
     // An It that refused the word from Windows lately is given the rest, and one that refused the fuller report the plainest
-    expect(reports('win32', full, plainest, { plain: false, unsaid: true })).toEqual([full, plainest])
+    expect(reports('win32', full, plainest, { plain: false, unsaid: true })).toEqual([{ ...full, modes: Object.keys(WAKE_MODES) }, full, plainest])
+    expect(reports('win32', full, plainest, { plain: false, unsaid: true, unmoded: true })).toEqual([full, plainest])
     expect(reports('win32', full, plainest, { plain: true, unsaid: false })).toEqual([plainest])
   })
 
-  test('on Linux and macOS it says nothing of it, since the system is enough there', () => {
+  test('on Linux and macOS it says nothing of reopening there, since the system is enough, and on every system that it reopens in the mode chosen', () => {
     for (const platform of ['linux', 'darwin']) {
       const said = { ...full, system: platform }
-      expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([said, plainest])
+      expect(reports(platform, said, plainest, { plain: false, unsaid: false })).toEqual([{ ...said, modes: Object.keys(WAKE_MODES) }, said, plainest])
+      expect(reports(platform, said, plainest, { plain: false, unsaid: false, unmoded: true })).toEqual([said, plainest])
       expect(reports(platform, said, plainest, { plain: true, unsaid: false })).toEqual([plainest])
     }
   })
