@@ -126,6 +126,27 @@ describe('what a run foresees of its browsers', () => {
     expect(heldToAccount([one]).own).toEqual(['browser 1 had a script write or throw: ConvexError: something was refused'])
   })
 
+  test('words a script writes are excused only where they are foreseen as a script’s, in that stretch, and the browser saying the same words by itself is not excused by it', () => {
+    const { during, heldToAccount } = site.expectations()
+    const one = browser()
+    const SITE = 'http://localhost:20000/assets/index.js'
+    const timedOut = 'Error: [CONVEX Q(notifications:list)] [Request ID: 0f603d262c1f6614] Server Error Called by client'
+    const before = { ...says(timedOut, { of: SITE, at: Date.now() - 60_000 }), own: false }
+    const busy = during(one, [
+      { says: /^Error: \[CONVEX Q\(notifications:list\)\] \[Request ID: [0-9a-f]+\] Server Error\b/, byScript: true, times: 2, may: true, because: 'the backend was busy' },
+    ])
+    one.problems.push({ ...says(timedOut, { of: SITE }), own: false }, { ...says(timedOut, { of: SITE }), own: false }, says(timedOut, { of: SITE }))
+    one.problems.push({ ...says(timedOut.replace('notifications:list', 'pages:list'), { of: SITE }), own: false })
+    busy()
+    one.problems.push(before, { ...says(timedOut, { of: SITE, at: Date.now() + 3001 }), own: false })
+    expect(heldToAccount([one]).own).toEqual([
+      `browser 1 said: ${timedOut} (asked of ${SITE})`,
+      `browser 1 had a script write or throw: ${timedOut.replace('notifications:list', 'pages:list')} (asked of ${SITE})`,
+      `browser 1 had a script write or throw: ${timedOut} (asked of ${SITE}), 2 times`,
+    ])
+    expect(busy.times()).toEqual([{ because: 'the backend was busy', said: 2 }])
+  })
+
   test('what was foreseen for sure and never said is told of by what was to provoke it, and what a browser only may say is not', () => {
     const { foresee, heldToAccount } = site.expectations()
     const one = browser()
