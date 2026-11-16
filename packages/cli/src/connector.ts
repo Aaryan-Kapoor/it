@@ -2704,6 +2704,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         return ended
       }
       saidLast.delete(key)
+      // Written down as it begins and as it ends, by a shortened id, a count and a fixed word:
+      // a reopening that worked otherwise left no line at all, and could not be told from none
+      const who = `${a(agentOf(now.harness))} conversation (${short(now.id)})`
+      say(`${who} is reopened for ${ids.length} click${ids.length === 1 ? '' : 's'}`)
       ended = await carryOn(
         how,
         cwd,
@@ -2753,6 +2757,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       if (ended === null) revive(now.harness, now.id)
       // It ended badly by itself: a key it lacked may be in the person's shell by the next try
       else if (ended !== STOPPED && ended !== NOT_STARTED) shellMayHaveChanged()
+      say(`${who} ended its reopened run (${ended === null ? 'done' : ended === STOPPED ? 'stopped' : ended === NOT_STARTED ? 'not_started' : wakeWhy(ended)})`)
       // Ended because its hold on what it was reopened for was lost: nobody stopped it. Its
       // conversation is told, if it is reopened for the same thing again, that its turn was cut off.
       if (ended === STOPPED && lostHold.has(owner)) {
