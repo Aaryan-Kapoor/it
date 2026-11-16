@@ -1,7 +1,21 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import { ALIVE, HARNESSES, INSTALL, newer, noWakeHere, REVIEWS, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import {
+  ALIVE,
+  type Harness as AppName,
+  HARNESSES,
+  INSTALL,
+  newer,
+  noWakeHere,
+  TURN_ON_MS,
+  TURNS_ON,
+  UPGRADE_MS,
+  WAKE_MODES,
+  WAKES,
+  wakeModeOf,
+  wakesOn,
+} from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
@@ -49,7 +63,7 @@ interface Machine {
   harnesses: Harness[]
   wanted: string[]
   wakes: { harness: string; since: number }[]
-  reviewOff?: string[]
+  wakeModes?: { harness: string; mode: string }[]
 }
 
 /**
@@ -378,7 +392,7 @@ export const pausedFor = (why: string, machine: string): string =>
 function MachineCard({ m, now, host }: { m: Machine; now: number; host: string | null }) {
   const toggle = useMutation(api.machines.toggle)
   const wake = useMutation(api.machines.wake)
-  const review = useMutation(api.machines.review)
+  const chooseMode = useMutation(api.machines.wakeMode)
   const rename = useMutation(api.machines.rename)
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
@@ -454,8 +468,9 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
             const wakeable = couldWake && wakesOn(m.system, m.reopens)
             const wakes = m.wakes.some((w) => w.harness === h.id)
             // Whether a conversation It reopens runs under the app's own automatic reviewer: only for an app that has one, and only said where Auto-wake is on
-            const reviewable = wakeable && wakes && (REVIEWS as readonly string[]).includes(h.id)
-            const reviewed = !(m.reviewOff ?? []).includes(h.id)
+            // The mode its reopened conversations run in: only for an app that offers a choice, and only said where Auto-wake is on
+            const modes = wakeable && wakes ? WAKE_MODES[h.id as AppName] : undefined
+            const mode = wakeModeOf(m.wakeModes, h.id)
             return (
               <li key={h.id} className="row">
                 <label className="row-main switch-row">
@@ -507,27 +522,27 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
                     </span>
                   </label>
                 )}
-                {reviewable && (
-                  <label
-                    className="row-detail switch-row wake-row"
-                    title={`Lets ${LABEL[h.id] ?? h.id}’s own reviewer, a model, approve in your place what a reopened conversation would otherwise have to ask you.`}
-                  >
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-checked={reviewed}
-                      aria-label={`Approve for me in a reopened ${LABEL[h.id] ?? h.id} conversation`}
-                      checked={reviewed}
-                      onChange={(e) => act(review({ machineId, harness: h.id, on: e.target.checked }))}
-                    />
-                    <span className="wake-name">Approve for me</span>
-                    {/* In Codex's own words for the mode, and what it means with nobody there, said where it can be read */}
-                    <span className="row-sub">
-                      {reviewed
-                        ? `On. In a conversation It reopens, ${LABEL[h.id] ?? h.id}’s automatic reviewer, a model, decides in your place whether a command that would ask you may run. It allows what it judges to be of low or medium risk even where you never asked for it, and what it allows can run outside the sandbox`
-                        : `Off. A conversation It reopens runs only what ${LABEL[h.id] ?? h.id}’s sandbox and It’s rule let through, and anything that would ask you is refused. This holds from the next time one is reopened`}
-                    </span>
-                  </label>
+                {modes && (
+                  <fieldset className="row-detail wake-modes">
+                    <legend className="wake-name wake-modes-name">How it is reopened</legend>
+                    {modes.choices.map((c) => (
+                      <label key={c.id} className="wake-mode">
+                        <input
+                          className="wake-mode-pick"
+                          type="radio"
+                          name={`wake-mode-${machineId}-${h.id}`}
+                          value={c.id}
+                          checked={mode === c.id}
+                          onChange={() => act(chooseMode({ machineId, harness: h.id, mode: c.id }))}
+                        />
+                        <span className="wake-mode-name">
+                          {c.label}
+                          {c.recommended && <span className="wake-mode-tag">Recommended</span>}
+                        </span>
+                        <span className="row-sub">{c.says}</span>
+                      </label>
+                    ))}
+                  </fieldset>
                 )}
                 {couldWake && !wakeable && <span className="row-detail row-sub">{noWakeHere(m.system)}</span>}
               </li>

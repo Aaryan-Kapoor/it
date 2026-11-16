@@ -410,13 +410,78 @@ export const CODEX_MIN_VERSION = '0.160.0'
  * on a machine where the person has switched that on for it.
  */
 export const WAKES: readonly Harness[] = ['claude-code', 'codex', 'pi', 'opencode', 'hermes']
+/** One permission mode a conversation that It reopens can be run in: its name as kept, its name in the app's own words, and what it lets a reopened conversation do. */
+export interface WakeModeChoice {
+  id: string
+  label: string
+  says: string
+  /** The mode It works best in, which the Machines page marks so. */
+  recommended?: true
+}
+/** The modes an agent app's reopened conversations can be run in, which is the default, and what a mode this It does not know is read as. */
+export interface WakeModeList {
+  default: string
+  unknown: string
+  choices: readonly WakeModeChoice[]
+}
 /**
- * The agent apps whose conversations It reopens under the app's own automatic reviewer, which
- * decides in the person's place whether a command that would ask them may run: Codex's, which
- * its /permissions calls "Approve for me". It is used unless the person turns it off for the
- * app on a machine, under Machines, beside Auto-wake.
+ * The choice that is no mode of the app's own: a conversation is reopened in the mode it was last
+ * in. Listed only for an app that can tell which that was.
  */
-export const REVIEWS: readonly Harness[] = ['codex']
+export const CONVERSATIONS_OWN = 'conversation'
+/**
+ * The permission mode a conversation that It reopens is run in, for each agent app, chosen on each
+ * machine beside the app's Auto-wake switch under Machines. Each app's choices are the modes the
+ * app itself offers for a run with nobody at the keyboard, by the app's own names. Adding an app,
+ * or a mode, is adding to this, and to the command It starts it with (`carrying`): what is kept
+ * is the mode's name, so nothing kept changes. An app that is not here is offered no choice.
+ *
+ * `default` is the mode where none was chosen, as on every machine before the choice existed: it
+ * is one line per app, and the owner may change it. `unknown` is what a name this It does not
+ * know reads as, which a newer It may have written: the mode It used before there was a choice,
+ * and never one that allows more than that.
+ */
+export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
+  codex: {
+    default: 'approve-for-me',
+    unknown: 'ask',
+    choices: [
+      {
+        id: 'full-access',
+        label: 'Full Access',
+        recommended: true,
+        says: 'The mode It works best in: a reopened conversation can do everything it could do with you there, run the project’s commands, write anywhere you can and use the network, with no sandbox and nothing asked. It also means that a press on any screen paired with this It, a phone among them, starts a run on this machine that nothing checks and nothing asks about.',
+      },
+      {
+        id: 'approve-for-me',
+        label: 'Approve for me',
+        says: 'Codex’s automatic reviewer, a model, decides in your place whether a command that would ask you may run. It allows what it judges to be of low or medium risk even where you never asked for it, and what it allows can run outside the sandbox.',
+      },
+      {
+        id: 'ask',
+        label: 'Ask for approval',
+        says: 'It can write in the conversation’s folder and run commands in Codex’s sandbox, with the network on. Nobody is there to approve, so whatever would ask you is refused. On Windows without Codex’s own sandbox, only plain it commands run.',
+      },
+      {
+        id: 'read-only',
+        label: 'Read Only',
+        says: 'It can read files and run commands that only read. Nobody is there to approve, so writing, the network and whatever else would ask you is refused. It’s own commands still run.',
+      },
+    ],
+  },
+}
+/**
+ * The mode an app's conversations are reopened in on a machine, from what that machine keeps
+ * (`wakeModes`): the one chosen, the app's default where none was, and the app's `unknown` for a
+ * name it does not list. Null for an app that has no choice.
+ */
+export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | null | undefined, harness: string): string | null {
+  const list = WAKE_MODES[harness as Harness]
+  if (!list) return null
+  const mode = kept?.find((m) => m.harness === harness)?.mode
+  if (mode === undefined) return list.default
+  return list.choices.some((c) => c.id === mode) ? mode : list.unknown
+}
 /**
  * Whether It reopens a closed conversation on a machine of this system, as the machine names
  * its system (`process.platform`), and as the machine says of itself (`reopens`). On Linux and

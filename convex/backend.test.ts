@@ -2890,52 +2890,60 @@ describe('clicks and their delivery', () => {
     expect((await inbox(m, [], ['codex'])).map((c) => c.id)).toEqual(queued.slice(0, 2))
   })
 
-  test('a reopened Codex runs under its own reviewer until the owner turns that off, which only they can, and the page says why where it went without', async () => {
-    const { alice, m } = await setup()
+  test('a reopened Codex runs in the mode the owner chose for it on that machine, Approve for me where none was, and only the owner’s own browser can choose', async () => {
+    const { t, alice, m } = await setup()
     const thread = { harness: 'codex', id: 'thr-reviewed' }
     await publish(m, 'reviewed', { session: thread })
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'codex', on: true })
-    const listed = async () => (await alice.browser.query(api.machines.list, {})).find((x: { id: string }) => x.id === m.id) as { reviewOff: string[] }
-    // On from the start: nothing is turned off, and a run is told so as it begins
-    expect((await listed()).reviewOff).toEqual([])
-    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, review: true })
-    // What the machine says of a run that went without it, though it was on, is said on the page
-    await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], note: 'Codex was reopened without its automatic reviewer.' })
-    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({
-      note: 'Codex was reopened without its automatic reviewer.',
-    })
-    // A machine cannot turn it off or on, and nor can anything but the owner's browser
-    expect(await code(m.as.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: false }))).not.toBe('ok')
-    expect(await code(alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'claude-code', on: false }))).toBe('invalid')
-    // Turned off by the owner, a run that begins after is told so, whatever its machine had heard, and nothing is said of it on the page
-    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: false })
-    expect((await listed()).reviewOff).toEqual(['codex'])
-    expect((await m.as.query(api.machines.me, {})).reviewOff).toEqual(['codex'])
-    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], note: 'Codex was reopened without its automatic reviewer.' })).toEqual({
-      stopped: false,
-      review: false,
-    })
-    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: null })
-    // Turned on again, it is on again, once
-    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: true })
-    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: true })
-    expect((await listed()).reviewOff).toEqual([])
-    // Only Codex has a reviewer It reopens under: a run of another app is told nothing of one
+    const listed = async () =>
+      (await alice.browser.query(api.machines.list, {})).find((x: { id: string }) => x.id === m.id) as { wakeModes: { harness: string; mode: string }[] }
+    // Nothing chosen: a run begins in the app's default, as on every machine before there was a choice
+    expect((await listed()).wakeModes).toEqual([])
+    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, mode: 'approve-for-me' })
+    // Chosen by the owner, a run that begins after is in it, whatever its machine had heard
+    for (const mode of ['full-access', 'read-only', 'ask', 'approve-for-me']) {
+      await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode })
+      expect((await listed()).wakeModes).toEqual([{ harness: 'codex', mode }])
+      expect((await m.as.query(api.machines.me, {})).wakeModes).toEqual([{ harness: 'codex', mode }])
+      expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, mode })
+    }
+    // Nobody but the owner's own browser chooses: not the machine itself, not a screen paired to the owner, not another person
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'ask' })
+    const screen = await browserOf(t, 'alice', 'screen')
+    const bob = await person(t, 'bob')
+    const other = await machineOf(t, 'alice', 'desktop')
+    for (const caller of [m.as, other.as, screen.browser, bob.browser])
+      expect(await code(caller.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'full-access' }))).not.toBe('ok')
+    expect((await listed()).wakeModes).toEqual([{ harness: 'codex', mode: 'ask' }])
+    // Nor a mode the app does not offer, or an app that has no choice
+    expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'yolo' }))).toBe('invalid')
+    expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'pi', mode: 'ask' }))).toBe('invalid')
+    // A name this It does not know, as a newer one may have written, is read as what It did before, never as more
+    await t.run((ctx) => ctx.db.patch(m.id as never, { wakeModes: [{ harness: 'codex', mode: 'something-newer' }] }))
+    expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [] })).toEqual({ stopped: false, mode: 'ask' })
+    // How the run was in fact reopened, where it is not as chosen, is said on the page, and only by the machine running it, of its own run
+    await m.as.mutation(api.machines.runBegan, { for: thread, run: 'run-1', ids: [] })
+    expect(await other.as.mutation(api.machines.runNoted, { for: thread, run: 'run-1', note: 'not mine to say' })).toEqual({ noted: false })
+    expect(await m.as.mutation(api.machines.runNoted, { for: thread, run: 'run-0', note: 'an older run' })).toEqual({ noted: false })
+    expect(await m.as.mutation(api.machines.runNoted, { for: thread, run: 'run-1', note: 'Codex would not run in Full Access here.' })).toEqual({ noted: true })
+    expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: 'Codex would not run in Full Access here.' })
+    expect(await code(screen.browser.mutation(api.machines.runNoted, { for: thread, run: 'run-1', note: 'x' }))).not.toBe('ok')
+    // Another app, which has no choice, is told nothing of one
     await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness: 'claude-code', on: true })
     expect(await m.as.mutation(api.machines.runBegan, { for: SESSION, ids: [] })).toEqual({ stopped: false })
   })
 
-  test('a computer that takes the place of another takes the word that its reopened Codex runs without the reviewer, as it stands when the place is given up', async () => {
+  test('a computer that takes the place of another takes the mode chosen there for its reopened conversations, as it stands when the place is given up', async () => {
     const { t, alice, m } = await setup()
     const rows = async () => t.run((ctx) => ctx.db.query('machines').collect())
     // A second identity of the same computer asks for its place while the first is still live
     const heir = await machineOf(t, 'alice', 'the laptop again')
     await t.run((ctx) => ctx.db.patch(heir.id as never, { replaces: m.id as never }))
-    // The owner turns the reviewer off on the first after that, and then gives its place up
-    await alice.browser.mutation(api.machines.review, { machineId: m.id, harness: 'codex', on: false })
+    // The owner chooses on the first after that, and then gives its place up
+    await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'read-only' })
     await alice.browser.mutation(api.machines.revoke, { machineId: m.id })
     await settle(t)
-    expect((await rows()).find((x) => x._id === heir.id)?.reviewOff).toEqual(['codex'])
+    expect((await rows()).find((x) => x._id === heir.id)?.wakeModes).toEqual([{ harness: 'codex', mode: 'read-only' }])
   })
 
   test('a click that another machine handed over is lost to a machine that was at work on it, and one that its own agent said was done is not', async () => {

@@ -1,4 +1,20 @@
-import { ALIVE, HARNESSES, LIMITS, newer, noWakeHere, QUOTA, REVIEWS, TURN_ON_AGAIN_MS, TURN_ON_MS, TURNS_ON, UPGRADE_MS, WAKES, wakesOn } from '@it/protocol'
+import {
+  ALIVE,
+  HARNESSES,
+  type Harness,
+  LIMITS,
+  newer,
+  noWakeHere,
+  QUOTA,
+  TURN_ON_AGAIN_MS,
+  TURN_ON_MS,
+  TURNS_ON,
+  UPGRADE_MS,
+  WAKE_MODES,
+  WAKES,
+  wakeModeOf,
+  wakesOn,
+} from '@it/protocol'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -28,8 +44,8 @@ const view = (m: Doc<'machines'>) => ({
   reopens: m.reopens ?? false,
   // Only where It reopens conversations at all: what was switched on for a machine of another system says nothing
   wakes: wakesOn(m.system, m.reopens) ? (m.wakes ?? []) : [],
-  // The apps whose reopened conversations are run without their own automatic reviewer: every other app of `REVIEWS` has it
-  reviewOff: m.reviewOff ?? [],
+  // The permission mode each app's reopened conversations run in, where one was chosen: any other is `automatic` (see `wakeModeOf`)
+  wakeModes: m.wakeModes ?? [],
   runs: m.runs ?? [],
   // How many conversations open there have not loaded It's add-on: `it status` says so
   notLoaded: m.offAt === undefined ? (m.notLoaded ?? []).length : 0,
@@ -158,22 +174,43 @@ export const wake = mutation({
 })
 
 /**
- * The person says whether a conversation of one agent app that It reopens on a machine runs
- * under that app's own automatic reviewer (`REVIEWS`), which decides in their place whether a
- * command that would ask them may run, or with nothing that can approve such a command, so that
- * it is refused. It is on until they turn it off. Turning it on lets a model approve for them,
- * so, as with Auto-wake, the switch is theirs alone: from a browser paired as their own, and
- * never by a machine.
+ * The person chooses the permission mode a conversation of one agent app that It reopens on a
+ * machine runs in: one of the modes that app offers (`WAKE_MODES`). Only for an app that has a
+ * choice. What is chosen decides what a press on any page of that app's may start on the machine
+ * with nobody watching, so, as with Auto-wake, the choice is theirs alone: from a browser paired as
+ * their own, and never by a machine, a screen, or a page.
  */
-export const review = mutation({
-  args: { machineId: v.id('machines'), harness: v.string(), on: v.boolean() },
-  handler: async (ctx, { machineId, harness, on }) => {
+export const wakeMode = mutation({
+  args: { machineId: v.id('machines'), harness: v.string(), mode: v.string() },
+  handler: async (ctx, { machineId, harness, mode }) => {
     const { user } = await requireOwner(ctx)
     const m = await ownMachine(ctx, user._id, machineId)
-    if (!(REVIEWS as readonly string[]).includes(harness)) fail('invalid', 'It reopens no conversation of that agent app under a reviewer of its own.')
-    const off = (m.reviewOff ?? []).filter((h) => h !== harness)
-    await ctx.db.patch(m._id, { reviewOff: on ? off : [...off, harness] })
+    const list = WAKE_MODES[harness as Harness]
+    if (!list) fail('invalid', 'There is no choice of how a conversation of that agent app is reopened.')
+    if (!list.choices.some((c) => c.id === mode)) fail('invalid', 'That agent app has no such mode.')
+    const others = (m.wakeModes ?? []).filter((w) => w.harness !== harness)
+    await ctx.db.patch(m._id, { wakeModes: [...others, { harness, mode }].slice(-HARNESSES.length) })
+    log('machine.wake_mode', { userId: user._id, machineId: m._id, harness, mode })
     return null
+  },
+})
+
+/**
+ * The machine says how a conversation it is running for It was in fact reopened, where that is not
+ * as the person chose: the app refused the mode, and the run went on in another, or the app said
+ * it took less. The page says it beside the run, for as long as the run is there. Only of a run
+ * this machine has, by its name.
+ */
+export const runNoted = mutation({
+  args: { for: session, run: v.string(), note: v.string() },
+  handler: async (ctx, { for: s, run, note }) => {
+    const { machine } = await requireMachine(ctx)
+    const runs = machine.runs ?? []
+    if (!runs.some((r) => r.harness === s.harness && r.sessionId === s.id && r.run === run)) return { noted: false }
+    await ctx.db.patch(machine._id, {
+      runs: runs.map((r) => (r.harness === s.harness && r.sessionId === s.id && r.run === run ? { ...r, note: note.slice(0, 300) } : r)),
+    })
+    return { noted: true }
   },
 })
 
@@ -311,12 +348,11 @@ export const runBegan = mutation({
     // connector that names no clicks is one from before this was asked, and is taken at its word)
     if (ids !== undefined && !(wakesOn(machine.system, machine.reopens) && (machine.wakes ?? []).some((w) => w.harness === s.harness)))
       return { stopped: false, off: true }
-    // Whether it runs under its app's own reviewer is asked here too, where the person's switch
-    // is kept, so that one turned off a moment ago holds for this run. What the machine says of
-    // how it was reopened is kept only where it was to have the reviewer and does not.
-    const reviews = (REVIEWS as readonly string[]).includes(s.harness)
-    const reviewed = reviews && !(machine.reviewOff ?? []).includes(s.harness)
-    const said = reviewed && note ? { note: note.slice(0, 300) } : {}
+    // The mode it runs in is asked here too, where the person's choice is kept, so that one changed
+    // a moment ago holds for this run. What the machine says of how it was reopened is kept only
+    // where it was to be reopened in the automatic mode and was not.
+    const mode = wakeModeOf(machine.wakeModes, s.harness)
+    const said = note ? { note: note.slice(0, 300) } : {}
     const others = (machine.runs ?? []).filter((r) => r.harness !== s.harness || r.sessionId !== s.id)
     await ctx.db.patch(machine._id, {
       runs: [
@@ -324,7 +360,7 @@ export const runBegan = mutation({
         { harness: s.harness.slice(0, 40), sessionId: s.id.slice(0, 200), since: Date.now(), ...(run ? { run: run.slice(0, 64) } : {}), ...said },
       ].slice(-RUNS_MOST),
     })
-    return { stopped: false, ...(reviews ? { review: reviewed } : {}) }
+    return { stopped: false, ...(mode !== null ? { mode } : {}) }
   },
 })
 

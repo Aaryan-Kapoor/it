@@ -150,7 +150,7 @@ describe('an agent app that has It’s add-on turned off', () => {
   })
 })
 
-describe('Approve for me, beside Codex’s Auto-wake', () => {
+describe('how a reopened conversation runs, chosen beside an app’s Auto-wake', () => {
   const connected = (over: Record<string, unknown> = {}) =>
     machine({
       harnesses: [
@@ -161,38 +161,56 @@ describe('Approve for me, beside Codex’s Auto-wake', () => {
       wakes: [
         { harness: 'claude-code', since: NOW },
         { harness: 'codex', since: NOW },
+        { harness: 'pi', since: NOW },
       ],
       ...over,
     })
-  const reviewSwitch = (name: string) => row(name).querySelector<HTMLInputElement>('input[aria-label^="Approve for me"]')
+  const choices = (name: string) => [...row(name).querySelectorAll<HTMLInputElement>('.wake-modes input[type="radio"]')]
+  const chosen = (name: string) => choices(name).find((c) => c.checked)?.value
 
-  test('is on until the owner turns it off, says that Codex’s reviewer decides in their place, and is offered for Codex alone', async () => {
+  test('offers each mode Codex itself offers, by Codex’s own names, Full Access marked as recommended, and Approve for me where none was chosen', async () => {
     machines = [connected()]
     await shown()
-    const codex = reviewSwitch('Codex')
-    expect(codex?.checked).toBe(true)
-    expect(row('Codex').textContent).toContain('Codex’s automatic reviewer, a model, decides in your place')
-    // And the limit a person most needs to know: it is no check that they asked for what it allows
-    expect(row('Codex').textContent).toContain('It allows what it judges to be of low or medium risk even where you never asked for it')
-    expect(reviewSwitch('Claude Code')).toBeNull()
-    expect(reviewSwitch('Pi')).toBeNull()
-    await act(async () => codex!.click())
-    expect(asked).toEqual([{ name: 'machines:review', args: { machineId: 'machine-1', harness: 'codex', on: false } }])
+    const codex = row('Codex')
+    expect(choices('Codex').map((c) => c.value)).toEqual(['full-access', 'approve-for-me', 'ask', 'read-only'])
+    expect([...codex.querySelectorAll('.wake-mode-name')].map((n) => n.textContent)).toEqual([
+      'Full AccessRecommended',
+      'Approve for me',
+      'Ask for approval',
+      'Read Only',
+    ])
+    expect(chosen('Codex')).toBe('approve-for-me')
+    // Each says what a reopened conversation may then do, Full Access both halves of it
+    expect(codex.textContent).toContain(
+      'a press on any screen paired with this It, a phone among them, starts a run on this machine that nothing checks and nothing asks about',
+    )
+    expect(codex.textContent).toContain('It allows what it judges to be of low or medium risk even where you never asked for it')
+    expect(codex.textContent).toContain('whatever would ask you is refused')
+    // Choosing asks It with the machine, the app and the mode's name, and nothing else
+    await act(async () => choices('Codex')[0]!.click())
+    expect(asked).toEqual([{ name: 'machines:wakeMode', args: { machineId: 'machine-1', harness: 'codex', mode: 'full-access' } }])
   })
 
-  test('turned off, says that nothing can approve anything and what is refused, and turns back on', async () => {
-    machines = [connected({ reviewOff: ['codex'] })]
+  test('shows what was chosen, and reads a name it does not know as what It did before', async () => {
+    machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'read-only' }] })]
     await shown()
-    const codex = reviewSwitch('Codex')
-    expect(codex?.checked).toBe(false)
-    expect(row('Codex').textContent).toContain('anything that would ask you is refused. This holds from the next time one is reopened')
-    await act(async () => codex!.click())
-    expect(asked).toEqual([{ name: 'machines:review', args: { machineId: 'machine-1', harness: 'codex', on: true } }])
+    expect(chosen('Codex')).toBe('read-only')
+    act(() => root.unmount())
+    host.remove()
+    machines = [connected({ wakeModes: [{ harness: 'codex', mode: 'something-newer' }] })]
+    await shown()
+    expect(chosen('Codex')).toBe('ask')
   })
 
-  test('is not offered where Auto-wake is off for Codex, since nothing is reopened for it to judge', async () => {
+  test('is offered for no app the choice would change nothing for, and not where Auto-wake is off', async () => {
+    machines = [connected()]
+    await shown()
+    expect(choices('Pi')).toEqual([])
+    expect(choices('Claude Code')).toEqual([])
+    act(() => root.unmount())
+    host.remove()
     machines = [connected({ wakes: [] })]
     await shown()
-    expect(reviewSwitch('Codex')).toBeNull()
+    expect(choices('Codex')).toEqual([])
   })
 })

@@ -150,24 +150,35 @@ export const interruptedByCodex = (printed: string): boolean =>
   // biome-ignore lint/suspicious/noControlCharactersInRegex: the colours a terminal is sent
   INTERRUPTED_SAID.test(printed.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, ''))
 
-/** What the bar above a page says where Codex was reopened without its reviewer though the person left it on. */
+/** What the bar above a page says where Codex was to be reopened with Approve for me and was not. */
 export const CODEX_UNREVIEWED =
-  'Codex was reopened without its automatic reviewer, because It could not tell that this Codex has one. So it may run only what Codex’s sandbox and It’s rule let through, and anything that would need approval is refused.'
+  'Codex was reopened in Ask for approval, not Approve for me, because It could not tell that this Codex has an automatic reviewer. So it may run only what Codex’s sandbox and It’s rule let through, and whatever would need approval is refused.'
 
 /**
- * Whether a reopened Codex conversation runs under Codex's automatic reviewer, and what the
- * page is to say where it does not though the person left it on (`off` is their switch under
- * Machines). The reviewer and the way of choosing it from the command line are in every Codex
- * It accepts, from `CODEX_MIN_VERSION` on, so it is used where the Codex found on this machine
- * says it is one of those. One whose version was not read, or that is older, is reopened as it
- * would be with the switch off, and the page says why.
+ * The mode a reopened Codex conversation is in fact run in, from the one chosen under Machines,
+ * and what the page is to say where that is not the one chosen. The automatic reviewer, and the
+ * way of choosing it from the command line, are in every Codex It accepts, from
+ * `CODEX_MIN_VERSION` on, so Approve for me is used where the Codex found on this machine says it
+ * is one of those; one whose version was not read, or that is older, is reopened in Ask for
+ * approval, and the page says why. Every other mode is Codex's sandbox and approvals alone, which
+ * every Codex It accepts has.
  */
-export function codexReview(version: string | null | undefined, off: boolean): { review: boolean; note: string | null } {
-  if (off) return { review: false, note: null }
+export function codexMode(version: string | null | undefined, chosen: string): { mode: string; note: string | null } {
+  if (chosen !== 'approve-for-me') return { mode: chosen, note: null }
   const known = typeof version === 'string' && /^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version)
-  if (known && !newer(CODEX_MIN_VERSION, version)) return { review: true, note: null }
-  return { review: false, note: CODEX_UNREVIEWED }
+  if (known && !newer(CODEX_MIN_VERSION, version)) return { mode: chosen, note: null }
+  return { mode: 'ask', note: CODEX_UNREVIEWED }
 }
+
+/**
+ * Why a reopened Codex run did not start: Codex refused the mode it was given, because what an
+ * administrator requires of it forbids that mode (Codex 0.167.2, `core/src/config/mod.rs`). The
+ * conversation is then reopened in another mode at once, and the page says so (see `carry`).
+ */
+export const CODEX_MODE_REFUSED = 'Codex refused the mode it was to be reopened in, as its administrator’s requirements forbid it'
+/** What Codex prints where its requirements forbid a mode outright, and where it takes a lesser one in its place. */
+const REFUSED_SAID = /cannot be used because requirements do not allow|is disallowed by requirements; fallback to a requirement-compliant value also failed/
+export const CODEX_TOOK_LESS_SAID = /Configured value for `[a-z_]+` is disallowed by requirements; falling back/
 
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
@@ -229,8 +240,8 @@ export function carrying(
     start?: string[] | null
     /** The system the command is for, where it is not this one: only tests say. */
     platform?: NodeJS.Platform
-    /** For Codex: whether what would ask the person goes to Codex's automatic reviewer (see `codexReview`). */
-    review?: boolean
+    /** The mode chosen for this app's reopened conversations on this machine (`WAKE_MODES`), as `wakeModeFor` gives it. */
+    wakeMode?: string
   },
 ): Carrying | string {
   const app = APP[harness] ?? harness
@@ -255,24 +266,22 @@ export function carrying(
     // sandbox's accounts, and does not take it back. It's folder is not given there. `it`
     // reaches It there by the rule that lets it out of the sandbox, which runs it as the person.
     const itsFolder = (has.platform ?? process.platform) === 'win32' ? [] : ['-c', `sandbox_workspace_write.writable_roots=[${JSON.stringify(has.itHome)}]`]
+    // The mode chosen for it under Machines (`WAKE_MODES`), each as Codex itself sets it up: its
+    // sandbox, and who approves. `codex exec` takes approvals as "never" unless its reviewer is
+    // asked for, so in every mode but Approve for me nothing can approve anything
+    const mode = has.wakeMode ?? 'ask'
+    const sandbox =
+      mode === 'full-access'
+        ? ['-c', 'sandbox_mode="danger-full-access"']
+        : mode === 'read-only'
+          ? ['-c', 'sandbox_mode="read-only"']
+          : ['-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=true', ...itsFolder]
+    const reviewed = mode === 'approve-for-me'
     return {
-      argv: [
-        ...codex,
-        'exec',
-        'resume',
-        '--skip-git-repo-check',
-        '-c',
-        'sandbox_mode="workspace-write"',
-        '-c',
-        'sandbox_workspace_write.network_access=true',
-        ...itsFolder,
-        ...(has.review ? CODEX_REVIEWED : CODEX_NOT_REVIEWED),
-        session,
-        '-',
-      ],
-      input: has.review ? `${text}\n\n${CODEX_REVIEWED_NOTE}` : text,
+      argv: [...codex, 'exec', 'resume', '--skip-git-repo-check', ...sandbox, ...(reviewed ? CODEX_REVIEWED : CODEX_NOT_REVIEWED), session, '-'],
+      input: reviewed ? `${text}\n\n${CODEX_REVIEWED_NOTE}` : text,
       app,
-      ...(has.review ? { reviewed: true } : {}),
+      ...(reviewed ? { reviewed: true } : {}),
     }
   }
   if (harness === 'pi') {
@@ -366,6 +375,8 @@ export function carryOn(
     overtime?: () => void
     /** Called where the app ended badly by itself, killed or failing, in the middle of whatever it was doing: what it left running is ended before this answers. */
     brokeOff?: () => void
+    /** Given what the app has printed so far, a few times in its first seconds, for what it says of how it started: see `CODEX_TOOK_LESS_SAID`. */
+    noticed?: (printed: string) => void
   } = {},
 ): Promise<string | null> {
   const patience = opts.patience ?? 15 * 60_000
@@ -498,6 +509,18 @@ export function carryOn(
       if (!ending && !stopped) opts.overtime?.()
       quit(`${how.app} had not finished in fifteen minutes`)
     }, patience)
+    // What the app says of how it started, which it says in its first seconds, is looked at as it
+    // is printed, so that the page can say it while the run is there
+    if (opts.noticed && printed) {
+      let looks = 0
+      const look = setInterval(() => {
+        if (over || ++looks > 40) return clearInterval(look)
+        try {
+          opts.noticed?.(tail(printed))
+        } catch {}
+      }, 500)
+      look.unref?.()
+    }
     child.once('error', (err) =>
       end(
         (err as NodeJS.ErrnoException).code !== 'ENOENT'
@@ -529,6 +552,12 @@ export function carryOn(
         byCodex = signal === null && how.reviewed === true && printed !== null && interruptedByCodex(tail(printed))
       } catch {}
       if (byCodex) return end(CODEX_REVIEW_ENDED)
+      // Codex would not start in the mode it was given: no turn ran, and nothing of one is to be ended
+      let refusedMode = false
+      try {
+        refusedMode = signal === null && how.app === 'Codex' && printed !== null && REFUSED_SAID.test(tail(printed))
+      } catch {}
+      if (refusedMode) return end(CODEX_MODE_REFUSED)
       // Ended badly by itself, killed or failing, in the middle of its turn: what it was asked
       // is tried again, and nothing it left running is to be there beside that. What it left
       // is ended as a run that is stopped is, and the run is answered for only once nothing

@@ -279,10 +279,11 @@ export async function revokeMachine(
     const heir = live.filter((x) => x.replaces === m._id).sort((a, b) => b.createdAt - a.createdAt || b._creationTime - a._creationTime)[0]
     if (heir) {
       await ctx.db.patch(m._id, { replacedBy: heir._id })
-      // With the pages goes the word that this computer's reopened conversations run without their
-      // app's reviewer, as it stands now: it may have been said after the heir first asked
-      const reviewOff = [...new Set([...(heir.reviewOff ?? []), ...(m.reviewOff ?? [])])]
-      if (reviewOff.length) await ctx.db.patch(heir._id, { reviewOff })
+      // With the pages goes the mode chosen for each app's reopened conversations on this computer,
+      // as it stands now: it may have been chosen after the heir first asked
+      const chosen = new Map((heir.wakeModes ?? []).map((w) => [w.harness, w.mode]))
+      for (const w of m.wakeModes ?? []) chosen.set(w.harness, w.mode)
+      if (chosen.size) await ctx.db.patch(heir._id, { wakeModes: [...chosen].map(([harness, mode]) => ({ harness, mode })) })
       await ctx.scheduler.runAfter(0, internal.machines.inherit, { from: m._id, to: heir._id })
     }
   }
