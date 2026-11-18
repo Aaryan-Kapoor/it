@@ -2,7 +2,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { forgetAll, keepFor, letGoElsewhere } from './lib'
+import { api, forgetAll, keepFor, letGoElsewhere } from './lib'
 import {
   drain,
   dropOld,
@@ -19,6 +19,10 @@ import {
   unsent,
   watchOutbox,
 } from './outbox'
+
+// The token this browser holds now, as the site's own record of its session gives it
+const held = vi.hoisted(() => ({ token: null as string | null }))
+vi.mock('./session', async (actual) => ({ ...(await actual<typeof import('./session')>()), heldToken: () => held.token }))
 
 const envelope = (id: string, over: Partial<Sent> = {}): Sent => ({ v: 1, clientActionId: id, name: 'approve', payload: '{"n":1}', contentVersion: 1, ...over })
 const refuse = (code: string, extra: Record<string, unknown> = {}) => new ConvexError({ code, message: code, ...extra })
@@ -1592,5 +1596,255 @@ describe('a click or typed message given up with nobody there to be told', () =>
     window.dispatchEvent(new StorageEvent('storage', { key: 'it.givenup.alice', newValue: null }))
     unwatch()
     expect(givenUpFor('alice')).toBeNull()
+  })
+})
+
+describe('a click its tab is hidden or closed on while it is being judged', () => {
+  const sent: { url: unknown; init: RequestInit }[] = []
+  const lastWords = () =>
+    sent.map(({ url, init }) => ({ url, ...init, body: JSON.parse(String(init.body)) as { path: string; args: Record<string, unknown> } }))
+  const closing = () => window.dispatchEvent(new Event('pagehide'))
+  const hidden = () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+  /** A judge that has not made up its mind, and the click it is judging, sent by a page that is still there. */
+  function judged(client: never, id: string, over: Partial<Sent> = {}, files: Blob[] = []) {
+    let decide: (attended: boolean) => void = () => {}
+    const sending = submit(
+      client,
+      'alice',
+      'page1',
+      envelope(id, { attended: false, ...over }),
+      () => true,
+      () => new Promise((r) => (decide = r)),
+      files,
+    ).catch((e: unknown) => e)
+    return { sending, decide: (attended: boolean) => decide(attended) }
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 10))
+  const kept = (id: string) => JSON.parse(localStorage.getItem(`it.outbox.alice.page1.${id}`) ?? 'null') as { replayUntil?: number; envelope: Sent } | null
+
+  beforeEach(() => {
+    outboxBelongsTo('alice', 'session-1')
+    held.token = 'a-token'
+    sent.length = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: unknown, init: RequestInit) => {
+        sent.push({ url, init })
+        return Promise.resolve(new Response('{}'))
+      }),
+    )
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    Reflect.deleteProperty(document, 'visibilityState')
+  })
+
+  test('is sent as the tab closes, in a request the browser keeps going, as the page’s own click under the deadline it keeps', async () => {
+    const b = backend(['never'])
+    const one = judged(b.client, 'click-closing-01')
+    await settle()
+    expect(b.calls).toEqual([])
+    const deadline = kept('click-closing-01')?.replayUntil
+    expect(deadline).toBeGreaterThan(Date.now())
+    closing()
+    expect(lastWords()).toEqual([
+      {
+        url: '/api/mutation',
+        method: 'POST',
+        keepalive: true,
+        headers: { 'content-type': 'application/json', authorization: 'Bearer a-token' },
+        body: {
+          path: getFunctionName(api.actions.submit),
+          format: 'json',
+          args: {
+            artifactId: 'page1',
+            displayKey: 'a-display-key-000001',
+            envelope: { ...envelope('click-closing-01'), attended: false },
+            expectedSession: 'session-1',
+            replayUntil: deadline,
+          },
+        },
+      },
+    ])
+    // Still kept, under the same deadline, until an answer is heard: by this tab if it is still there, or by the next to open the site
+    await settle()
+    expect(kept('click-closing-01')?.replayUntil).toBe(deadline)
+    // And the tab, still there, sends it as the same click, though the person turns out to have been there
+    one.decide(true)
+    await settle()
+    expect(b.calls.map((c) => c.envelope)).toEqual([{ ...envelope('click-closing-01'), attended: false }])
+    expect(b.calls[0]).toMatchObject({ replayUntil: deadline, expectedSession: 'session-1' })
+    // Once only, however often the tab is hidden or closed after
+    hidden()
+    closing()
+    expect(sent).toHaveLength(1)
+  })
+
+  test('is sent as the tab is hidden, which is all a phone may say before it ends the tab, and not again as it closes', async () => {
+    const b = backend([{ actionId: 'a1' }])
+    const one = judged(b.client, 'click-hidden-001')
+    await settle()
+    hidden()
+    closing()
+    expect(lastWords().map((w) => w.body.args.envelope)).toEqual([{ ...envelope('click-hidden-001'), attended: false }])
+    expect(await one.sending).toEqual({ actionId: 'a1' })
+    expect(b.calls.map((c) => c.envelope.attended)).toEqual([false])
+    expect(stored()).toEqual([])
+  })
+
+  test('a tab still there after it was hidden takes the answer to that request for what became of the click, where It accepted it', async () => {
+    vi.mocked(fetch).mockImplementationOnce((url, init) => {
+      sent.push({ url, init: init as RequestInit })
+      return Promise.resolve(new Response(JSON.stringify({ status: 'success', value: { actionId: 'a-closing' } })))
+    })
+    const b = backend([{ actionId: 'never-asked' }])
+    const one = judged(b.client, 'click-taken-0001')
+    await settle()
+    hidden()
+    expect(await one.sending).toEqual({ actionId: 'a-closing' })
+    expect(b.calls).toEqual([])
+    expect(stored()).toEqual([])
+  })
+
+  test('and sends the click itself only once that request has been answered otherwise, so that the page is never told it failed while that request may yet be taken', async () => {
+    let answer: (r: Response) => void = () => {}
+    vi.mocked(fetch).mockImplementationOnce((url, init) => {
+      sent.push({ url, init: init as RequestInit })
+      return new Promise<Response>((r) => (answer = r))
+    })
+    const b = backend([{ actionId: 'a1' }])
+    const one = judged(b.client, 'click-waits-0001')
+    await settle()
+    hidden()
+    one.decide(true)
+    await settle()
+    expect(sent).toHaveLength(1)
+    expect(b.calls).toEqual([])
+    expect(stored()).toEqual(['it.outbox.alice.page1.click-waits-0001'])
+    answer(new Response(JSON.stringify({ status: 'error', errorMessage: 'limit' }), { status: 400 }))
+    expect(await one.sending).toEqual({ actionId: 'a1' })
+    expect(b.calls.map((c) => c.envelope)).toEqual([{ ...envelope('click-waits-0001'), attended: false }])
+    expect(stored()).toEqual([])
+  })
+
+  test('several are sent oldest first, each as itself', async () => {
+    const b = backend(['never', 'never'])
+    judged(b.client, 'click-several-01')
+    await settle()
+    judged(b.client, 'click-several-02')
+    await settle()
+    closing()
+    expect(lastWords().map((w) => (w.body.args.envelope as Sent).clientActionId)).toEqual(['click-several-01', 'click-several-02'])
+  })
+
+  test('nothing is sent as the tab closes for a click whose judging is over, which has gone its own way', async () => {
+    const b = backend([{ actionId: 'a1' }])
+    const one = judged(b.client, 'click-judged-002')
+    await settle()
+    one.decide(true)
+    expect(await one.sending).toEqual({ actionId: 'a1' })
+    expect(b.calls.map((c) => c.envelope.attended)).toEqual([true])
+    closing()
+    expect(sent).toEqual([])
+  })
+
+  test('nor for a click made with nobody judging it', async () => {
+    const b = backend(['never'])
+    void submit(b.client, 'alice', 'page1', envelope('click-unjudged-1')).catch(() => {})
+    await settle()
+    closing()
+    expect(sent).toEqual([])
+  })
+
+  /** A backend that takes clicks and never gives a deadline. */
+  const noDeadline = () =>
+    ({
+      mutation: vi.fn((fn: unknown) => (getFunctionName(fn as never) === 'actions:replayGrant' ? new Promise(() => {}) : Promise.resolve({ actionId: 'a2' }))),
+      connectionState: () => ({ isWebSocketConnected: true }),
+    }) as never
+
+  test('a click is left as it was, to be judged and sent by the tab or when the site is next opened, where it cannot go as the tab closes', async () => {
+    // No deadline yet, and none given to this tab before: it is not sent with none, and never with one of its own making
+    const waits = judged(noDeadline(), 'click-nogrant-01')
+    await settle()
+    closing()
+    expect(sent).toEqual([])
+    expect(kept('click-nogrant-01')?.replayUntil).toBeUndefined()
+    // The tab, still there, judges it, and it waits for its deadline as before
+    waits.decide(true)
+    await settle()
+    // No token held: nothing is sent without one
+    held.token = null
+    const b = backend([{ actionId: 'a1' }])
+    const one = judged(b.client, 'click-notoken-01')
+    await settle()
+    closing()
+    expect(sent).toEqual([])
+    one.decide(true)
+    expect(await one.sending).toEqual({ actionId: 'a1' })
+    expect(b.calls.map((c) => c.envelope.attended)).toEqual([true])
+    held.token = 'a-token'
+    // Too large for what may go as the tab closes
+    const large = judged(backend([{ actionId: 'a3' }]).client, 'click-large-0001', { payload: '"'.repeat(31 * 1024) })
+    await settle()
+    closing()
+    expect(sent).toEqual([])
+    large.decide(true)
+    expect(await large.sending).toEqual({ actionId: 'a3' })
+  })
+
+  test('a click whose own deadline has not come back is sent under the one this tab was given last under the same session, kept with it first', async () => {
+    const first = backend([{ actionId: 'a1' }])
+    expect(await submit(first.client, 'alice', 'page1', envelope('click-earlier-01'))).toEqual({ actionId: 'a1' })
+    const given = (first.client as { mutation: { mock: { results: { value: Promise<{ until?: number }> }[] } } }).mutation.mock.results[0]!.value
+    const deadline = (await given).until
+    expect(deadline).toBeGreaterThan(Date.now())
+    judged(noDeadline(), 'click-nogrant-02')
+    await settle()
+    closing()
+    expect(lastWords().map((w) => [(w.body.args.envelope as Sent).clientActionId, w.body.args.replayUntil])).toEqual([['click-nogrant-02', deadline]])
+    expect(kept('click-nogrant-02')?.replayUntil).toBe(deadline)
+  })
+
+  test('but not one given under another session, nor one with little time left', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const first = backend([{ actionId: 'a1' }])
+      expect(await submit(first.client, 'alice', 'page1', envelope('click-earlier-02'))).toEqual({ actionId: 'a1' })
+      // Days later the deadline it was given has less than an hour to run
+      vi.setSystemTime(Date.now() + 6 * 86400_000 - 30 * 60_000)
+      judged(noDeadline(), 'click-nogrant-03')
+      await settle()
+      closing()
+      expect(sent).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+    outboxBelongsTo('alice', 'session-2')
+    judged(noDeadline(), 'click-nogrant-04')
+    await settle()
+    closing()
+    expect(sent).toEqual([])
+  })
+
+  test('a click that carries files is left for the tab, which sends its files first', async () => {
+    const b = backend(['never'])
+    judged(b.client, 'click-files-0001', { payload: '{"photo":{"file":1}}' }, [new Blob(['a photo'], { type: 'image/jpeg' })])
+    await settle()
+    closing()
+    expect(sent).toEqual([])
+  })
+
+  test('a click made under a pairing that has ended is not sent as the tab closes, under the one there is now', async () => {
+    const b = backend(['never'])
+    judged(b.client, 'click-paired-001')
+    await settle()
+    outboxBelongsTo('alice', 'session-2')
+    closing()
+    expect(sent).toEqual([])
+    outboxBelongsTo('alice', 'session-1')
   })
 })

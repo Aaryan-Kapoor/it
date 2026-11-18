@@ -19,6 +19,7 @@ import { ConvexError } from 'convex/values'
 import { kept as kept_ } from './kept'
 import { api, backendNow, backendTakes, displayKey, type Id, letGoOf, note, refusal, timesLetGo, whenLetGo } from './lib'
 import { discardPending, hasPending, holdPending, watchPending } from './pending'
+import { heldToken } from './session'
 import { sha256Of } from './sha256'
 
 const PREFIX = 'it.outbox.'
@@ -323,10 +324,7 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
   const mine = () => stillPairedFor(e.user, began)
   if (!mine()) throw new Error('This browser’s pairing has ended.')
   const expected = e.session ? { expectedSession: e.session } : {}
-  // When the person did it, sent every time it is sent: a click sent again is the same click,
-  // and It keeps what it was first told. Only to a backend that has said it takes it, which an
-  // older one refuses the whole call for; kept here all the same, for when it does
-  const made = e.madeAt === undefined || e.madeWithin === undefined || !backendTakes(TAKES.madeAt) ? {} : { madeAt: e.madeAt, madeWithin: e.madeWithin }
+  const made = madeOf(e)
   if (e.operation?.kind === 'answer')
     return convex.mutation(api.notifications.answer, {
       id: e.operation.id as Id<'notifications'>,
@@ -338,26 +336,16 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
   // A legacy entry is never given a fresh deadline. The backend can confirm its old receipt,
   // but cannot safely treat an unknown old identity as a new click.
   if (e.format === 2 && e.replayUntil === undefined) {
-    const saved = memoryGrants.get(key)
-    if (!saved && localStorage.getItem(key) === null && memoryGrants.size >= MAX)
-      throw new Error('Too many requests could not be saved. Keep this tab open and retry them before sending more.')
-    const grant = saved?.session === session ? saved : await convex.mutation(api.actions.replayGrant, {})
-    if (!mine()) throw new Error('This browser’s pairing has ended.')
-    e.replayUntil = grant.until
-    // Save the grant before dispatch so a retry keeps the same deadline. If storage refuses
-    // the update, leave the original request untouched: nothing has been dispatched yet.
-    // A request that could not be saved at all keeps its grant only in this tab.
-    if (localStorage.getItem(key) === null) memoryGrants.set(key, { session, until: e.replayUntil! })
-    else {
-      try {
-        localStorage.setItem(key, JSON.stringify(e))
-      } catch {
-        throw new Error('This could not be saved. Try again when this browser has room.')
-      }
+    // Asked for already while its page was judging it, or asked for now
+    const asking = granting.get(e)
+    if (asking) await asking.catch(() => {})
+    if (e.replayUntil === undefined) {
+      const grant = grantFor(convex, key)
+      keepGrant(e, key, ('then' in grant ? await grant : grant).until, mine)
     }
   }
   if (!mine()) throw new Error('This browser’s pairing has ended.')
-  const replay = { ...expected, ...(e.replayUntil === undefined ? {} : { replayUntil: e.replayUntil }) }
+  const replay = replayOf(e)
   // Its files first, all of them, under the click's own id: the click is sent only once It has them
   if (e.files?.length) {
     const attachment = await attach(convex, e, key, replay, mine, waiting)
@@ -381,6 +369,161 @@ async function send(convex: ConvexReactClient, e: Entry, key: string, waiting: (
         ...made,
       })
     : convex.mutation(api.actions.submit, { artifactId: e.artifactId as Id<'artifacts'>, displayKey: displayKey(), envelope: e.envelope, ...replay, ...made })
+}
+
+/**
+ * When the person did it, sent every time a click is sent: a click sent again is the same click,
+ * and It keeps what it was first told. Only to a backend that has said it takes it, which an
+ * older one refuses the whole call for; kept here all the same, for when it does.
+ */
+const madeOf = (e: Entry): { madeAt?: number; madeWithin?: number } =>
+  e.madeAt === undefined || e.madeWithin === undefined || !backendTakes(TAKES.madeAt) ? {} : { madeAt: e.madeAt, madeWithin: e.madeWithin }
+/** The session a click was made under, and the deadline it may be sent again until, as every sending of it says them. */
+const replayOf = (e: Entry): { expectedSession?: string; replayUntil?: number } => ({
+  ...(e.session ? { expectedSession: e.session } : {}),
+  ...(e.replayUntil === undefined ? {} : { replayUntil: e.replayUntil }),
+})
+
+/**
+ * The grant of a deadline until which a click may be sent again: the one this tab keeps in memory
+ * for a click this browser would not store, or a new one asked of the backend.
+ */
+function grantFor(convex: ConvexReactClient, key: string): { until: number } | Promise<{ until: number }> {
+  const saved = memoryGrants.get(key)
+  if (!saved && localStorage.getItem(key) === null && memoryGrants.size >= MAX)
+    throw new Error('Too many requests could not be saved. Keep this tab open and retry them before sending more.')
+  return saved?.session === session ? saved : convex.mutation(api.actions.replayGrant, {})
+}
+/**
+ * Keeps a click's deadline with it before the click is first sent under it, so that every sending
+ * of it, from this tab or another, as the tab closes or when the site is next opened, goes under
+ * that one deadline. Saved before it is used: if storage refuses the update, the click is left as
+ * it was, with no deadline, and nothing has been sent under one yet. A request that could not be
+ * saved at all keeps its grant only in this tab. A click given its deadline meanwhile keeps that one.
+ */
+function keepGrant(e: Entry, key: string, until: number, mine: () => boolean): void {
+  if (!mine()) throw new Error('This browser’s pairing has ended.')
+  if (session === e.session && (lastGrant?.session !== session || lastGrant.until < until)) lastGrant = { session, until }
+  if (e.replayUntil !== undefined) return
+  if (localStorage.getItem(key) === null) memoryGrants.set(key, { session, until })
+  else {
+    try {
+      localStorage.setItem(key, JSON.stringify({ ...e, replayUntil: until }))
+    } catch {
+      throw new Error('This could not be saved. Try again when this browser has room.')
+    }
+  }
+  e.replayUntil = until
+}
+/**
+ * The latest deadline this tab was given under the session it has now. A click that has none yet
+ * as the tab closes may be sent under it: it was fixed when it was given, and is never later than
+ * one the backend would give now, so It still keeps whatever it accepts under it for as long as the
+ * deadline lasts.
+ */
+let lastGrant: { session: string | null; until: number } | null = null
+/** The asking for a click's deadline begun while its page judges it, so that the sending after waits for that one and asks no other. */
+const granting = new WeakMap<Entry, Promise<void>>()
+/** Asks for a click's deadline while its page judges it, so that it has one to be sent under if the tab closes before the judging is done. */
+function grantEarly(convex: ConvexReactClient, e: Entry, key: string, mine: () => boolean): void {
+  if (e.format !== 2 || e.replayUntil !== undefined || granting.has(e)) return
+  const asking = (async () => {
+    keepGrant(e, key, (await grantFor(convex, key)).until, mine)
+  })()
+  granting.set(e, asking)
+  const done = () => {
+    if (granting.get(e) === asking) granting.delete(e)
+  }
+  asking.then(done, done)
+}
+
+/**
+ * What the site sends as the tab is closed may come to this much, of the 64 KiB a browser lets
+ * every request it keeps going after a tab has gone come to at once: the rest is left for the
+ * site's other last words.
+ */
+const AS_IT_CLOSES_BYTES = 48 * 1024
+/** How long a deadline this tab was given before must have yet to run for a click to be sent under it as the tab closes. */
+const GRANT_LEFT_MS = 3600_000
+/**
+ * The clicks this tab has kept and is still judging whether the person was at the page for (see
+ * `submit`), by their names, each with the envelope it is to be sent with, whether it is still
+ * this tab's to send, and what ends the judging at once, as a click its page sent by itself.
+ */
+const judging = new Map<string, { entry: Entry; envelope: Sent; ours: () => boolean; unjudged: (went: Promise<Accepted | null>) => void }>()
+/** What It made of a click it accepted. */
+type Accepted = { actionId: string }
+/**
+ * The tab is being hidden or closed while it still judges some of the clicks it kept. A phone
+ * may end a hidden tab with nothing more said, and a closed tab runs nothing more: a click left
+ * so would wait in this browser until the site was next opened, and only then be sent, as one
+ * the page sent by itself. So each such click is sent now, in a request the browser keeps going
+ * after the tab has gone, to the backend's address for calling a function, with the token this
+ * browser holds now, as the click it would have been sent as had the judging not ended: under its
+ * own id and session, the deadline it was given, and when it was made, and as one the page sent
+ * by itself. Its judging ends with that, and the tab, if it is still there, waits for the answer to
+ * that request before it sends the click itself: where It accepted it, that is what became of it,
+ * and otherwise the tab sends it as the same click, so that the page is never told it failed while
+ * that request may yet be taken. It takes a click sent again under the same id as the click it already has, and keeps what
+ * it was first told, so the click arrives once, however many times it is sent, and is never
+ * said to be the person's for having been sent twice. Nothing is said of it here: the click is
+ * kept until an answer is heard, by this tab or by the next to open the site, which sends it again
+ * and hears that It has it.
+ *
+ * A click that has no deadline yet, carries files, waits its turn behind clicks It said came too
+ * fast, or was made under another pairing than the one this tab has now is left as it was, and
+ * goes as it would have gone before; so is one for which there is no room left in the request.
+ */
+function sendAsItCloses(): void {
+  if (!judging.size) return
+  const token = heldToken()
+  if (!token) return
+  let room = AS_IT_CLOSES_BYTES
+  for (const [key, one] of [...judging].sort(([, a], [, b]) => a.entry.at - b.entry.at)) {
+    const e = one.entry
+    if (!one.ours() || e.format !== 2 || e.session !== session || e.files?.length || lanes.has(laneOf(e.user, e.artifactId))) continue
+    // Its own deadline has not come back yet: it is given the latest this tab has under this
+    // session, kept with it before it goes, while that has a while yet to run
+    if (e.replayUntil === undefined && lastGrant?.session === session && lastGrant.until > Date.now() + GRANT_LEFT_MS) {
+      try {
+        keepGrant(e, key, lastGrant.until, one.ours)
+      } catch {}
+    }
+    if (e.replayUntil === undefined) continue
+    const body = JSON.stringify({
+      path: 'actions:submit',
+      args: { artifactId: e.artifactId, displayKey: displayKey(), envelope: { ...one.envelope, attended: false }, ...replayOf(e), ...madeOf(e) },
+      format: 'json',
+    })
+    const bytes = new TextEncoder().encode(body).length
+    if (bytes > room) continue
+    room -= bytes
+    judging.delete(key)
+    let went: Promise<Accepted | null>
+    try {
+      went = fetch('/api/mutation', {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body,
+      }).then(
+        async (answer) => {
+          const said = (await answer.json().catch(() => null)) as { status?: unknown; value?: { actionId?: unknown } } | null
+          return answer.ok && said?.status === 'success' && typeof said.value?.actionId === 'string' ? { actionId: said.value.actionId } : null
+        },
+        () => null,
+      )
+    } catch {
+      went = Promise.resolve(null)
+    }
+    one.unjudged(went)
+  }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', sendAsItCloses)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') sendAsItCloses()
+  })
 }
 
 /**
@@ -741,6 +884,7 @@ export function outboxBelongsTo(user: string | null, under: string | null = null
   const replaced = user !== pairedFor || under !== session
   if (replaced) {
     memoryGrants.clear()
+    lastGrant = null
     // Nor what became of clicks sent under another pairing, or another session of the same person's
     finals.clear()
     pairings++
@@ -1177,11 +1321,35 @@ async function sendNow(
   let turn: (() => void) | undefined
   try {
     if (judge) {
-      entry.envelope = { ...envelope, attended: await judge() }
+      // Judged while the tab is there. A tab that is hidden or closed meanwhile sends it as it
+      // goes, as one the page sent by itself, and ends the judging so that this sends it as the
+      // same (`sendAsItCloses`): its deadline is asked for now, so that it has one to go under then
+      let unjudged: (went: Promise<Accepted | null>) => void = () => {}
+      const cut = new Promise<{ went: Promise<Accepted | null> }>((resolve) => {
+        unjudged = (went) => resolve({ went })
+      })
+      judging.set(key, { entry, envelope, ours: () => mine() && !letGo(), unjudged })
+      grantEarly(convex, entry, key, mine)
+      let judged: boolean | { went: Promise<Accepted | null> }
+      try {
+        judged = await Promise.race([judge(), cut])
+      } finally {
+        if (judging.get(key)?.entry === entry) judging.delete(key)
+      }
+      entry.envelope = { ...envelope, attended: judged === true }
       if (kept && !letGo()) {
         try {
           localStorage.setItem(key, JSON.stringify(entry))
         } catch {}
+      }
+      // Sent as the tab was hidden: what It answered that request is waited for. Accepted, it is
+      // done with; anything else, and it is sent from here as it would have been
+      if (typeof judged === 'object') {
+        const took = await judged.went
+        if (took && mine() && !letGo()) {
+          memoryGrants.delete(key)
+          return took
+        }
       }
     }
     for (let attempt = 0; ; attempt++) {
