@@ -2939,7 +2939,9 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.machines.runNoted, note)).toEqual({ noted: true })
     expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: 'refused:full-access:approve-for-me' })
     // Another app, which has no choice, is told nothing of one
-    expect(await m.as.mutation(api.machines.runBegan, { for: { harness: 'pi', id: 'pi-1' }, modes: ['codex', 'claude-code'] })).toEqual({ stopped: false })
+    expect(await m.as.mutation(api.machines.runBegan, { for: { harness: 'openclaw', id: 'openclaw-1' }, modes: ['codex', 'claude-code'] })).toEqual({
+      stopped: false,
+    })
   })
 
   test('the backend does not let a machine whose It is from before the choice of mode run Codex where it may run more than the owner chose, and the page says where it runs less', async () => {
@@ -2991,17 +2993,19 @@ describe('clicks and their delivery', () => {
       await publish(m, slug, { session: thread })
       await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness, on: true })
       const note = async () => (await alice.browser.query(api.artifacts.get, { slug })).run?.note ?? null
-      // A connector of this It is told the mode, which is the starting value where nothing is chosen
-      expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: true, run: 'new-run' })).toEqual({ stopped: false, mode: starting })
+      // A connector of this It, which names the apps whose modes it knows, is told the mode, which is the starting value where nothing is chosen
+      expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: ['codex', 'claude-code', ...apps], run: 'new-run' })).toEqual({
+        stopped: false,
+        mode: starting,
+      })
       await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'new-run' })
-      // An older one, with nothing chosen, is let through, and runs as it always ran: for Pi and
-      // OpenCode that is the starting value, and nothing is said. For Hermes it is Approvals, which
-      // allows less than YOLO, the starting value, and the page says so here (see the report: the
-      // rule is that nothing is said where nothing is stored, which runBegan does not know yet)
-      const olderBegins = () => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], run: 'old-run' })
+      // An older one is one that names none of the three, as It 0.1.45 does, which knows Codex's and
+      // Claude Code's modes alone. With nothing chosen it is let through and runs as it always ran,
+      // and nothing is said, for Hermes too, whose starting value allows more than that It runs
+      const olderBegins = () => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: ['codex', 'claude-code'], run: 'old-run' })
       expect(await olderBegins()).toEqual({ stopped: false, mode: starting })
       expect(await fails()).toEqual([])
-      expect(await note()).toBe(starting === before ? null : `older:${starting}:${before}`)
+      expect(await note()).toBeNull()
       await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'old-run' })
       // Chosen as it always ran, it runs so, with nothing to say
       await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness, mode: before })
