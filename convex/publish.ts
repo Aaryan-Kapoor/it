@@ -178,8 +178,8 @@ export const _begin = internalMutation({
       if (new TextEncoder().encode(args.state).length > LIMITS.stateBytes) fail('limit', 'The starting state is too large.')
       const parsed = parseJson(args.state)
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) fail('invalid', 'State is a JSON object.')
-      // What it says the page keeps is held to what a page could keep, as a patch's is
-      if (Object.hasOwn(parsed, STORE_KEY)) checkKept((parsed as Record<string, unknown>)[STORE_KEY])
+      // What it says the page keeps is held to what a page could keep, as a patch's is, and to how many values a page may keep
+      if (Object.hasOwn(parsed, STORE_KEY)) checkKept((parsed as Record<string, unknown>)[STORE_KEY], true)
     }
     if (args.session && (args.session.harness.length > 40 || args.session.id.length > 200)) fail('invalid', 'That is not a session.')
     // Taking a page over means its clicks come to the conversation that said so, so there has to be one
