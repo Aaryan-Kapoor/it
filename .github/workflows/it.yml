@@ -102,15 +102,27 @@ jobs:
   # out, because their stand-in connector listens at a socket in a folder, which
   # nothing can on Windows, and the tests that run the command or the service
   # as a program skip themselves there. What is left does not all pass on
-  # Windows yet, and the job there does not block.
+  # Windows yet, and the jobs there do not block.
+  #
+  # Each system's unit tests are cut into two halves by vitest's own --shard,
+  # each on a runner of its own, and together the halves run every test file
+  # once. A half is a file's worth at least, and connector.test.ts alone is
+  # most of one: more halves would only wait longer for a runner, on macOS
+  # most of all, where runners are fewest. Whatever runs once beside vitest,
+  # under Bun or in Python, runs in the first half, which is the lighter one.
+  # The job that gates a merge reads all the halves as one result, as it read
+  # one job for each system: it passes only when every half on Linux and on
+  # macOS has passed.
   test:
-    name: Unit tests (${{ matrix.os }})
+    name: Unit tests (${{ matrix.os }}, ${{ matrix.shard }} of 2)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        shard: [1, 2]
         include:
           - os: ubuntu-latest
             experimental: false
@@ -171,28 +183,29 @@ jobs:
         if: ${{ !cancelled() && env.IT_BACKEND_BIN == '' }}
         run: echo "::warning::The first run left no backend program on this system, so the tests that start it are skipped in what follows, and the job fails for the first run all the same"
       - if: ${{ !cancelled() }}
-        run: npm test
+        run: npm test -- --shard=${{ matrix.shard }}/2
       # Separate processes, so that a failure in one suite does not prevent the others from
-      # running, and each reports its own result.
+      # running, and each reports its own result. Each is run once for its system, in the
+      # first half.
       - name: The door, its notifications and what It asks of itself, under Bun
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         run: bun test ./packages/cli/door.test.ts ./packages/cli/push.test.ts ./packages/cli/direct.test.ts
       - name: Streamed record downloads, under Bun
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         run: bun test ./packages/cli/export.test.ts
       # On Linux alone: on macOS Bun's own test runner ends with a fault of Bun's in the middle
       # of these, and the standalone program's first run, which is what they stand for, is run
       # there by the job that starts the programs
       - name: The service, under Bun
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && matrix.shard == 1 && runner.os == 'Linux' }}
         run: bun test ./packages/cli/serve.test.ts
       # Not on Windows: vitest cannot load its own files under Bun there, so the step ran no test
       # and failed. The content service is run under Bun on Windows by the other workflow, in the
       # standalone program that the product's browser suite is run against.
       - name: The content service, under Bun
-        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        if: ${{ !cancelled() && matrix.shard == 1 && runner.os != 'Windows' }}
         run: npm run test:bun -w @it/content
-      - if: ${{ !cancelled() && runner.os == 'Linux' }}
+      - if: ${{ !cancelled() && matrix.shard == 1 && runner.os == 'Linux' }}
         run: npm run test:hermes
 
   # The programs people install: one file per system, built once. Every job
