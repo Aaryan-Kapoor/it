@@ -4517,6 +4517,7 @@ describe('displays and machines', () => {
         'artifacts.take.unowned',
         'turns.say',
         'machines.notLoaded',
+        'delivery.receipts',
       ],
       now: expect.any(Number),
     })
