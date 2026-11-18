@@ -1978,6 +1978,47 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
   )
 
   test.skipIf(process.platform === 'win32')(
+    'the end of a reopened run hides no turn begun in its conversation after it, and is told though its hand-over is confirmed long after the run ended',
+    async () => {
+      const bin = holdingCodex()
+      const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+      made.push(folder)
+      standIn()
+      await start('socket', {}, () => noteConversation({ harness: 'codex', id: 'thread-1' }, folder))
+      stand.closed.add('thread-1')
+      // It does not take the hand-over for a while
+      let refusing = true
+      stand.answer = (name) => (name === 'delivery:handedOff' && refusing ? Promise.reject(new Error('no answer')) : undefined)
+      stand.watching.get('machines:me')!({ wanted: ['codex'], wakes: [{ harness: 'codex', since: Date.now() - 60_000 }] })
+      offered(onFirst(1))
+      await pass()
+      await until(() => given(bin, 0).includes('[action click-1]'))
+      const says = (running: boolean) =>
+        stand.calls.findIndex((c) => c.name === 'turns:say' && c.args.running === running && (c.args.for as { id: string } | undefined)?.id === 'thread-1')
+      writeFileSync(path.join(bin, 'go-0'), '')
+      await until(() => called('delivery:handedOff').includes('click-1'))
+      // Well past the time for which what an add-on said of a turn is believed, and nothing is said of the turn until the hand-over is taken
+      const from = Date.now() - performance.now()
+      const wall = vi.spyOn(Date, 'now').mockImplementation(() => from + performance.now() + 60_000)
+      try {
+        await pass(3)
+        expect(says(false)).toBe(-1)
+        refusing = false
+        await pass()
+        await until(() => says(false) >= 0)
+        expect(stand.calls[says(false)]!.args).toEqual({ for: { harness: 'codex', id: 'thread-1' }, running: false, untold: true })
+        // The person opens the conversation in a Codex of their own, which holds it, and begins a turn: it is told as running
+        writeFileSync(path.join(bin, 'holding-thread-1'), '')
+        await local('/session', { method: 'POST', body: { harness: 'codex', session: 'thread-1', busy: true } })
+        await pass()
+        await until(() => says(true) > says(false))
+      } finally {
+        wall.mockRestore()
+      }
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')(
     'a hand-over that hands nothing over is not followed at once by another: what kept the click back is asked about again at the next second, and not without pause',
     async () => {
       const bin = holdingCodex()

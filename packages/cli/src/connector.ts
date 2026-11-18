@@ -971,6 +971,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     owed: boolean
     behind: boolean
     finished: boolean
+    /**
+     * That the turn `finished` speaks of is known to be over because It's own run of the
+     * conversation ended by itself, whatever its add-on said or did not say: taken as ended
+     * where nothing is known of a turn, and never over a turn that is said to be running.
+     */
+    ranOut?: boolean
     /** Changes whenever a hand-over arrives, a watch merges in or the turn changes, so an older reply cannot end a newer watch. */
     generation: number
     idleAt: number | null
@@ -1017,8 +1023,9 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     }
     // The turn it stood behind is over, and its own is waited for
     if (running === false) w.behind = false
-    // Its own turn was over before its receipt came: that is known, and nothing is waited for
-    if (w.finished && running === false) {
+    // Its own turn was over before its receipt came: that is known, and nothing is waited for.
+    // So it is where It's own run of the conversation ended and nothing is known of a turn since
+    if (w.finished && (running === false || (w.ranOut && running === null))) {
       w.owed = false
       w.want = 'ended'
       return
@@ -1039,9 +1046,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * click begins a turn of its own, as one does that was put into a conversation that was not
    * working, and as one does that Codex's queue holds until the running turn is done.
    * `finished` says that this turn has begun and ended already, as a short one can before the
-   * add-on hears that its prompt was taken.
+   * add-on hears that its prompt was taken, and `ranOut` that It knows so because its own run of
+   * the conversation, which carried the click, has ended.
    */
-  const handedOver = (click: Offered, key: string, starts: boolean, finished = false): void => {
+  const handedOver = (click: Offered, key: string, starts: boolean, finished = false, ranOut = false): void => {
     if (!click.session || turnsTaken === false) return
     // No more conversations than are listened for, and no more ids of one than It has room for:
     // past that its turn goes untold, and its page says what it says where nothing is known of one
@@ -1064,8 +1072,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     }
     w.generation++
     w.names.add(click.session.id)
-    if (finished) w.finished = true
-    else if (starts) {
+    if (finished) {
+      w.finished = true
+      if (ranOut) w.ranOut = true
+    } else if (starts) {
       w.owed = true
       // Codex hands over what its queue took only once the turn that is running is done. Claude
       // Code takes what is put into a running turn in that turn
@@ -1101,6 +1111,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       there.owed ||= w.owed
       there.behind ||= w.behind
       there.finished ||= w.finished
+      there.ranOut ||= w.ranOut
       // It may be in the middle of being told of the one that is let go of here: what it is
       // told from now on is noted for the one that is kept, so that its ending is told as well
       w.into = there
@@ -1223,7 +1234,10 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         // A newer hand-over or turn change still needs its own ending told.
         if (w.generation !== generation) return
         // Only this watch's own: one it was merged into meanwhile may have an ending of its own still to tell
-        if (ended) w.finished = false
+        if (ended) {
+          w.finished = false
+          w.ranOut = false
+        }
         // Something may have been handed to it while It was being told
         lookAtTurn(key, w)
         if (watchedTurns.get(key) === w && (w.want === 'ended' || w.want === 'unknown') && !w.told.size && !w.maybe.size) watchedTurns.delete(key)
@@ -3942,17 +3956,16 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           }
         }
         if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
-        // A conversation It reopened, whose run ran to its end: no turn of it is running now, since
-        // its program has ended. Its pages are told that its turn is over once the hand-over is
-        // confirmed, where its add-on said nothing of it, so that they do not go on saying that
-        // its agent has what was done there. Not of a run the person stopped
+        // A conversation It reopened, whose run ran to its end: the turn that run carried is over,
+        // since its program has ended. Its pages are told so once the hand-over is confirmed, where
+        // its add-on said nothing of it, so that they do not go on saying that its agent has what was
+        // done there; a turn said to be running since is told as running. Not of a run the person stopped
         const ranOut = reopening && refused === null
-        if (ranOut) turnsSaid.set(follow(key), { on: false, at: Date.now() })
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
           toConfirm.set(c.id, 'queue')
           // A conversation It reopened is shown as working by its run, which has ended by now
-          if (!reopening || ranOut) handedOver(c, follow(key), true, ranOut)
+          if (!reopening || ranOut) handedOver(c, follow(key), true, ranOut, ranOut)
           // The queue, or the reopening, starts a turn in a conversation that was not working
           counting.set(c.id, { at: c.at, harness, path: 'woke' })
           if (c !== click) {
