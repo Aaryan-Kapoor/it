@@ -877,13 +877,24 @@ trust_level = "trusted"
   // that was given this run's It folder is a fault: it is said, and ended
   let left = ours()
   // Codex's own fetch of its plugin catalogue is given half a minute to end by itself, as it
-  // does once GitHub answers, and is let be if it has not; anything else left is a fault still
-  const catalogue = () => (process.platform === 'linux' ? fetchingCatalogue(left) : new Set())
-  for (const end = Date.now() + 30_000; left.length > 0 && catalogue().size === left.length && Date.now() < end; await sleep(500)) left = ours()
-  const fetching = catalogue()
-  if (fetching.size)
-    console.log(`note  Codex's fetch of its plugin catalogue was still running after half a minute, in ${fetching.size} processes, and is let be`)
+  // does once GitHub answers, and is let be if it has not; anything else left is a fault still.
+  // A helper is known by what started it, which can be asked only while that is running. So
+  // what was once found to be of the fetch is remembered as such, and what is left is read
+  // again after every wait: what is weighed is what is running then, and a helper that outlives
+  // the fetch for a moment, or ends during a wait, is not taken for something else left behind.
+  const fetching = new Set()
+  const onlyTheFetch = () => {
+    if (process.platform === 'linux') for (const pid of fetchingCatalogue(left)) fetching.add(pid)
+    return left.length > 0 && left.every(({ pid }) => fetching.has(pid))
+  }
+  for (const end = Date.now() + 30_000; onlyTheFetch() && Date.now() < end; ) {
+    await sleep(500)
+    left = ours()
+  }
+  const letBe = left.filter(({ pid }) => fetching.has(pid))
   const leftOver = left.filter(({ pid }) => !fetching.has(pid))
+  if (letBe.length && !leftOver.length)
+    console.log(`note  Codex's fetch of its plugin catalogue was still running after half a minute, in ${letBe.length} processes, and is let be`)
   check('nothing the run started is left running', leftOver.length === 0, JSON.stringify(leftOver))
   await ended(left)
   writeFileSync(path.join(logs, 'model.json'), JSON.stringify({ seen: model.seen, others: model.others }, null, 1))
