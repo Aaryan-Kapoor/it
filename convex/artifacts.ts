@@ -518,6 +518,11 @@ async function dropWaiting(
   /** The page the stop was asked from: everything that waits on it from before the stop goes, however it is addressed. */
   artifactId?: Id<'artifacts'>,
 ): Promise<{ count: number; more: boolean }> {
+  // A step with no place to go by reads the clicks that have none, which are those of its time
+  // and no others, so that no number of later clicks is read on the way to them. They are read
+  // in the order they were recorded, the oldest first, and of what is read those made up to the
+  // stop's moment are dropped: what was made after it was done knowing the agent was stopped
+  const old = (x: Doc<'actions'>) => x.createdAt <= at
   let count = 0
   // How many of them still counted as waiting for the person: all but those of a page that has
   // been deleted meanwhile, which gave back everything that was waiting on it when it went
@@ -535,36 +540,21 @@ async function dropWaiting(
         break
       }
       // Written after the stop: the person did that knowing the agent was stopped, and it is kept
-      const batch =
-        sequence === undefined
-          ? await ctx.db
-              .query('actions')
-              .withIndex('by_user_route', (q) =>
-                q
-                  .eq('userId', userId)
-                  .eq('delivery', delivery)
-                  .eq('harness', of.harness)
-                  .eq('sessionId', of.id)
-                  .eq('machineId', addressed)
-                  .eq('parkedBy', aside)
-                  .lte('createdAt', at),
-              )
-              .filter((q) => q.eq(q.field('sequence'), undefined))
-              .take(room)
-          : await ctx.db
-              .query('actions')
-              .withIndex('by_user_route_sequence', (q) =>
-                q
-                  .eq('userId', userId)
-                  .eq('delivery', delivery)
-                  .eq('harness', of.harness)
-                  .eq('sessionId', of.id)
-                  .eq('machineId', addressed)
-                  .eq('parkedBy', aside)
-                  .lt('sequence', sequence),
-              )
-              .take(room)
-      if (batch.length === room) more = true
+      const read = await ctx.db
+        .query('actions')
+        .withIndex('by_user_route_sequence', (q) => {
+          const waiting = q
+            .eq('userId', userId)
+            .eq('delivery', delivery)
+            .eq('harness', of.harness)
+            .eq('sessionId', of.id)
+            .eq('machineId', addressed)
+            .eq('parkedBy', aside)
+          return sequence === undefined ? waiting.eq('sequence', undefined) : waiting.lt('sequence', sequence)
+        })
+        .take(room)
+      const batch = sequence === undefined ? read.filter(old) : read
+      if (read.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
@@ -595,18 +585,15 @@ async function dropWaiting(
         more = true
         break
       }
-      const batch =
-        sequence === undefined
-          ? await ctx.db
-              .query('actions')
-              .withIndex('by_artifact_delivery', (q) => q.eq('artifactId', artifactId).eq('delivery', delivery).lte('createdAt', at))
-              .filter((q) => q.eq(q.field('sequence'), undefined))
-              .take(room)
-          : await ctx.db
-              .query('actions')
-              .withIndex('by_artifact_delivery_sequence', (q) => q.eq('artifactId', artifactId).eq('delivery', delivery).lt('sequence', sequence))
-              .take(room)
-      if (batch.length === room) more = true
+      const read = await ctx.db
+        .query('actions')
+        .withIndex('by_artifact_delivery_sequence', (q) => {
+          const waiting = q.eq('artifactId', artifactId).eq('delivery', delivery)
+          return sequence === undefined ? waiting.eq('sequence', undefined) : waiting.lt('sequence', sequence)
+        })
+        .take(room)
+      const batch = sequence === undefined ? read.filter(old) : read
+      if (read.length === room) more = true
       for (const x of batch) {
         await ctx.db.patch(x._id, {
           delivery: 'handed_off',
