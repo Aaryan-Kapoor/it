@@ -1327,7 +1327,10 @@ function readNote(): Note {
   /** Something with names in it, as the note is, and as what it says is unsettled or behind is. */
   const named = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
   const text = (value: unknown): value is string => typeof value === 'string'
-  const number = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value)
+  /** A moment as a clock gives it, which is how It notes when: a whole number of milliseconds. */
+  const moment = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0
+  /** A number that a port can have. */
+  const port = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535
   if (!named(read)) throw wrong()
   /** What the note has under a name, where it has anything there, and only as the kind It writes there. */
   const field = <T>(name: keyof Note, is: (value: unknown) => value is T): T | undefined => {
@@ -1343,16 +1346,16 @@ function readNote(): Note {
   )
   const behind = field(
     'behind',
-    (value): value is Behind => named(value) && text(value.functions) && (value.why === 'refused' || value.why === 'no_copy') && number(value.at),
+    (value): value is Behind => named(value) && text(value.functions) && (value.why === 'refused' || value.why === 'no_copy') && moment(value.at),
   )
   const note: Note = {
-    made: field('made', number),
+    made: field('made', moment),
     release: field('release', text),
     it: field('it', text),
     functions: field('functions', text),
     load: field('load', text),
     functionsOf: field('functionsOf', text),
-    port: field('port', number),
+    port: field('port', port),
     loading: field('loading', text),
     unsettled: unsettled && { it: unsettled.it, functions: unsettled.functions },
     behind: behind && { functions: behind.functions, why: behind.why, at: behind.at },

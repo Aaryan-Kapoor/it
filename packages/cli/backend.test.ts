@@ -506,6 +506,13 @@ describe.skipIf(!program || windows)('the database of a folder', () => {
       { functionsOf: { version: '9.9.9' } },
       { load: false },
       { port: '4700' },
+      // Of the kind It writes, and no port that It could have counted from, or no moment a clock gives
+      { port: -1 },
+      { port: 4700.5 },
+      { port: 65536 },
+      { made: -1 },
+      { made: 1794996084321.5 },
+      { behind: { functions: 'abc', why: 'refused', at: 1.5 } },
       { loading: 7 },
     ]
     for (const change of malformed) {
