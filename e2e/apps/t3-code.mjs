@@ -604,7 +604,12 @@ try {
   // T3 Code tells the Claude Code it runs which thread it runs for, and Claude Code passes that on
   // to the commands of the conversation, which is how `it create` there names its thread
   if (!windows) {
-    const named = readFileSync(at('claude-threads'), 'utf8').split('\n').filter(Boolean)
+    // Written by T3 Code's `claude` just after the line that named the conversation, so waited for in its own right
+    const named =
+      (await untilTrue(
+        async () => (existsSync(at('claude-threads')) ? readFileSync(at('claude-threads'), 'utf8').split('\n').filter(Boolean) : null),
+        30_000,
+      )) ?? []
     check(
       'T3 Code names the thread to the Claude Code it starts for it, in T3CODE_THREAD_ID, by the id its own server knows the thread by',
       named.length > 0 && named.every((t) => t === thread),
@@ -722,8 +727,6 @@ try {
   if (!check('It runs, with its connector', await startIt(), readFileSync(path.join(logs, 'serve.log'), 'utf8').slice(-1500)))
     throw new Error('It did not start')
 
-  // A command of the conversation that names the thread beside it, as a stale or a false
-  // T3CODE_THREAD_ID would: the thread it names counts for nothing, and is never noted for it
   const notedThreads = () => {
     try {
       return JSON.parse(readFileSync(path.join(itHome, 't3-threads.json'), 'utf8'))
@@ -731,15 +734,24 @@ try {
       return {}
     }
   }
-  await it(['status'], { extra: { IT_HARNESS: 'claude-code', IT_SESSION: conversation, T3CODE_THREAD_ID: beside } })
+  const connectorLog = () => readFileSync(path.join(logs, 'serve.log'), 'utf8')
+  // A command of the conversation beside, which names the first thread, as a stale or a false
+  // T3CODE_THREAD_ID would: T3 Code does not bear it out, the thread it names counts for nothing,
+  // and is never noted for that conversation. Asked before anything has noted either conversation,
+  // so that the connector reads the thread that is named
+  await it(['status'], { extra: { IT_HARNESS: 'claude-code', IT_SESSION: besideConversation, T3CODE_THREAD_ID: thread } })
+  // T3 Code may answer for the thread named a moment after the running threads have answered the command
+  const logSays = (code) => untilTrue(async () => code.test(connectorLog()), 15_000)
+  const unborneSaid = await logSays(/t3_claim_unborne/)
   check(
-    'a command of the conversation that names the thread beside it does not have that thread noted for it',
-    notedThreads()[`claude-code:${conversation}`] !== beside && Object.values(notedThreads()).every((t) => t !== beside),
-    notedThreads(),
+    'a command of another conversation that names the thread does not have that thread noted for it, and the connector says T3 Code did not bear it out',
+    notedThreads()[`claude-code:${besideConversation}`] !== thread && unborneSaid,
+    { noted: notedThreads(), log: connectorLog().slice(-800) },
   )
 
   // A page made in the conversation the thread holds, named as Claude Code's add-on names it, in
-  // the thread T3 Code names to the commands it runs
+  // the thread T3 Code names to the commands it runs: the connector reads that thread, and T3
+  // Code bears it out
   const inThread = { IT_HARNESS: 'claude-code', IT_SESSION: conversation, T3CODE_THREAD_ID: thread }
   const slug = `t3-check-${Date.now().toString(36)}`
   const html = '<h1>T3 Code check</h1><button id=go onclick="It.action(&quot;approve&quot;,{n:1})">Approve</button>'
@@ -749,11 +761,14 @@ try {
     made.arrives?.byItself === true && made.arrives?.via === 't3',
     made.arrives ?? made,
   )
+  check(
+    'and the connector says T3 Code bore out the thread the command named, and notes that thread for the conversation',
+    (await logSays(/t3_claim_borne/)) && notedThreads()[`claude-code:${conversation}`] === thread,
+    { noted: notedThreads(), log: connectorLog().slice(-800) },
+  )
   const asStatus = await it(['status'], { extra: inThread })
   check('and so does `it status`', asStatus.arrives?.byItself === true && asStatus.arrives?.via === 't3', asStatus.arrives ?? asStatus)
-  check('and the thread is noted for the conversation', notedThreads()[`claude-code:${conversation}`] === thread, notedThreads())
   // The connector is part of the service, and writes where the service does
-  const connectorLog = () => readFileSync(path.join(logs, 'serve.log'), 'utf8')
   check(
     'and the connector says the conversation is held in a thread of T3 Code',
     /claude-code conversation \([0-9a-f]{8}\) is held in a thread of T3 Code/i.test(connectorLog()),
