@@ -852,6 +852,10 @@ trust_level = "trusted"
       (windows ? again.err.includes('prefix_rule(pattern=["it"], decision="allow")') : /your rules file was left unchanged/.test(again.err)),
     again.err || again.out,
   )
+  // Codex's own commands, which setup runs, leave Codex asking the internet about its plugins for
+  // a while after they have ended. That is waited for, so that the run ends with nothing of its own left
+  for (const until = Date.now() + 60_000; Date.now() < until && ours().some((p) => p.command.some((word) => /ls-remote|remote-https/.test(word))); )
+    await sleep(1000)
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {
