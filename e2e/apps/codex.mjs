@@ -35,6 +35,12 @@
 //    outside the sandbox. The check passes only when Codex sends that to its reviewer, which is
 //    the stand-in here too and allows it, and then runs it. That shows that Codex consulted its
 //    reviewer and acted on the answer, and nothing of what a real reviewer would decide.
+// 4. What setup says of a conversation It reopens. Codex is given full access in its own
+//    settings, and the rules file is replaced by one of the person's own without the rule that
+//    lets `it` out. `it setup` is run again, with Auto-wake on for Codex as it is from the start.
+//    On Windows it says that a conversation It reopens runs in the mode chosen for it, where
+//    `it` reaches It only through that rule, and gives the rules. On Linux and macOS, where the
+//    sandbox of that mode is given what `it` needs, it says nothing of that.
 //
 // It runs on Linux, and on macOS too (where, with Codex 0.160.0 and 0.169.0, the click in step 2
 // was not handed over while Codex's terminal had the conversation open). On Windows, which has
@@ -821,6 +827,35 @@ trust_level = "trusted"
     JSON.stringify({ askedOutside: askedOutside?.answered, reviewed: reviewed?.n, ranOutside: ranOutside?.n, written: existsSync(outside) }),
   )
   writeFileSync(path.join(logs, 'runs.txt'), (await it(['runs'])).out)
+
+  // 4. Full access in Codex's own window says nothing of a conversation that It reopens, which
+  // runs in the mode chosen for Codex under Machines: Approve for me where nothing was chosen,
+  // or Ask for approval where this Codex has no reviewer
+  const codexSettings = readFileSync(path.join(codexHome, 'config.toml'), 'utf8')
+  if (!/^sandbox_mode\s*=/m.test(codexSettings))
+    writeFileSync(
+      path.join(codexHome, 'config.toml'),
+      codexSettings.replace('check_for_update_on_startup = false\n', (line) => `${line}sandbox_mode = "danger-full-access"\n`),
+    )
+  // A rules file of the person's own, which setup leaves as it is, without the rule that lets `it` out
+  writeFileSync(path.join(codexHome, 'rules', 'it.rules'), '# My own rules.\nprefix_rule(pattern=["git", "status"], decision="allow")\n')
+  const again = await it(['setup', '--only', 'codex', '--no-service'], { ms: 300_000 })
+  writeFileSync(path.join(logs, 'setup-again.txt'), `${again.out}\n${again.err}`)
+  const reopenedSaid =
+    /Auto-wake is on for Codex, and a conversation that It reopens runs in (Approve for me|Ask for approval), the mode chosen for Codex/.test(again.err)
+  check(
+    windows
+      ? 'with full access in Codex’s own settings and no rule for `it`, setup says that a conversation It reopens on Windows reaches It only through the rule'
+      : 'with full access in Codex’s own settings and no rule for `it`, setup says nothing of a reopened conversation here, where its sandbox is given what `it` needs',
+    again.code === 0 &&
+      reopenedSaid === windows &&
+      (windows ? again.err.includes('prefix_rule(pattern=["it"], decision="allow")') : /your rules file was left unchanged/.test(again.err)),
+    again.err || again.out,
+  )
+  // Codex's own commands, which setup runs, leave Codex asking the internet about its plugins for
+  // a while after they have ended. That is waited for, so that the run ends with nothing of its own left
+  for (const until = Date.now() + 60_000; Date.now() < until && ours().some((p) => p.command.some((word) => /ls-remote|remote-https/.test(word))); )
+    await sleep(1000)
 } catch (err) {
   check(`the run finished (${err.message})`, false, err.stack)
 } finally {

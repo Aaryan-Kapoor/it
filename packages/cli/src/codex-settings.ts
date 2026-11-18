@@ -28,10 +28,16 @@
  * may not, and the network is only looked for, as something that also lets `it` through. On Windows, Codex's elevated sandbox
  * runs commands as accounts of its own, which It's folder is closed to, and there the network
  * lets nothing through: the rule is the one way.
+ *
+ * None of that is what a conversation runs with once It has reopened it. Auto-wake starts it in
+ * the mode chosen for Codex under Machines, and gives the sandbox of that mode on the command
+ * line, which wins over the settings: full access in a person's own settings is not carried into
+ * it. So whether `it` reaches It there is asked apart, of the mode (`codexReopenedLetsItOut`).
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { WAKE_MODES } from '@it/protocol'
 
 /** The rule that lets `it`, and nothing else, run outside Codex's sandbox: one line of a file in Codex's `rules` folder. */
 export const CODEX_RULE = 'prefix_rule(pattern=["it"], decision="allow")'
@@ -259,7 +265,37 @@ export function codexLetsItOut(
   return network
 }
 
+/**
+ * Whether Codex lets `it` reach It in a conversation that It reopened, which runs in the mode
+ * chosen for Codex under Machines (`mode`, one of `WAKE_MODES`) and not as Codex's settings have
+ * it in a window: `carrying` gives the sandbox of the mode on the command line, which wins over
+ * them. So full access in the settings says nothing of it.
+ *
+ * - With a rule that lets `it` out of the sandbox, it does in every mode: a rule that allows
+ *   lets its command through whoever approves, and runs it as the person.
+ * - Full Access has no sandbox, and `it` runs there as it does in a terminal.
+ * - Approve for me and Ask for approval are the sandbox for a workspace, given the network and
+ *   It's folder to write in, which is what `it` needs. On Windows It's folder is not given, since
+ *   Codex leaves a folder it gave its sandbox open to every sandboxed command after it, and the
+ *   elevated sandbox there runs commands as accounts It's folder is closed to. Where Codex has no
+ *   sandbox set up there, every command no rule lets through would ask. So on Windows the rule is
+ *   the one way: without it `it` is refused where nobody approves, and under the reviewer each
+ *   `it` command waits on a model that may refuse it, which is nothing to count on.
+ * - Read Only is the read-only sandbox, which has no network on any system: the rule is the one
+ *   way there too. A mode with a name this It does not know is run as Read Only.
+ */
+export function codexReopenedLetsItOut(mode: string, rule = codexRuleLetsItOut(), platform: NodeJS.Platform = process.platform): boolean {
+  if (rule || mode === 'full-access') return true
+  if (mode !== 'approve-for-me' && mode !== 'ask') return false
+  return platform !== 'win32'
+}
+
 const WHY = 'Codex runs the commands its agent gives it in a sandbox that cannot reach It on this machine, so `it` is stopped there'
+/** The rules of the file It writes, set out as they are to be typed. */
+const RULES_SET_OUT = CODEX_RULES.split('\n')
+  .filter((line) => line.startsWith('prefix_rule'))
+  .map((line) => `    ${line}`)
+  .join('\n')
 
 /**
  * What a person is told where Codex, as it is set, keeps `it` from reaching It: in lines, with
@@ -270,11 +306,24 @@ const WHY = 'Codex runs the commands its agent gives it in a sandbox that cannot
  */
 export const CODEX_SHUT = `${WHY}.
 Run \`it setup\` again to install the complete protected rules in \`${CODEX_RULE_FILE}\`, then restart Codex. If you edited that file, keep your changes and add all these rules yourself:
-${CODEX_RULES.split('\n')
-  .filter((line) => line.startsWith('prefix_rule'))
-  .map((line) => `    ${line}`)
-  .join('\n')}
+${RULES_SET_OUT}
 These rules allow reads with \`it action\`, but \`it save\` and administrative commands ask first. Without the rules, Codex asks you to approve each \`it\` command.`
+
+/**
+ * What a person is told where Codex lets `it` through in its own window and would not in a
+ * conversation that It reopens, in the mode chosen for Codex under Machines: why the two differ,
+ * what becomes of `it` there, and the same rules. A reopened conversation is a Codex that has
+ * just started, which reads the rules as it does, so nothing needs starting again for it.
+ */
+export function codexShutReopened(mode: string): string {
+  const name = WAKE_MODES.codex?.choices.find((choice) => choice.id === mode)?.label ?? mode
+  const stopped =
+    mode === 'approve-for-me' ? 'each `it` command there waits on Codex’s reviewer, which may refuse it' : '`it` is stopped there, with nobody to approve it'
+  return `Auto-wake is on for Codex, and a conversation that It reopens runs in ${name}, the mode chosen for Codex on the site’s Machines page, whatever access Codex has in its own window. In that mode on this machine \`it\` reaches It only through a rule that lets it out of Codex’s sandbox, and Codex’s rules folder has none, so ${stopped}.
+Run \`it setup\` again to install the complete protected rules in \`${CODEX_RULE_FILE}\`. If you edited that file, keep your changes and add all these rules yourself:
+${RULES_SET_OUT}
+These rules allow reads with \`it action\`, but \`it save\` and administrative commands ask first.`
+}
 
 /**
  * The same for an agent that was stopped there to pass on, in a sentence or two of its own
@@ -287,6 +336,24 @@ export const CODEX_SHUT_SAID = `${WHY}. Run \`it setup\` to install the complete
   .filter((line) => line.startsWith('prefix_rule'))
   .map((line) => `\`${line}\``)
   .join('; ')}. Reads with \`it action\` remain allowed; \`it save\` asks first.`
+
+/**
+ * What a person is told of Codex where it is connected and something would keep \`it\` from It, or
+ * null where nothing would: that Codex as it is set keeps it out, or, where it does not, that a
+ * conversation It reopens would, in the mode it runs in (\`reopened\`, given where Auto-wake is on
+ * for Codex on this machine), or else what is missing from a rules file of the person's own.
+ */
+export function codexShutSaid(
+  reopened?: string | null,
+  config: string | null | false = codexConfig(),
+  rule = codexRuleLetsItOut(),
+  platform: NodeJS.Platform = process.platform,
+  home = codexHome(),
+): string | null {
+  if (codexLetsItOut(config, rule, platform) === false) return `Codex: ${CODEX_SHUT}`
+  if (reopened != null && !codexReopenedLetsItOut(reopened, rule, platform)) return `Codex: ${codexShutReopened(reopened)}`
+  return codexRulesWarning(home)
+}
 
 /** A personal rules file is preserved, but must not be described as protected without the save rule. */
 export function codexRulesWarning(home = codexHome()): string | null {

@@ -39,6 +39,7 @@ import {
   sizeSaid,
   TAKES,
   UPLOAD,
+  wakeModeOf,
   withoutFiles,
 } from '@it/protocol'
 import { MORE, SKILL } from './addons.generated'
@@ -145,13 +146,11 @@ import {
   AFTER,
   asLoaded,
   CODEX_RULE_FILE,
-  CODEX_SHUT,
   claudeDesktopHere,
   claudeFolders,
   codexHooksPending,
-  codexLetsItOut,
   codexRuleLetsItOut,
-  codexRulesWarning,
+  codexShutSaid,
   detectAll,
   disconnect,
   type HarnessStatus,
@@ -176,6 +175,7 @@ import { fetchNewer, keepBase, latest, watch, watched, withCurrentProgram } from
 import { addonsSaid, afterUpgrade, RELOAD_OPEN, restartLine } from './upgraded'
 import * as usage from './usage'
 import { type Listed, printed, wait } from './wait'
+import { codexMode } from './wake'
 import { listActions, watchActions } from './watch-actions'
 import { recoveredArgs } from './windows-args'
 
@@ -189,10 +189,36 @@ const tell = (lines: (string | undefined)[]): void => written(process.stdout, `$
 
 /** Whether It's add-on is in the app, whatever the app has loaded of it. */
 const inApp = (h: LoadedStatus) => h.addon === 'connected' || h.addon === 'outdated' || h.addon === 'incompatible'
-/** What a person is told where Codex is connected and, as it is set, would keep `it` from reaching It. Null where it would not. */
-function codexShut(found: LoadedStatus[]): string | null {
+/**
+ * What It says of this machine (`machines.me`), as far as it bears on a Codex conversation that
+ * It reopens: the apps it reopens closed conversations of here, and the mode chosen for each.
+ */
+type Reopening = { wakes?: { harness: string }[]; wakeModes?: { harness: string; mode: string }[] } | null | undefined
+/**
+ * The mode a Codex conversation that It reopens on this machine is in fact run in, where
+ * Auto-wake is on for Codex here: the one chosen under Machines, or the next one down where the
+ * Codex found here has no reviewer (`codexMode`). Undefined where Auto-wake is off for Codex, or
+ * It said nothing of this machine.
+ */
+function codexReopenedIn(me: Reopening, found: readonly { id: string; version?: string }[]): string | undefined {
+  if (!me?.wakes?.some((w) => w.harness === 'codex')) return undefined
+  const chosen = wakeModeOf(me.wakeModes, 'codex')
+  return chosen === null ? undefined : codexMode(found.find((h) => h.id === 'codex')?.version, chosen).mode
+}
+/** The same, asked of It now, as a setup that has just chosen the apps asks it. Undefined where It cannot be asked. */
+const codexReopenedNow = (found: readonly { id: string; version?: string }[]): Promise<string | undefined> =>
+  call<Reopening>('query', api.machines.me).then(
+    (me) => codexReopenedIn(me, found),
+    () => undefined,
+  )
+/**
+ * What a person is told where Codex is connected and would keep `it` from reaching It: as it is
+ * set, or in a conversation that It reopens, which runs in the mode chosen for it (`reopened`,
+ * see `codexReopenedIn`) and not with the access Codex has in a window. Null where it would not.
+ */
+function codexShut(found: LoadedStatus[], reopened?: string): string | null {
   if (!found.some((h) => h.id === 'codex' && (inApp(h) || h.addon === 'needs_approval'))) return null
-  return codexLetsItOut() === false ? `Codex: ${CODEX_SHUT}` : codexRulesWarning()
+  return codexShutSaid(reopened)
 }
 /**
  * What a person is told where Claude's desktop app has a Claude Code of its own here and no
@@ -277,7 +303,7 @@ const restartSaid = (outcomes: AddonOutcome[], before: Set<Harness>): string | n
   return lines.length ? lines.join(' ') : null
 }
 
-function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): string[] {
+function appsSaid(found: LoadedStatus[], advise = true, withCodex = true, codexReopened?: string): string[] {
   // Said as long as it is so, as Codex's is: otherwise someone who uses Claude Code in its desktop app alone is told only that no app was found
   const desktop = claudeDesktopOnly(found)
   if (!found.length) return ['No agent app was found on this machine.', ...(desktop ? [desktop] : [])]
@@ -289,7 +315,7 @@ function appsSaid(found: LoadedStatus[], advise = true, withCodex = true): strin
     return `${app} is not connected${h.detail && h.addon !== 'not_connected' ? `: ${h.detail}` : '.'}`
   })
   // Said each time it is asked for as long as it is so: the first thing a Codex user would otherwise learn of it is a page that never appears
-  const shut = withCodex ? codexShut(found) : null
+  const shut = withCodex ? codexShut(found, codexReopened) : null
   if (shut) lines.push(shut)
   if (desktop) lines.push(desktop)
   if (advise && found.some((h) => h.addon === 'not_connected' && supported(h.id))) lines.push('Run `it setup` to choose which agent apps are connected.')
@@ -2350,7 +2376,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
     const gone = choice ? disconnectedSaid(found, after, wanted) : null
     if (gone) left.push(gone)
     // What decides whether Codex's first page appears at all is said by itself, and first
-    const shut = codexShut(after)
+    const shut = codexShut(after, woken.includes('codex') ? await codexReopenedNow(after) : undefined)
     if (shut) left.push(shut)
     // An app whose add-on was brought up to date goes on with the one it loaded until it is restarted
     const restart = restartSaid(outcomes, connectedBefore)
@@ -2814,7 +2840,7 @@ async function settingUp(a: Args, joined: boolean) {
       say(`\n${line}`)
       notes.push({ id, line })
     }
-    const shut = codexShut(after)
+    const shut = codexShut(after, woken.includes('codex') ? await codexReopenedNow(after) : undefined)
     if (shut) note(shut)
     const restart = restartSaid(outcomes, before)
     if (restart) note(restart)
@@ -3422,7 +3448,7 @@ async function status(a: Args) {
               : network.internet
                 ? `The network is on, for every address this machine has, the internet’s included. Whoever can reach one opens the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`
                 : `The network is on, for anyone on this network. Devices on it open the site at ${first}.${others.length ? ` This machine’s other addresses are ${others.join(' and ')}.` : ''}`,
-    ...appsSaid(stands.harnesses),
+    ...appsSaid(stands.harnesses, true, true, codexReopenedIn(machine as Reopening, stands.harnesses)),
     ...(stands.harnesses.some((h) => 'proxied' in h) ? [PROXIED] : []),
     reload,
     ...serviceSaid(stands.background, stands.connector, running && enrolled),

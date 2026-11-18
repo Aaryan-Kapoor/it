@@ -1887,9 +1887,12 @@ export {
   CODEX_SHUT,
   codexGivesNetwork,
   codexLetsItOut,
+  codexReopenedLetsItOut,
   codexRuleLetsItOut,
   codexRulesWarning,
   codexRunsApart,
+  codexShutReopened,
+  codexShutSaid,
 } from './codex-settings'
 
 /** What the person still has to do themselves once an add-on is in, if anything. Shown once, by `it setup`. */
