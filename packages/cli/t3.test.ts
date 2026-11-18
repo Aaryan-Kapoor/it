@@ -4,10 +4,10 @@
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
-import type { AddressInfo } from 'node:net'
+import net, { type AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import {
   conversationsOf,
   holderIn,
@@ -25,6 +25,7 @@ import {
   t3RunsNow,
   t3Search,
   t3Server,
+  t3Tells,
   t3ThreadOf,
   timesRefused,
   wentUnanswered,
@@ -63,6 +64,110 @@ describe('the T3 Code server that is asked', () => {
     expect(t3Server(home({ pid: 'no number', origin: 'http://127.0.0.1:3774' }))).toBeUndefined()
     expect(t3Server(home('not what T3 Code writes'))).toBeUndefined()
   })
+})
+
+describe('a note of its server that T3 Code left behind when it ended', () => {
+  /** A folder of T3 Code's whose note names this process, which is running and is not T3 Code, and an address on this machine. */
+  const notedAt = (port: number, folder = mkdtempSync(path.join(scratch, 'left-'))) => {
+    mkdirSync(path.join(folder, 'userdata'), { recursive: true })
+    writeFileSync(path.join(folder, 'userdata', 'server-runtime.json'), JSON.stringify({ version: 1, pid: process.pid, origin: `http://127.0.0.1:${port}` }))
+    return folder
+  }
+  /** Something that listens on this machine and takes every connection, and never says a word over one: a server too slow to answer. */
+  const silent = (port = 0) =>
+    new Promise<{ port: number; close: () => Promise<void> }>((resolve, reject) => {
+      const held = new Set<net.Socket>()
+      const server = net.createServer((socket) => {
+        held.add(socket)
+        socket.on('error', () => {})
+        socket.on('close', () => held.delete(socket))
+      })
+      server.once('error', reject)
+      server.listen(port, '127.0.0.1', () =>
+        resolve({
+          port: (server.address() as AddressInfo).port,
+          close: () =>
+            new Promise((closed) => {
+              for (const socket of held) socket.destroy()
+              server.close(() => closed())
+            }),
+        }),
+      )
+    })
+  /** A port of this machine at which nothing listens: one that was listened at a moment ago. */
+  const unheard = async () => {
+    const was = await silent()
+    await was.close()
+    return was.port
+  }
+  const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
+  /** Looks for the server every little while until it is found, or is found no more, and says whether it came to that in time. */
+  const comesTo = async (folder: string, found: boolean, withinMs = 30_000) => {
+    for (const until = Date.now() + withinMs; Date.now() < until; await pause(50)) if ((t3Server(folder) !== undefined) === found) return true
+    return false
+  }
+  const said: string[] = []
+  beforeAll(() => t3Tells((line) => said.push(line)))
+  afterAll(() => t3Tells(undefined))
+
+  test('names no server once its address has refused a connection twice, though the number of its process is now another program’s, and that is said without the address or the folder', async () => {
+    const port = await unheard()
+    const folder = notedAt(port)
+    // Not before the address has been asked: unasked, a T3 Code that is running would be taken for gone
+    expect(t3Server(folder)).toMatchObject({ origin: `http://127.0.0.1:${port}`, home: folder })
+    // Nor on the word of one refusal, which a moment later is asked for again
+    await pause(300)
+    expect(t3Server(folder)).toBeDefined()
+    expect(await comesTo(folder, false)).toBe(true)
+    // It stays so for as long as the note names that process and that address
+    await pause(300)
+    expect(t3Server(folder)).toBeUndefined()
+    const lines = said.filter((line) => line.includes('t3_note_stale'))
+    expect(lines.length).toBeGreaterThan(0)
+    for (const line of lines) expect([line.includes(String(port)), line.includes(folder), line.includes(String(process.pid))]).toEqual([false, false, false])
+  }, 60_000)
+
+  test('still names the server where it takes a connection and answers nothing: a T3 Code that is slow is running', async () => {
+    const slow = await silent()
+    const before = said.length
+    try {
+      const folder = notedAt(slow.port)
+      expect(t3Server(folder)).toBeDefined()
+      // Longer than it takes a refusal to be asked for again and believed
+      await pause(2500)
+      expect(t3Server(folder)).toMatchObject({ origin: `http://127.0.0.1:${slow.port}` })
+      expect(said.length).toBe(before)
+    } finally {
+      await slow.close()
+    }
+  }, 60_000)
+
+  test('names the server again once something listens at its address, and at once where T3 Code notes another', async () => {
+    const port = await unheard()
+    const folder = notedAt(port)
+    t3Server(folder)
+    expect(await comesTo(folder, false)).toBe(true)
+    // T3 Code is started again, and notes a server at another address: nothing is known of that one yet, so it is taken at its word
+    const again = await silent()
+    let late: Awaited<ReturnType<typeof silent>> | undefined
+    const clock = vi.spyOn(performance, 'now')
+    try {
+      notedAt(again.port, folder)
+      expect(t3Server(folder)).toMatchObject({ origin: `http://127.0.0.1:${again.port}` })
+      // And one that noted its server before it listened is found once it does, when its address is next asked
+      notedAt(port, folder)
+      t3Server(folder)
+      expect(await comesTo(folder, false)).toBe(true)
+      late = await silent(port)
+      const now = performance.now()
+      clock.mockImplementation(() => now + 60_000)
+      expect(await comesTo(folder, true)).toBe(true)
+    } finally {
+      clock.mockRestore()
+      await again.close()
+      await late?.close()
+    }
+  }, 90_000)
 })
 
 describe('T3 Code’s own command, as T3 Code keeps it', () => {
