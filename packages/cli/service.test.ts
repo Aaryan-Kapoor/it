@@ -30,6 +30,7 @@ import {
   windowsRemoval,
   windowsScript,
 } from './src/service'
+import { t3Server } from './src/t3'
 
 vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()) }))
 
@@ -103,6 +104,103 @@ describe('what a service is given of the shell that registered it', () => {
       process.argv = argv
     }
   })
+})
+
+describe('where T3 Code keeps its things, as the shell that registered the service named it', () => {
+  const cmd = [path.resolve('person', '.it', 'bin', 'it'), 'serve']
+  /** Each system's definition, with the system its settings are read back as. */
+  const definitions = [
+    ['linux', systemdUnit],
+    ['darwin', launchdPlist],
+    ['win32', windowsLauncher],
+  ] as const
+
+  test('is given to the service on every system, so that the service finds T3 Code’s server in a folder only the shell named', () => {
+    const user = mkdtempSync(path.join(os.tmpdir(), 'it-t3-home-'))
+    // The usual place, `~/.t3`, is an empty folder of the test's own
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(path.join(user, 'home'))
+    const was = process.env.T3CODE_HOME
+    try {
+      const elsewhere = path.join(user, 'kept elsewhere', 't3')
+      mkdirSync(path.join(elsewhere, 'userdata'), { recursive: true })
+      writeFileSync(path.join(elsewhere, 'userdata', 'server-runtime.json'), JSON.stringify({ pid: process.pid, origin: 'http://127.0.0.1:3773' }))
+      for (const [platform, write] of definitions) {
+        // The service is started with what its definition gives it, and with nothing of the shell
+        const saved = given(write(cmd, environment({ PATH: '/bin', T3CODE_HOME: elsewhere })), platform)
+        expect(saved.T3CODE_HOME).toBe(elsewhere)
+        delete process.env.T3CODE_HOME
+        expect(t3Server()).toBeUndefined()
+        process.env.T3CODE_HOME = saved.T3CODE_HOME
+        expect(t3Server()).toMatchObject({ origin: 'http://127.0.0.1:3773', home: elsewhere })
+      }
+    } finally {
+      homedir.mockRestore()
+      if (was === undefined) delete process.env.T3CODE_HOME
+      else process.env.T3CODE_HOME = was
+      rmSync(user, { recursive: true, force: true })
+    }
+  })
+  test('is written as the whole folder where the shell named it from where it stood, since the service stands somewhere else', () => {
+    const named = path.join('kept', 't3')
+    for (const [platform, write] of definitions)
+      expect(given(write(cmd, environment({ PATH: '/bin', T3CODE_HOME: named })), platform).T3CODE_HOME).toBe(path.resolve(named))
+  })
+  test('is not in the definition of a shell that names none: the service then looks in the usual place', () => {
+    expect(environment({ PATH: '/bin' })).not.toHaveProperty('T3CODE_HOME')
+    expect(environment({ PATH: '/bin', T3CODE_HOME: '' })).not.toHaveProperty('T3CODE_HOME')
+    for (const [, write] of definitions) expect(write(cmd, environment({ PATH: '/bin' }))).not.toContain('T3CODE_HOME')
+  })
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'is put right by registering the service again: the folder named now takes the place of the one named before, and none is left where none is named',
+    () => {
+      const user = mkdtempSync(path.join(os.tmpdir(), 'it-t3-again-'))
+      const before = {
+        home: process.env.IT_HOME,
+        t3: process.env.T3CODE_HOME,
+        PATH: process.env.PATH,
+        platform: Object.getOwnPropertyDescriptor(process, 'platform')!,
+      }
+      const homedir = vi.spyOn(os, 'homedir').mockReturnValue(user)
+      try {
+        // What stands in for launchd's own command takes whatever it is given, and says of the agent that it is not loaded
+        const commands = path.join(user, 'commands')
+        mkdirSync(commands)
+        writeFileSync(path.join(commands, 'launchctl'), '#!/bin/sh\n[ "$1" != print ] || exit 113\n', { mode: 0o755 })
+        process.env.IT_HOME = path.join(user, '.it')
+        process.env.PATH = `${commands}:/usr/bin:/bin`
+        Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+        const definition = path.join(user, 'Library', 'LaunchAgents', 'dev.it.plist')
+        const registered = () => given(readFileSync(definition, 'utf8'), 'darwin').T3CODE_HOME
+        const [first, second] = [path.join(user, 'first', 't3'), path.join(user, 'second', 't3')]
+        process.env.T3CODE_HOME = first
+        install()
+        expect(registered()).toBe(first)
+        // An upgrade registers the service again from a terminal that may name none, and keeps the folder; one that names another says which
+        expect(againWith({ PATH: '/now/bin' }).T3CODE_HOME).toBe(first)
+        expect(againWith({ PATH: '/now/bin', T3CODE_HOME: second }).T3CODE_HOME).toBe(second)
+        // T3 Code's folder is moved, and setup is run again from a shell that names where it is now
+        process.env.T3CODE_HOME = second
+        install()
+        expect(registered()).toBe(second)
+        // And moved back to the usual place: the shell names none, and neither does the definition
+        delete process.env.T3CODE_HOME
+        install()
+        expect(registered()).toBeUndefined()
+        expect(kept()).not.toHaveProperty('T3CODE_HOME')
+      } finally {
+        homedir.mockRestore()
+        Object.defineProperty(process, 'platform', before.platform)
+        process.env.PATH = before.PATH
+        for (const [name, was] of [
+          ['IT_HOME', before.home],
+          ['T3CODE_HOME', before.t3],
+        ] as const)
+          if (was === undefined) delete process.env[name]
+          else process.env[name] = was
+        rmSync(user, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 describe('what a registered service was given, read back from its definition', () => {
