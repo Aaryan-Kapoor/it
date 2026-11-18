@@ -159,6 +159,21 @@ def _nobodys(session):
         return False
 
 
+def _has_hook(name):
+    """Whether this Hermes fires a hook of that name. Yes if it cannot be told.
+
+    Hermes keeps a callback for a hook it does not know, never calls it, and writes a warning
+    to its log each time it loads the plugin (hermes_cli/plugins.py, register_hook). So a hook
+    that only a later Hermes has is registered only where Hermes lists it.
+    """
+    try:
+        from hermes_cli.plugins import VALID_HOOKS
+
+        return name in VALID_HOOKS
+    except Exception:
+        return True
+
+
 class _Talk:
     """One conversation in this Hermes process."""
 
@@ -372,6 +387,29 @@ class _Bridge:
             talk.refused = 0
             talk.wait_until = 0.0
             self._heard(talk)
+
+    def client_opened(self, session_id="", **_):
+        """A program of Hermes's has a conversation open in Hermes's gateway, before anything is written in it.
+
+        A Hermes whose gateway holds the conversations of its plain terminal, its TUI and its
+        desktop app loads this add-on in that gateway, and from Hermes 0.23.1 fires this hook
+        there each time one of those programs opens a conversation, new or saved
+        (gateway/session_open.py). It names the conversation by the id its commands carry, and
+        runs with the conversation's lasting name bound, as the hooks of a turn do. So the
+        conversation is asked about from now on, as it is from its first turn, and a click on a
+        page of a saved conversation starts a turn before the person has sent anything in it.
+
+        Only a conversation with a name is taken, since a message by that name reaches that
+        conversation and no other. An earlier Hermes has no such hook, and there a saved
+        conversation is asked about from its next turn.
+        """
+        if not _session_key():
+            return
+        talk = self._note(session_id)
+        if talk:
+            # Opened afresh, it can take a message now, whatever Hermes said of one before
+            talk.refused = 0
+            talk.wait_until = 0.0
 
     def conversation_closed(self, session_id="", **_):
         with self._lock:
@@ -680,12 +718,16 @@ def register(ctx):
     except Exception:
         pass
     bridge = _Bridge(ctx)
-    # Report the loaded host even before a turn. The TUI and the desktop app say when a
-    # conversation is open, and the plain terminal says so only of a conversation's first turn.
+    # Report the loaded host even before a turn. A Hermes whose gateway holds its conversations
+    # says when one is opened, from 0.23.1 on, and so do the TUI and the desktop app of a Hermes
+    # that holds them itself. The plain terminal of such a Hermes says so only of a conversation's
+    # first turn.
     bridge._thread = threading.Thread(target=contextvars.Context().run, args=(bridge._run,), name="it-bridge", daemon=True)
     bridge._thread.start()
     ctx.register_hook("pre_llm_call", bridge.turn_started)
     ctx.register_hook("on_session_reset", bridge.conversation_opened)
+    if _has_hook("on_session_open"):
+        ctx.register_hook("on_session_open", bridge.client_opened)
     ctx.register_hook("on_session_end", bridge.turn_ended)
     ctx.register_hook("on_session_finalize", bridge.conversation_closed)
     ctx.register_hook("subagent_start", bridge.helper_started)
