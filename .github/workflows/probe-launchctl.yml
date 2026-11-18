@@ -1,0 +1,136 @@
+name: Probe launchctl (temporary)
+
+# What launchctl really prints on each macOS a runner has, for a refused load. Taken away
+# again before the pull request is opened.
+on:
+  push:
+    branches: [fix/macos-refused-service]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: launchctl on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-15-intel, macos-26, macos-latest]
+    steps:
+      - name: Ask launchctl
+        shell: bash
+        run: |
+          set +e
+          say() { echo; echo "##### $*"; }
+          ran() { echo "\$ $*"; "$@" 2>&1 | head -n "${LINES_MOST:-25}"; echo "[exit ${PIPESTATUS[0]}]"; }
+          U=$(id -u)
+          L=dev.it.probe
+          P="$HOME/Library/LaunchAgents/$L.plist"
+          mkdir -p "$HOME/Library/LaunchAgents"
+          good() {
+            cat > "$P" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>Label</key><string>$L</string>
+            <key>ProgramArguments</key>
+            <array><string>/bin/sleep</string><string>600</string></array>
+            <key>RunAtLoad</key><true/>
+          </dict>
+          </plist>
+          EOF
+            chmod 644 "$P"
+          }
+          say system; sw_vers; echo "uid $U"
+          ran launchctl managername
+          say "the domain, when it is there"
+          launchctl print "gui/$U" > /tmp/domain.txt 2>&1; echo "[exit $?] $(wc -c < /tmp/domain.txt) bytes"; head -n 8 /tmp/domain.txt
+          say "a service that is not loaded"
+          ran launchctl print "gui/$U/$L"
+          say "print-disabled, whole shape"
+          launchctl print-disabled "gui/$U" > /tmp/disabled.txt 2>&1; echo "[exit $?] $(wc -l < /tmp/disabled.txt) lines"
+          head -n 6 /tmp/disabled.txt | cat -A | head -n 6; echo ...; tail -n 8 /tmp/disabled.txt | cat -A
+          say "a domain that is not there (root has no login at the screen)"
+          ran launchctl print gui/0
+          ran launchctl print gui/0/$L
+          ran launchctl print-disabled gui/0
+          ran launchctl print gui/54321
+          ran launchctl print-disabled gui/54321
+          say "a good definition loads"
+          good
+          ran plutil -lint "$P"
+          ran launchctl bootstrap "gui/$U" "$P"
+          LINES_MOST=12 ran launchctl print "gui/$U/$L"
+          say "loaded already, loaded again"
+          ran launchctl bootstrap "gui/$U" "$P"
+          say "disabled while loaded"
+          ran launchctl disable "gui/$U/$L"
+          grep -n "$L" /dev/null; launchctl print-disabled "gui/$U" 2>&1 | grep -n "probe" | cat -A
+          LINES_MOST=6 ran launchctl print "gui/$U/$L"
+          ran launchctl bootout "gui/$U/$L"
+          sleep 2
+          ran launchctl print "gui/$U/$L"
+          say "refused: the label is disabled"
+          ran launchctl bootstrap "gui/$U" "$P"
+          ran launchctl print "gui/$U/$L"
+          say "enabled again"
+          ran launchctl enable "gui/$U/$L"
+          launchctl print-disabled "gui/$U" 2>&1 | grep -n "probe" | cat -A
+          ran launchctl print "gui/$U/$L"
+          ran launchctl bootstrap "gui/$U" "$P"
+          ran launchctl bootout "gui/$U/$L"
+          sleep 2
+          say "refused: not a property list"
+          printf 'this is not a property list\n' > "$P"
+          ran plutil -lint "$P"
+          ran launchctl bootstrap "gui/$U" "$P"
+          say "refused: a character XML does not allow"
+          good; perl -pi -e 's/600/6\x0100/' "$P"
+          ran plutil -lint "$P"
+          ran launchctl bootstrap "gui/$U" "$P"
+          ran launchctl bootout "gui/$U/$L"
+          say "refused: cannot be read"
+          good; chmod 000 "$P"
+          ran plutil -lint "$P"
+          ran launchctl bootstrap "gui/$U" "$P"
+          ran launchctl bootout "gui/$U/$L"
+          chmod 644 "$P"
+          say "refused: others may write it"
+          good; chmod 666 "$P"
+          ran plutil -lint "$P"
+          ran launchctl bootstrap "gui/$U" "$P"
+          ran launchctl bootout "gui/$U/$L"
+          say "refused: no such file"
+          rm -f "$P"
+          ran plutil -lint "$P"
+          ran launchctl bootstrap "gui/$U" "$P"
+          say "a domain that is not there is given a definition"
+          good
+          ran launchctl bootstrap gui/54321 "$P"
+          ran launchctl bootout gui/54321/$L
+          rm -f "$P"
+          say "an account that has no login at the screen, as over SSH"
+          sudo sysadminctl -addUser itprobe -password "probe-$RANDOM-$RANDOM" > /tmp/adduser.txt 2>&1; echo "[exit $?]"; tail -n 3 /tmp/adduser.txt
+          NU=$(id -u itprobe 2>/dev/null); echo "new uid ${NU:-none}"
+          if [ -n "$NU" ]; then
+            NH=$(sudo -u itprobe -H sh -c 'echo $HOME'); echo "home $NH"
+            sudo -u itprobe -H mkdir -p "$NH/Library/LaunchAgents"
+            good; sudo cp "$P" "$NH/Library/LaunchAgents/$L.plist"; sudo chown itprobe "$NH/Library/LaunchAgents/$L.plist"; rm -f "$P"
+            as() { echo "\$ (as itprobe) $*"; sudo -u itprobe -H "$@" 2>&1 | head -n 25; echo "[exit ${PIPESTATUS[0]}]"; }
+            as launchctl managername
+            as launchctl print "gui/$NU"
+            as launchctl print "gui/$NU/$L"
+            as launchctl print-disabled "gui/$NU"
+            as launchctl bootout "gui/$NU/$L"
+            as launchctl bootstrap "gui/$NU" "$NH/Library/LaunchAgents/$L.plist"
+            as launchctl print "gui/$NU/$L"
+            as launchctl print "user/$NU"
+            as launchctl disable "gui/$NU/$L"
+            as launchctl print-disabled "gui/$NU"
+            as launchctl enable "gui/$NU/$L"
+            sudo sysadminctl -deleteUser itprobe > /dev/null 2>&1; echo "[deleted, exit $?]"
+          fi
+          exit 0
