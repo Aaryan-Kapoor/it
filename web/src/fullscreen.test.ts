@@ -373,6 +373,239 @@ describe('the site’s fullscreen', () => {
     expect(told).toEqual([])
   })
 
+  test('a player whose host stops hosting while the browser leaves the player’s own fullscreen, as when its page is closed in that moment, is not given It’s fullscreen', async () => {
+    const stack = stacked()
+    const { fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const player = document.createElement('iframe')
+    const { told, host } = players(player)
+    const stop = hostPlayers(host)
+    stack.push(player)
+    said('fullscreenchange')
+    // The browser has been asked to leave the player's own fullscreen and has not answered yet: the page goes now
+    expect(browser.asked).toEqual(['exitFullscreen'])
+    stop()
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen'])
+    expect(stack).toEqual([])
+    expect(fullscreenOn()).toBe(false)
+    expect(told).toEqual([])
+  })
+
+  test('nor is a player that its host no longer has by then, as when the page’s document was replaced or the page took the player away', async () => {
+    const stack = stacked()
+    const { fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const player = document.createElement('iframe')
+    const { told, host } = players(player)
+    let has = true
+    hostPlayers({ ...host, owns: (frame) => has && host.owns(frame) })
+    stack.push(player)
+    said('fullscreenchange')
+    has = false
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen'])
+    expect(stack).toEqual([])
+    expect(fullscreenOn()).toBe(false)
+    expect(told).toEqual([])
+  })
+
+  /**
+   * A browser that answers a request for fullscreen only when the test says: `answer` grants
+   * every request that waits, and `next` answers the oldest alone, granting it or refusing it.
+   */
+  function answeredLater(stack: Element[]) {
+    const waiting: ((granted: boolean) => void)[] = []
+    root.requestFullscreen = () => {
+      browser.asked.push('requestFullscreen')
+      return new Promise<void>((resolve, reject) =>
+        waiting.push((granted) => {
+          if (!granted) return reject(new TypeError('Permissions check failed'))
+          if (stack.at(-1) !== document.documentElement) stack.push(document.documentElement)
+          said('fullscreenchange')
+          resolve()
+        }),
+      )
+    }
+    return {
+      answer: () => {
+        for (const go of waiting.splice(0)) go(true)
+      },
+      next: (granted: boolean) => waiting.shift()?.(granted),
+    }
+  }
+
+  test('a player whose host stops hosting once the browser has been asked for It’s fullscreen has that fullscreen left as soon as the browser grants it', async () => {
+    const stack = stacked()
+    const { answer } = answeredLater(stack)
+    const { fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const player = document.createElement('iframe')
+    const { told, host } = players(player)
+    const stop = hostPlayers(host)
+    stack.push(player)
+    said('fullscreenchange')
+    await settle()
+    // The browser has been asked to make the site fullscreen in the player's place and has not answered yet: the page goes now
+    expect(browser.asked).toEqual(['exitFullscreen', 'requestFullscreen'])
+    stop()
+    answer()
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen', 'requestFullscreen', 'exitFullscreen'])
+    expect(stack).toEqual([])
+    expect(fullscreenOn()).toBe(false)
+    expect(told).toEqual([])
+  })
+
+  test('a fullscreen that the bar or a page asked for while a player’s was pending is kept when that player has gone', async () => {
+    const stack = stacked()
+    const { answer } = answeredLater(stack)
+    const { enterFullscreen, fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const player = document.createElement('iframe')
+    const { told, host } = players(player)
+    const stop = hostPlayers(host)
+    stack.push(player)
+    said('fullscreenchange')
+    await settle()
+    // A second request while the player's is pending, as from the bar's button
+    const byTheBar = enterFullscreen()
+    stop()
+    answer()
+    await byTheBar
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen', 'requestFullscreen', 'requestFullscreen'])
+    expect(stack).toEqual([document.documentElement])
+    expect(fullscreenOn()).toBe(true)
+    expect(told).toEqual([])
+  })
+
+  test('nor is a fullscreen that a page asked for while the browser was still leaving the player’s own, before the site’s was asked for the player', async () => {
+    const stack = stacked()
+    const { answer } = answeredLater(stack)
+    // This browser says that it left the player's own fullscreen only when the test says
+    let left = () => {}
+    doc.exitFullscreen = () => {
+      browser.asked.push('exitFullscreen')
+      return new Promise<void>((resolve) => {
+        left = () => {
+          stack.pop()
+          said('fullscreenchange')
+          resolve()
+        }
+      })
+    }
+    const { enterFullscreen, fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const player = document.createElement('iframe')
+    const { told, host } = players(player)
+    const stop = hostPlayers(host)
+    stack.push(player)
+    said('fullscreenchange')
+    const byThePage = enterFullscreen()
+    left()
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen', 'requestFullscreen', 'requestFullscreen'])
+    stop()
+    answer()
+    await byThePage
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen', 'requestFullscreen', 'requestFullscreen'])
+    expect(stack).toEqual([document.documentElement])
+    expect(fullscreenOn()).toBe(true)
+    expect(told).toEqual([])
+  })
+
+  test('where It was fullscreen already, a player that goes while its own fullscreen is being left leaves It fullscreen as it was', async () => {
+    const stack = stacked()
+    const { enterFullscreen, fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const player = document.createElement('iframe')
+    const { told, host } = players(player)
+    const stop = hostPlayers(host)
+    await enterFullscreen()
+    stack.push(player)
+    said('fullscreenchange')
+    stop()
+    await settle()
+    expect(browser.asked).toEqual(['requestFullscreen', 'exitFullscreen'])
+    expect(stack).toEqual([document.documentElement])
+    expect(fullscreenOn()).toBe(true)
+    expect(told).toEqual([])
+  })
+
+  test('of two players whose own fullscreen is pending at once, the one that has gone does not take It’s fullscreen from the one that is still there', async () => {
+    const stack = stacked()
+    const { answer } = answeredLater(stack)
+    const { fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const gone = document.createElement('iframe')
+    const kept = document.createElement('iframe')
+    const first = players(gone)
+    const second = players(kept)
+    const stop = hostPlayers(first.host)
+    hostPlayers(second.host)
+    stack.push(gone)
+    said('fullscreenchange')
+    await settle()
+    stack.push(kept)
+    said('fullscreenchange')
+    await settle()
+    stop()
+    answer()
+    await settle()
+    expect(stack).toEqual([document.documentElement])
+    expect(fullscreenOn()).toBe(true)
+    expect(first.told).toEqual([])
+    expect(second.told).toEqual(['fill'])
+  })
+
+  test('and with both gone by the time the browser grants it, the fullscreen that was asked for them alone is left, once', async () => {
+    const stack = stacked()
+    const { answer } = answeredLater(stack)
+    const { fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const one = document.createElement('iframe')
+    const other = document.createElement('iframe')
+    const first = players(one)
+    const second = players(other)
+    const stops = [hostPlayers(first.host), hostPlayers(second.host)]
+    for (const player of [one, other]) {
+      stack.push(player)
+      said('fullscreenchange')
+      await settle()
+    }
+    browser.asked.length = 0
+    for (const stop of stops) stop()
+    answer()
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen'])
+    expect(stack).toEqual([])
+    expect(fullscreenOn()).toBe(false)
+    expect([...first.told, ...second.told]).toEqual([])
+  })
+
+  test('and with both gone, a fullscreen the browser grants for the first is left when it refuses the second, which was the last to be answered', async () => {
+    const stack = stacked()
+    const { next } = answeredLater(stack)
+    const { fullscreenOn, hostPlayers } = await import('./fullscreen')
+    const one = document.createElement('iframe')
+    const other = document.createElement('iframe')
+    const first = players(one)
+    const second = players(other)
+    const stops = [hostPlayers(first.host), hostPlayers(second.host)]
+    for (const player of [one, other]) {
+      stack.push(player)
+      said('fullscreenchange')
+      await settle()
+    }
+    browser.asked.length = 0
+    for (const stop of stops) stop()
+    next(true)
+    await settle()
+    // The second player's request still waits, so nothing is left yet
+    expect(browser.asked).toEqual([])
+    expect(stack).toEqual([document.documentElement])
+    next(false)
+    await settle()
+    expect(browser.asked).toEqual(['exitFullscreen'])
+    expect(stack).toEqual([])
+    expect(fullscreenOn()).toBe(false)
+    expect([...first.told, ...second.told]).toEqual([])
+  })
+
   test('a browser that refuses by the standard name is said to have refused in the site’s own words', async () => {
     Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true })
     root.requestFullscreen = () => Promise.reject(new TypeError('Permissions check failed'))
