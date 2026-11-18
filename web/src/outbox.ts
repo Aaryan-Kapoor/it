@@ -450,7 +450,9 @@ const GRANT_LEFT_MS = 3600_000
  * `submit`), by their names, each with the envelope it is to be sent with, whether it is still
  * this tab's to send, and what ends the judging at once, as a click its page sent by itself.
  */
-const judging = new Map<string, { entry: Entry; envelope: Sent; ours: () => boolean; unjudged: () => void }>()
+const judging = new Map<string, { entry: Entry; envelope: Sent; ours: () => boolean; unjudged: (went: Promise<Accepted | null>) => void }>()
+/** What It made of a click it accepted. */
+type Accepted = { actionId: string }
 /**
  * The tab is being hidden or closed while it still judges some of the clicks it kept. A phone
  * may end a hidden tab with nothing more said, and a closed tab runs nothing more: a click left
@@ -459,8 +461,10 @@ const judging = new Map<string, { entry: Entry; envelope: Sent; ours: () => bool
  * after the tab has gone, to the backend's address for calling a function, with the token this
  * browser holds now, as the click it would have been sent as had the judging not ended: under its
  * own id and session, the deadline it was given, and when it was made, and as one the page sent
- * by itself. Its judging ends with that, so that the tab, if it is still there, sends it as the
- * same: It takes a click sent again under the same id as the click it already has, and keeps what
+ * by itself. Its judging ends with that, and the tab, if it is still there, waits for the answer to
+ * that request before it sends the click itself: where It accepted it, that is what became of it,
+ * and otherwise the tab sends it as the same click, so that the page is never told it failed while
+ * that request may yet be taken. It takes a click sent again under the same id as the click it already has, and keeps what
  * it was first told, so the click arrives once, however many times it is sent, and is never
  * said to be the person's for having been sent twice. Nothing is said of it here: the click is
  * kept until an answer is heard, by this tab or by the next to open the site, which sends it again
@@ -495,15 +499,24 @@ function sendAsItCloses(): void {
     if (bytes > room) continue
     room -= bytes
     judging.delete(key)
-    one.unjudged()
+    let went: Promise<Accepted | null>
     try {
-      void fetch('/api/mutation', {
+      went = fetch('/api/mutation', {
         method: 'POST',
         keepalive: true,
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
         body,
-      }).catch(() => {})
-    } catch {}
+      }).then(
+        async (answer) => {
+          const said = (await answer.json().catch(() => null)) as { status?: unknown; value?: { actionId?: unknown } } | null
+          return answer.ok && said?.status === 'success' && typeof said.value?.actionId === 'string' ? { actionId: said.value.actionId } : null
+        },
+        () => null,
+      )
+    } catch {
+      went = Promise.resolve(null)
+    }
+    one.unjudged(went)
   }
 }
 if (typeof window !== 'undefined') {
@@ -1311,23 +1324,32 @@ async function sendNow(
       // Judged while the tab is there. A tab that is hidden or closed meanwhile sends it as it
       // goes, as one the page sent by itself, and ends the judging so that this sends it as the
       // same (`sendAsItCloses`): its deadline is asked for now, so that it has one to go under then
-      let unjudged = () => {}
-      const cut = new Promise<false>((resolve) => {
-        unjudged = () => resolve(false)
+      let unjudged: (went: Promise<Accepted | null>) => void = () => {}
+      const cut = new Promise<{ went: Promise<Accepted | null> }>((resolve) => {
+        unjudged = (went) => resolve({ went })
       })
       judging.set(key, { entry, envelope, ours: () => mine() && !letGo(), unjudged })
       grantEarly(convex, entry, key, mine)
-      let attended: boolean
+      let judged: boolean | { went: Promise<Accepted | null> }
       try {
-        attended = await Promise.race([judge(), cut])
+        judged = await Promise.race([judge(), cut])
       } finally {
         if (judging.get(key)?.entry === entry) judging.delete(key)
       }
-      entry.envelope = { ...envelope, attended }
+      entry.envelope = { ...envelope, attended: judged === true }
       if (kept && !letGo()) {
         try {
           localStorage.setItem(key, JSON.stringify(entry))
         } catch {}
+      }
+      // Sent as the tab was hidden: what It answered that request is waited for. Accepted, it is
+      // done with; anything else, and it is sent from here as it would have been
+      if (typeof judged === 'object') {
+        const took = await judged.went
+        if (took && mine() && !letGo()) {
+          memoryGrants.delete(key)
+          return took
+        }
       }
     }
     for (let attempt = 0; ; attempt++) {

@@ -1695,6 +1695,41 @@ describe('a click its tab is hidden or closed on while it is being judged', () =
     expect(stored()).toEqual([])
   })
 
+  test('a tab still there after it was hidden takes the answer to that request for what became of the click, where It accepted it', async () => {
+    vi.mocked(fetch).mockImplementationOnce((url, init) => {
+      sent.push({ url, init: init as RequestInit })
+      return Promise.resolve(new Response(JSON.stringify({ status: 'success', value: { actionId: 'a-closing' } })))
+    })
+    const b = backend([{ actionId: 'never-asked' }])
+    const one = judged(b.client, 'click-taken-0001')
+    await settle()
+    hidden()
+    expect(await one.sending).toEqual({ actionId: 'a-closing' })
+    expect(b.calls).toEqual([])
+    expect(stored()).toEqual([])
+  })
+
+  test('and sends the click itself only once that request has been answered otherwise, so that the page is never told it failed while that request may yet be taken', async () => {
+    let answer: (r: Response) => void = () => {}
+    vi.mocked(fetch).mockImplementationOnce((url, init) => {
+      sent.push({ url, init: init as RequestInit })
+      return new Promise<Response>((r) => (answer = r))
+    })
+    const b = backend([{ actionId: 'a1' }])
+    const one = judged(b.client, 'click-waits-0001')
+    await settle()
+    hidden()
+    one.decide(true)
+    await settle()
+    expect(sent).toHaveLength(1)
+    expect(b.calls).toEqual([])
+    expect(stored()).toEqual(['it.outbox.alice.page1.click-waits-0001'])
+    answer(new Response(JSON.stringify({ status: 'error', errorMessage: 'limit' }), { status: 400 }))
+    expect(await one.sending).toEqual({ actionId: 'a1' })
+    expect(b.calls.map((c) => c.envelope)).toEqual([{ ...envelope('click-waits-0001'), attended: false }])
+    expect(stored()).toEqual([])
+  })
+
   test('several are sent oldest first, each as itself', async () => {
     const b = backend(['never', 'never'])
     judged(b.client, 'click-several-01')
