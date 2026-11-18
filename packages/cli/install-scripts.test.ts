@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { INSTALL } from '@it/protocol'
 import { expect, test } from 'vitest'
 import { markedInstallation, markInstallation } from './src/installation'
+import { READS_PROFILE, shellKind } from './src/shell-profile'
 import { withInstallationLock } from './src/uninstall-files'
 import { stamp } from './stamp.mjs'
 
@@ -155,6 +156,19 @@ test("both install scripts download from It's releases on GitHub, the place the 
     expect(script(name), name).toContain(name === 'install.sh' ? INSTALL.sh : INSTALL.ps)
     expect(script(name), name).not.toMatch(/itcan\.do\/(releases|install\.(sh|ps1))/)
   }
+})
+
+test('install.sh and the program name the same shells as ones that read .profile, and take any shell beyond those and bash, zsh and fish for one they do not know', () => {
+  // The one line of the script that lists them, between the shells with files of their own and every other shell
+  const listed = /\n {2}zsh \| bash \| fish\) : ;;\n {2}([a-z0-9 |]+)\) : ;;\n {2}\*\) unknown=1 ;;\n/.exec(script('install.sh'))?.[1]
+  expect(listed?.split(' | ')).toEqual([...READS_PROFILE])
+  for (const name of READS_PROFILE) expect(shellKind({ SHELL: `/bin/${name}` }), name).toBe('profile')
+  for (const name of ['bash', 'zsh', 'fish'] as const) expect(shellKind({ SHELL: `/usr/local/bin/${name}` })).toBe(name)
+  // Where SHELL names nothing, both take the shell for sh
+  expect([shellKind({}), shellKind({ SHELL: '' })]).toEqual(['profile', 'profile'])
+  // csh and tcsh read .login and .cshrc, yash reads .yash_profile, and the rest read files of their own
+  for (const name of ['csh', 'tcsh', 'yash', 'nu', 'elvish', 'xonsh', 'pwsh', 'rbash', 'tmux', 'ksh2020'])
+    expect(shellKind({ SHELL: `/usr/bin/${name}` }), name).toBe('unknown')
 })
 
 test.skipIf(windows)('install.sh notes another place it downloaded from, and takes the note away when it downloads from GitHub again', () => {

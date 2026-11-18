@@ -3,6 +3,28 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+/**
+ * The shells that read `~/.profile` when they start as a login shell, by the last part of what
+ * SHELL names: sh and what stands for it, the Almquist shells and the Korn shells, each of which
+ * says so in its own manual. The install script writes its line there for these, and has the
+ * same list. A shell that is not here, and is not bash, zsh or fish, is one It does not know:
+ * csh and tcsh read `.login` and `.cshrc`, yash reads `.yash_profile`, and nushell, elvish and
+ * xonsh read files of their own, in words of their own.
+ */
+export const READS_PROFILE: readonly string[] = ['sh', 'dash', 'ash', 'ksh', 'ksh93', 'mksh', 'oksh', 'posh']
+
+/** How It knows the shell SHELL names: by the files it reads when it starts, or not at all. */
+export type ShellKind = 'bash' | 'zsh' | 'fish' | 'profile' | 'unknown'
+
+/** The last part of what SHELL names, which is sh where it names nothing, as the install script takes it. */
+export const shellName = (env: NodeJS.ProcessEnv = process.env): string => path.basename(env.SHELL || 'sh')
+
+export function shellKind(env: NodeJS.ProcessEnv = process.env): ShellKind {
+  const name = shellName(env)
+  if (name === 'bash' || name === 'zsh' || name === 'fish') return name
+  return READS_PROFILE.includes(name) ? 'profile' : 'unknown'
+}
+
 /** What zsh's answer is marked with, among whatever its startup files print. */
 export const ZSH_ANSWER = 'it-zdotdir-56e730c1'
 

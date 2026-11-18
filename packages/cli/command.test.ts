@@ -6572,6 +6572,30 @@ describe.skipIf(process.platform !== 'linux' || !python)('a setup that leads a p
     }
   }, 60_000)
 
+  test('started by the install script in a terminal that did not have It’s folder, leaves the folder for someone whose shell It does not know to add, and nothing for a shell whose file holds the line', async () => {
+    const here = await setUpHere((asked) => (asked.path === 'machines:choose' ? { wakes: [] } : null))
+    try {
+      const bin = path.join(here.m.it, 'bin')
+      // As the script starts setup: with the folder on the PATH of this one run, and the word that the terminal did not have it
+      const lent = { ...here.env, PATH: `${here.m.bin}${path.delimiter}${bin}`, IT_INSTALL_FLOW: '1', IT_INSTALL_ON_PATH: '0' }
+      const shown = async (shell: string) =>
+        (await atTerminal(here.m, ['setup'], { ...lent, SHELL: shell })).shown.split('\n').map((line) => line.slice(line.lastIndexOf('\x1b[2K') + 1).trim())
+      // The script wrote its line into .profile, which nushell never reads
+      writeFileSync(path.join(here.m.home, '.profile'), `\n# It\nexport PATH='${bin}':"$PATH"\n`)
+      const unknown = await shown('/usr/bin/nu')
+      expect(unknown).toContain('Left for you')
+      expect(unknown).toContain(
+        '! `it` is not on your PATH yet, so an agent that runs it by name will not find it. Add this folder to the PATH in the file your shell, nu, reads when it starts, then open a new terminal:',
+      )
+      expect(unknown).toContain(bin)
+      expect(unknown.join('\n')).not.toContain('export PATH')
+      // And which dash reads, so a new terminal has the folder
+      expect((await shown('/usr/bin/dash')).join('\n')).not.toContain('PATH')
+    } finally {
+      await here.close()
+    }
+  })
+
   test('says that it is looking for the agent apps for as long as it asks each of them, and leaves no line of that behind', async () => {
     const here = await setUpHere((asked) => (asked.path === 'machines:choose' ? { wakes: [] } : null))
     try {
@@ -8363,6 +8387,86 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and whether an agent 
       writeFileSync(path.join(m.home, '.profile'), `export PATH='/somewhere/else/bin':"$PATH"\n`)
       const other = await run(m, ['setup', '--yes', '--no-service'], { ...b.env, IT_HOME: odd })
       expect(other.err).toContain('`it` is not on your PATH yet')
+    } finally {
+      await b.close()
+    }
+  })
+
+  /** What setup says of the PATH where SHELL names `shell`, given whatever else `env` sets. */
+  async function saidOfPath(m: ReturnType<typeof machine>, b: Awaited<ReturnType<typeof backend>>, shell: string, env: Record<string, string> = {}) {
+    const ran = await run(m, ['setup', '--yes', '--no-service'], { ...b.env, SHELL: shell, ...env })
+    expect(ran.code).toBe(0)
+    return ran.err
+  }
+  /** The install script's line for the machine's folder, written into its `.profile` as the script writes it. */
+  function lineInProfile(m: ReturnType<typeof machine>) {
+    const line = `export PATH='${path.join(m.it, 'bin')}':"$PATH"`
+    writeFileSync(path.join(m.home, '.profile'), `\n# It\n${line}\n`)
+    return line
+  }
+  /** What setup says to someone whose shell It does not know: the folder, and no line. */
+  const FOLDER_TO_ADD = (m: ReturnType<typeof machine>, shell: string) =>
+    `\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. Add this folder to the PATH in the file ${shell} reads when it starts, then open a new terminal:\n\n  ${path.join(m.it, 'bin')}\n`
+
+  test('does not accept the line in .profile as proof where the shell is nushell, elvish, xonsh, csh or tcsh, which never read .profile, and names the folder with no line in another shell’s words', async () => {
+    const m = machine()
+    lineInProfile(m)
+    const b = await backend({ it: m.it })
+    try {
+      for (const shell of ['/usr/bin/nu', '/usr/bin/elvish', '/usr/bin/xonsh', '/bin/csh', '/bin/tcsh']) {
+        const said = await saidOfPath(m, b, shell)
+        expect(said, shell).toContain(FOLDER_TO_ADD(m, `your shell, ${path.basename(shell)},`))
+        expect(said, shell).not.toContain('export PATH')
+      }
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('accepts the line in .profile as proof where the shell is sh, dash, ash or a Korn shell, which read .profile as a login shell, and offers the line where it is not there', async () => {
+    const m = machine()
+    const line = lineInProfile(m)
+    const b = await backend({ it: m.it })
+    try {
+      for (const shell of ['/bin/sh', '/usr/bin/dash', '/bin/ash', '/bin/ksh', '/usr/bin/ksh93', '/bin/mksh', '/usr/local/bin/oksh', '/bin/posh'])
+        expect(await saidOfPath(m, b, shell), shell).not.toContain('PATH')
+      rmSync(path.join(m.home, '.profile'))
+      expect(await saidOfPath(m, b, '/bin/ksh')).toContain(
+        `Add this line to the file your shell reads when it starts, then open a new terminal:\n\n  ${line}\n`,
+      )
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('says to a shell It does not know that `it` is not on the PATH yet and names the folder to add, with no `export` line, and does not repeat a name it cannot print', async () => {
+    const m = machine()
+    lineInProfile(m)
+    const b = await backend({ it: m.it })
+    try {
+      const said = await saidOfPath(m, b, '/opt/shells/some-shell')
+      expect(said).toContain(FOLDER_TO_ADD(m, 'your shell, some-shell,'))
+      expect(said).not.toContain('export')
+      // A name with more in it than a name has is not written out to the terminal
+      const odd = await saidOfPath(m, b, '/opt/shells/odd \u001b[31mshell')
+      expect(odd).toContain(FOLDER_TO_ADD(m, 'your shell'))
+      expect(odd).not.toContain('export')
+      expect(odd).not.toContain('\u001b')
+    } finally {
+      await b.close()
+    }
+  })
+
+  test('where the install script lent its folder to the PATH of the setup it started, in a terminal that did not have it, still says so to a shell It does not know', async () => {
+    const m = machine()
+    lineInProfile(m)
+    const b = await backend({ it: m.it })
+    try {
+      const lent = { PATH: `${m.bin}${path.delimiter}${path.join(m.it, 'bin')}`, IT_INSTALL_ON_PATH: '0' }
+      expect(await saidOfPath(m, b, '/usr/bin/nu', lent)).toContain(FOLDER_TO_ADD(m, 'your shell, nu,'))
+      // A shell whose file holds the line has the folder in every new terminal, and one whose terminal had the folder already has it
+      expect(await saidOfPath(m, b, '/usr/bin/dash', lent)).not.toContain('PATH')
+      expect(await saidOfPath(m, b, '/usr/bin/nu', { ...lent, IT_INSTALL_ON_PATH: '1' })).not.toContain('PATH')
     } finally {
       await b.close()
     }

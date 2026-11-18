@@ -601,6 +601,60 @@ try {
         fish.said.includes(fishFile),
       `${fish.said}\n${read(fishFile)}`,
     )
+    // A Korn shell reads .profile when it starts as a login shell, as sh does, and is told what sh is told
+    const ksh = await install('ksh', {}, { shell: '/bin/ksh' })
+    check(
+      'someone whose shell is ksh, which reads .profile, gets the line there and is told that a new terminal has the folder',
+      ksh.code === 0 &&
+        read(path.join(ksh.home, '.profile'))?.includes(`\nexport PATH='${path.dirname(ksh.it)}':"$PATH"\n`) &&
+        ksh.said.includes(`Added ${path.dirname(ksh.it)} to your PATH, in ~/.profile. Open a new terminal, or run:  export PATH=`),
+      `${ksh.said}\n${read(path.join(ksh.home, '.profile'))}`,
+    )
+    // nushell, elvish, xonsh, csh and tcsh never read .profile, and the line is not one they read. The line still goes
+    // in .profile, where the session of a desktop may read it, and nothing is promised of a new terminal
+    const mayNotRead = (r) =>
+      `Your shell, nu, is not one It knows, and it may not read that file. If a new terminal does not find \`it\`, add ${path.dirname(r.it)} to the PATH in the file your shell reads when it starts.\n`
+    const promised = /Added |Open a new terminal|every new terminal|On your PATH|or run:|export PATH/
+    const nu = await install('nushell', {}, { shell: '/usr/bin/nu' })
+    check(
+      'someone whose shell the script does not know, as nushell, is told that their shell may not read .profile and which folder to add, and is offered no line and promised no new terminal',
+      nu.code === 0 &&
+        read(path.join(nu.home, '.profile'))?.includes(`\nexport PATH='${path.dirname(nu.it)}':"$PATH"\n`) &&
+        nu.said.includes(`~/.profile was given the line that puts ${path.dirname(nu.it)} on the PATH. ${mayNotRead(nu)}`) &&
+        !promised.test(nu.said),
+      `${nu.said}\n${read(path.join(nu.home, '.profile'))}`,
+    )
+    const nuAgain = await install('nushell', {}, { shell: '/usr/bin/nu' })
+    check(
+      'installing again there adds the line no second time, and still says that the shell may not read the file that has it',
+      nuAgain.code === 0 &&
+        read(path.join(nuAgain.home, '.profile')).split('\nexport PATH=').length === 2 &&
+        nuAgain.said.includes(`~/.profile has the line that puts ${path.dirname(nuAgain.it)} on the PATH. ${mayNotRead(nuAgain)}`) &&
+        !promised.test(nuAgain.said),
+      `${nuAgain.said}\n${read(path.join(nuAgain.home, '.profile'))}`,
+    )
+    const nuWatched = await install('nushell-watched', {}, { shell: '/usr/bin/nu', terminal: true })
+    check(
+      'at a terminal it is said in a line marked as one to mind, and not as done',
+      nuWatched.code === 0 &&
+        // The mark is yellow, and the colour ends before the words
+        nuWatched.said.includes(
+          `!\u001b[0m ~/.profile was given the line that puts ${path.dirname(nuWatched.it)} on the PATH. ${mayNotRead(nuWatched).trim()}`,
+        ) &&
+        !promised.test(nuWatched.said),
+      nuWatched.said,
+    )
+    mkdirSync(path.join(tmp, 'tcsh'), { recursive: true })
+    writeFileSync(path.join(tmp, 'tcsh', '.profile'), '# mine\n', { mode: 0o400 })
+    const tcsh = await install('tcsh', {}, { shell: '/bin/tcsh' })
+    check(
+      'and where .profile cannot be changed, such a person is told to add the folder in the file their shell reads, with no line',
+      tcsh.code === 0 &&
+        read(path.join(tcsh.home, '.profile')) === '# mine\n' &&
+        tcsh.said.includes(`Your PATH could not be changed. Add ${path.dirname(tcsh.it)} to it yourself, in the file your shell reads when it starts.\n`) &&
+        !promised.test(tcsh.said),
+      tcsh.said,
+    )
     mkdirSync(path.join(tmp, 'bash'), { recursive: true })
     writeFileSync(path.join(tmp, 'bash', '.bash_profile'), '# mine\n')
     const bash = await install('bash', {}, { shell: '/usr/bin/bash' })
