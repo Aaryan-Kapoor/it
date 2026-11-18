@@ -128,6 +128,37 @@ for (const [name, run] of shells) {
       `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
     )
   }
+  // JSON as models write it, with a space after each colon and comma, which Windows PowerShell
+  // puts in quotes of its own, so that the runtime splits it inside its strings, a dash after a
+  // space among them. cmd hands JSON on bare, and reads a space outside its strings as the end of
+  // a word, so these are not written there
+  if (name !== 'cmd')
+    for (const written of ['{"title": "Plan - draft", "n": 1}', '{"note": "run with --verbose", "n": -1}', '{"steps": ["build - test", "ship -now"]}']) {
+      calls.length = 0
+      const done = await run(['patch', 'board', written, '--if-revision', '3'])
+      const sent = calls.find((c) => c.path === 'state:patch')?.args
+      check(
+        `${name}: it patch board ${written} --if-revision 3`,
+        done.status === 0 && sent?.patch === JSON.stringify(JSON.parse(written)) && sent?.baseRevision === 3,
+        `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
+      )
+    }
+  // Two --state values, the first with an option in a string: Windows PowerShell 5.1 hands that
+  // option on as a word of its own, so It takes neither value back and the command is refused,
+  // where reading back the second alone would leave --open on. The other shells hand on both
+  // whole, and the second is the state sent
+  if (name !== 'cmd') {
+    const second = '{"b": "x - y"}'
+    calls.length = 0
+    const done = await run(['create', `Two states from ${name}`, '--state', '{"a": "x --open --html=unused"}', '--state', second, '--html', 'hi'])
+    const begun = calls.find((c) => c.path === 'publish:begin')?.args
+    const said = `${done.stdout}${done.stderr}`
+    check(
+      `${name}: it create --state {"a": "x --open --html=unused"} --state ${second} --html hi ${name === 'Windows PowerShell 5.1' ? 'is refused' : 'sends the second state'}`,
+      name === 'Windows PowerShell 5.1' ? done.status !== 0 && calls.length === 0 : begun?.state === second,
+      `exit ${done.status}, sent ${JSON.stringify(calls)}, said ${said.trim().slice(0, 400)}`,
+    )
+  }
   calls.length = 0
   const set = await run(['set', 'board', 'order', '["c1","c 2"]'])
   const setSent = calls.find((c) => c.path === 'state:patch')?.args

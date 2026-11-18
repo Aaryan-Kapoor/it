@@ -236,6 +236,70 @@ export function jsonPlaces(given: readonly string[]): Map<number, number> {
 }
 
 /**
+ * Whether the words a JSON value stands in for may be taken into it. Where PowerShell put the
+ * value in quotes of its own, because it has a space outside its strings, the runtime's reading
+ * of the line splits it inside its strings instead, so that a string with a space and then a dash
+ * in it (`"Plan - draft"`, `"a -1"`, `"run with --verbose"`) hands the program a word that begins
+ * with a dash. Such a word is taken into the value where the command, given the words as they
+ * came, would have read it as no option of its own: a word with one dash, which every command
+ * reads as a plain word, or a word with two that names no option, which every command refuses.
+ * A word that names an option It knows, and `--` itself, which ends a command's options, are
+ * never taken, so that nothing the command would have read as one of its own ever is. Where
+ * PowerShell put no quotes round the value, no word that begins with a dash is taken.
+ */
+function takeable(words: readonly string[], wrapped: boolean): boolean {
+  return words.every((w) => {
+    if (!w.startsWith('-')) return true
+    if (!wrapped || w === '--') return false
+    return !w.startsWith('--') || !optionNamed(w)
+  })
+}
+/** Whether a word that begins with two dashes names an option It knows, as `parse` reads it. */
+const optionNamed = (word: string) => {
+  const eq = word.indexOf('=')
+  const name = eq === -1 ? word.slice(2) : word.slice(2, eq)
+  return BOOLEAN.has(name) || VALUED.has(name)
+}
+
+/**
+ * The words as the command would read them if each JSON value that PowerShell put in quotes of
+ * its own were one word, where the runtime split it at a word that begins with two dashes and
+ * names no option (`takeable`). `parse` refuses such a word, and `jsonPlaces` finds no place
+ * where any word is refused, so the places are found among these words instead: each such value
+ * is the words it stands in for joined by a space, as `it set` joins the words of its value. Only
+ * a value that already stands as one argument on the line, as PowerShell builds one, is joined;
+ * whether it is taken is decided after, as for every other value. Each word here keeps the index
+ * of the first word it stands for, and a joined one the index of its last as well.
+ */
+function joinedAtUnknownSwitches(line: string, after: readonly Word[]): { words: string[]; first: number[]; last: Map<number, number> } {
+  const words: string[] = []
+  const first: number[] = []
+  const last = new Map<number, number>()
+  for (let k = 0; k < after.length; k++) {
+    const word = after[k]!
+    const from = word.start + 1
+    const end = line[word.start] === '"' && spoilt(word.value) && (line[from] === '{' || line[from] === '[') ? jsonEnd(line, from) : -1
+    let to = k
+    if (end !== -1 && line[end] === '"' && (end + 1 >= line.length || space(line[end + 1]))) {
+      while (to + 1 < after.length && after[to + 1]!.start < end + 1) to++
+      const inside = after.slice(k + 1, to + 1).map((w) => w.value)
+      const joins = after[to]!.end === end + 1 && inside.some((w) => w.startsWith('--') && w !== '--' && !optionNamed(w)) && takeable(inside, true)
+      if (!joins) to = k
+    }
+    if (to > k) last.set(words.length, to)
+    words.push(
+      after
+        .slice(k, to + 1)
+        .map((w) => w.value)
+        .join(' '),
+    )
+    first.push(k)
+    k = to
+  }
+  return { words, first, last }
+}
+
+/**
  * The words after the program's name (and the script's, under Node) with each JSON value the
  * shell spoilt taken whole from the command line, or null where nothing is taken: the line
  * cannot be split back into exactly `given` by either rules, or no word is both spoilt and
@@ -248,9 +312,11 @@ export function jsonPlaces(given: readonly string[]): Map<number, number> {
  * line it takes is exactly what PowerShell builds for it as one argument, in quotes only where
  * PowerShell would have put them; no longer stretch, running on over the words after it, could
  * be one argument PowerShell built, so that nothing written inside one argument is taken for a
- * switch or another word; none of the words it stands in for reads as an option; it is at a
+ * switch or another word; no word it stands in for is one the command would read as its own
+ * (`takeable`); it is at a
  * place where the command takes JSON (`jsonPlaces`), and runs over every word the command would
- * read after it there; and it parses.
+ * read after it there; and it parses. Where spoilt JSON that the runtime split into several words
+ * is not taken, nothing on the line is, since the command would read those words as its own.
  *
  * Two lines are the same on the line as the one-argument line they are taken for, and so are
  * taken as it: two arguments that together make one JSON value with a space inside a string
@@ -267,7 +333,10 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
     const lead = words.length - given.length
     if (lead < 1 || words.slice(lead).some((w, k) => w.value !== given[k])) continue
     const after = words.slice(lead)
-    const places = jsonPlaces(given)
+    // The places where a command takes JSON, found with each value PowerShell quoted read as one word where a switch It does not know split it
+    const joined = joinedAtUnknownSwitches(line, after)
+    const places = new Map<number, number>()
+    for (const [at, reach] of jsonPlaces(joined.words)) places.set(joined.first[at]!, joined.last.get(reach) ?? joined.first[reach]!)
     // Read again from the first word after the program's own, taking each spoilt JSON value whole
     const out: string[] = []
     let taken = false
@@ -278,20 +347,22 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
       const wrapped = line[at] === '"'
       const from = at + (wrapped ? 1 : 0)
       const reach = places.get(k)
-      const candidate = reach !== undefined && spoilt(word.value) && (line[from] === '{' || line[from] === '[')
+      const candidate = spoilt(word.value) && (line[from] === '{' || line[from] === '[')
       const end = candidate ? jsonEnd(line, from) : -1
       const stop = end === -1 ? -1 : end + (wrapped ? 1 : 0)
       // The words the value would stand in for: from this one to the last that begins inside it
       let last = k
       while (stop !== -1 && last + 1 < after.length && after[last + 1]!.start < stop) last++
       const json = end === -1 ? '' : line.slice(from, end)
+      // Whether the value closes on the line where a word ends, as JSON spoilt on the way does
+      const closes = end !== -1 && (!wrapped || line[end] === '"') && (stop >= line.length || space(line[stop])) && after[last]!.end === stop
       const fits =
-        end !== -1 &&
-        (!wrapped || line[end] === '"') &&
-        (stop >= line.length || space(line[stop])) &&
-        after[last]!.end === stop &&
+        closes &&
         COUNTINGS.some((counting) => rendered(json, counting) === line.slice(at, stop)) &&
-        after.slice(k + 1, last + 1).every((w) => !w.value.startsWith('-')) &&
+        takeable(
+          after.slice(k + 1, last + 1).map((w) => w.value),
+          wrapped,
+        ) &&
         reach !== undefined &&
         last >= reach &&
         after.slice(last + 1).every((w) => !oneArgument(line.slice(at, w.end)))
@@ -301,6 +372,11 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
         k = last + 1
         continue
       }
+      // Spoilt JSON that the runtime split into several words and that is not taken leaves those
+      // words to the command, which may read one as an option of its own beside JSON taken
+      // elsewhere: `--open` out of a first --state of `{"a": "x --open"}`, which a second --state
+      // overrides. Nothing is taken then, so that what runs is never other than what was written
+      if (closes && last > k) return null
       out.push(word.value)
       k++
     }
