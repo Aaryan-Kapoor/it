@@ -161,13 +161,14 @@ const later = (a, b) => {
 
 /** What the terminal shows, as text: its escapes taken out, its lines as they were drawn. */
 const screenFile = path.join(scratch, 'screen.txt')
-const screen = () =>
-  existsSync(screenFile)
-    ? readFileSync(screenFile, 'utf8')
+const shownIn = (file) =>
+  existsSync(file)
+    ? readFileSync(file, 'utf8')
         // biome-ignore lint/suspicious/noControlCharactersInRegex: a terminal's escapes are what is taken out
         .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Z0-9]|\x1b[=>78]/g, '')
         .replace(/\r/g, '\n')
     : ''
+const screen = () => shownIn(screenFile)
 
 let service
 let terminal
@@ -203,6 +204,125 @@ const resultOf = (command) => {
     if (result) return textOf(result)
   }
   return null
+}
+
+/** Closes a terminal that terminal.py runs, as a person closes it, and waits for it: terminal.py closes Hermes itself once its input ends. */
+async function shut(child) {
+  if (child && child.exitCode === null && child.signalCode === null) {
+    const closed = new Promise((resolve) => child.once('close', resolve))
+    child.stdin.end()
+    await Promise.race([closed, sleep(40_000)])
+  }
+  await stopped(child, 20_000)
+}
+
+/**
+ * A saved conversation opened again in Hermes's TUI and left idle, which is the run's last part.
+ * From Hermes 0.23.1 Hermes's gateway holds a conversation and tells a plugin when a program opens
+ * it, so It listens for the conversation from then on. The plain terminal is closed, as a person
+ * closes it, and the conversation that made the page is opened with `hermes --tui --resume <id>`
+ * in a pseudo-terminal. Nothing is typed in it. A press on the page must then come back as a new
+ * turn of that conversation, handed over by the add-on, with the model asked nothing else since
+ * the TUI opened. An earlier Hermes has no such hook, and this part is not run with it.
+ */
+async function resumedInTheTui({ version, session, frame }) {
+  if (later('0.23.1', version)) {
+    note(`Hermes ${version} does not tell a plugin that a saved conversation was opened again, so the TUI’s part is not run`)
+    return
+  }
+  await shut(terminal)
+  const tuiScreen = path.join(scratch, 'tui.txt')
+  const tui = spawn('python3', ['-I', path.join(root, 'e2e/apps/hermes/terminal.py'), tuiScreen, HERMES, '--tui', '--resume', session], {
+    env: { ...base, PATH: `${path.join(folders.it, 'bin')}${path.delimiter}${PATH}`, TERM: 'xterm-256color' },
+    cwd: folders.work,
+    stdio: ['pipe', 'ignore', 'ignore'],
+  })
+  const drawn = () =>
+    shownIn(tuiScreen)
+      .split('\n')
+      .filter((l) => l.trim())
+      .slice(-30)
+      .join('\n')
+  try {
+    // Open and idle: the TUI has drawn, It hears the add-on, and the model has been asked nothing
+    // for eight seconds. A click that waited for this conversation, where an earlier part of the
+    // run left one, arrives as the conversation is opened, and its turn is let end first.
+    const openBy = Date.now() + 90_000
+    let heard = await statusOf()
+    while ((!shownIn(tuiScreen).trim() || heard.hermes?.runtime?.state !== 'active') && Date.now() < openBy && tui.exitCode === null) {
+      await sleep(1000)
+      heard = await statusOf()
+    }
+    must(
+      'Hermes’s TUI opens the saved conversation again, and It hears the add-on',
+      tui.exitCode === null && shownIn(tuiScreen).trim() && heard.hermes?.runtime?.state === 'active',
+      `${JSON.stringify(heard.hermes ?? heard.said)}\nthe TUI: ${drawn()}`,
+    )
+    let asked = model.turns.length
+    let quietSince = Date.now()
+    const quietBy = Date.now() + 90_000
+    while (Date.now() - quietSince < 8000 && Date.now() < quietBy) {
+      await sleep(500)
+      if (model.turns.length !== asked) quietSince = Date.now()
+      asked = model.turns.length
+    }
+    const clicksBefore = clickTurns.length
+    const newest = (await it('read', PAGE)).json?.recentActions?.[0]?.id
+    await frame.locator('#go').click()
+    const action = (
+      await until(
+        () => it('read', PAGE),
+        (r) => r.json?.recentActions?.[0]?.id && r.json.recentActions[0].id !== newest,
+        15_000,
+      )
+    ).json?.recentActions?.[0]
+    must('It stores the click made while the TUI is idle', action?.id && action.id !== newest, JSON.stringify(action))
+    const mine = () => clickTurns.slice(clicksBefore).find((turn) => (newestFromUser(turn) ?? '').includes(`[action ${action.id}]`))
+    const clickBy = Date.now() + 60_000
+    while (!mine() && Date.now() < clickBy && tui.exitCode === null) await sleep(250)
+    const turn = mine()
+    must(
+      'a saved conversation opened again in the TUI and left idle gets the click as a new turn, with nothing typed in it',
+      turn !== undefined,
+      `${JSON.stringify({
+        action: (await it('read', PAGE)).json?.recentActions?.[0],
+        status: (await statusOf()).hermes,
+        asked: model.turns.slice(asked).map((t) => (newestFromUser(t.body) ?? '').slice(0, 120)),
+      })}\nthe TUI: ${drawn()}`,
+    )
+    check(
+      'in the same conversation: the turn that made the page comes before it',
+      turn.messages.some((m) => m.role === 'user' && textOf(m).startsWith('Make a page with one button')) &&
+        JSON.stringify(turn.messages).includes(`--id ${PAGE}`),
+      JSON.stringify(turn.messages.map((m) => `${m.role}: ${textOf(m).slice(0, 60)}`)),
+    )
+    check(
+      'and the model was asked nothing since the TUI was idle but what It handed over: the click began the turn',
+      model.turns.slice(asked).every((t) => (newestFromUser(t.body) ?? '').startsWith('[It]')),
+      JSON.stringify(model.turns.slice(asked).map((t) => (newestFromUser(t.body) ?? '').slice(0, 120))),
+    )
+    const handed = await until(
+      () => it('read', PAGE),
+      (r) => r.json?.recentActions?.find((a) => a.id === action.id)?.delivery === 'handed_off',
+      15_000,
+    )
+    const recorded = handed.json?.recentActions?.find((a) => a.id === action.id)
+    check(
+      'and It records that the add-on handed the click over',
+      recorded?.delivery === 'handed_off' && recorded?.route === 'addon',
+      JSON.stringify(recorded ?? handed.err),
+    )
+    // The turn the click began is let end before the TUI is closed
+    await until(
+      async () => model.turns.at(-1)?.body.messages.at(-1)?.role,
+      (role) => role === 'tool',
+      30_000,
+    )
+    await sleep(2000)
+    if (model.faults.length) check('the stand-in for the model answered every request of the TUI’s part', false, model.faults.join('; '))
+  } finally {
+    await shut(tui)
+  }
 }
 
 try {
@@ -491,6 +611,7 @@ try {
   )
   check('and its `it patch` changed the page again', pressedAgain.json?.state?.pressed === 'again', pressedAgain.out + pressedAgain.err)
   if (model.faults.length) check('the stand-in for the model answered every request', false, model.faults.join('; '))
+  else await resumedInTheTui({ version, session, frame })
 } catch (err) {
   if (!(err instanceof Stop)) check(`the run finished (${err.message})`, false, err.stack)
 } finally {

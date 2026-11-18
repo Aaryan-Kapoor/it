@@ -3514,6 +3514,27 @@ describe('what a person is told about an app', () => {
     expect(afterHermes('0.22.0')).not.toContain('shows in the TUI and not in the plain terminal')
   })
 
+  test('from Hermes 0.23.1, where a conversation listens as soon as it is opened, nobody is told to send a message in a saved one', () => {
+    // Hermes 0.23.1 tells a plugin when a conversation is opened, new or saved, and the add-on listens from then
+    for (const version of ['0.23.1', '0.23.2', '0.24.0']) {
+      expect(afterHermes(version)).not.toMatch(/saved conversation/)
+      expect(afterHermes(version).split('\n')).toEqual([
+        'If Hermes is open, restart it, and run this once, which lets It put what you do on a page into a Hermes conversation, in the plain `hermes` terminal as well as the TUI and the desktop app:',
+        '    hermes config set plugins.entries.it-bridge.allow_gateway_injection true',
+        'In this Hermes the turn a click starts shows in the TUI and not in the plain terminal, though the agent there has it and answers on the page.',
+        `If this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`,
+      ])
+    }
+    // From 0.22.3 to 0.23.0 Hermes's gateway holds the TUI's conversations and says nothing when one is opened again
+    for (const version of ['0.22.3', '0.22.7', '0.23.0'])
+      expect(afterHermes(version).split('\n')).toContain('A saved conversation you open again starts listening once you send a message in it.')
+    // Before that the TUI says when a conversation is opened, and only the plain terminal does not
+    for (const version of ['0.21.6', '0.22.0', '0.22.2']) {
+      expect(afterHermes(version).split('\n')).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
+      expect(afterHermes(version)).not.toContain('you open again')
+    }
+  })
+
   test('after connecting OpenCode says that a saved conversation listens once a message is sent in it', () => {
     // No event an OpenCode plugin is given says which saved conversation is open
     expect(AFTER.opencode!.split('\n')).toEqual([

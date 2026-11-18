@@ -18,6 +18,11 @@ name: Hermes Agent, the real app
 #     click, which the stand-in answers with `it patch`, and the page shows it. Where Hermes
 #     refuses the add-on, the click must wait until the command that allows it has been run.
 #
+# Where Hermes tells a plugin that a conversation was opened, as it does from 0.23.1, the script
+# ends with Hermes's TUI: it closes the terminal, opens the same conversation again with
+# `hermes --tui --resume` and types nothing in it, and the next press on the page must come back
+# as a turn of that conversation.
+#
 # It runs on every pull request, on every push to master, once a night and by hand. It is a
 # workflow of its own and blocks no merge: when Hermes publishes a version that It does not work
 # with, the nightly run goes red, and that is what it is for.

@@ -1865,20 +1865,27 @@ const found: Partial<Record<Harness, string>> = {}
  * the desktop app alone. In 0.23.1 the turn that a click starts is not shown in the plain
  * terminal, though the agent has it, and the person is told so. Not every later Hermes is known
  * to take the setting, so the person is told what happens where one does not. The plain terminal
- * tells the add-on nothing when a saved conversation is resumed, so the person is told to send a
- * message there.
+ * of a Hermes before 0.23.1 tells the add-on nothing when a saved conversation is resumed, so the
+ * person is told to send a message there. From 0.22.3 to 0.23.0 the TUI's conversations are held
+ * by Hermes's gateway, which says nothing when one is opened again either, so there the person is
+ * told so of every saved conversation. From 0.23.1 Hermes says when a conversation is opened, the
+ * add-on listens from then, and nothing is said of it.
  */
 export function afterHermes(version: string | undefined): string {
   // The one thing everyone has to do comes first and by itself, a line to a thought, with the
   // command on a line of its own so that no terminal breaks it in the middle of a word.
-  const resumed = 'A saved conversation you resume in the terminal starts listening once you send a message in it.'
   const first = 'If Hermes is open, restart it. What you do on a page then arrives by itself in the plain `hermes` terminal.'
   if (!version || !older('0.21.5', version))
-    return `${first}\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.\n${resumed}`
+    return `${first}\nIn this Hermes${version ? ` (${version})` : ''} that is the only place it does: in its TUI, its desktop app and its messaging gateway it waits on the page until the agent runs \`it wait\`.\nA saved conversation you resume in the terminal starts listening once you send a message in it.`
+  const resumed = !older(version, '0.23.1')
+    ? ''
+    : older(version, '0.22.3')
+      ? '\nA saved conversation you resume in the terminal starts listening once you send a message in it.'
+      : '\nA saved conversation you open again starts listening once you send a message in it.'
   const unseen = older(version, '0.23.1')
     ? ''
     : '\nIn this Hermes the turn a click starts shows in the TUI and not in the plain terminal, though the agent there has it and answers on the page.'
-  return `If Hermes is open, restart it, and run this once, which lets It put what you do on a page into a Hermes conversation, in the plain \`hermes\` terminal as well as the TUI and the desktop app:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\n${resumed}${unseen}\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
+  return `If Hermes is open, restart it, and run this once, which lets It put what you do on a page into a Hermes conversation, in the plain \`hermes\` terminal as well as the TUI and the desktop app:\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true${resumed}${unseen}\nIf this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`
 }
 
 export {
