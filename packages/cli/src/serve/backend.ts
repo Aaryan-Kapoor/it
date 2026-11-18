@@ -1309,35 +1309,56 @@ const databaseFile = () => path.join(backendFolder(), 'db.sqlite3')
  * and is not a note as It writes one is not taken for a note that says nothing: the note is
  * what says which It and which backend program the database is at, so whatever was about to
  * go by it stops, and the person is told.
+ *
+ * That holds of each thing the note says as it holds of the whole. A field that is not there
+ * is one the It that wrote the note had nothing to say in. One that is there and is not of the
+ * kind It writes there is not passed over as if it were absent: what it said is not known, and
+ * it may have been that a newer It began on the database. What a newer It notes beside these,
+ * under a name this one does not know, is left unread.
  */
 function readNote(): Note {
   if (!existsSync(noteFile())) return {}
-  const read = readJson<Record<string, unknown>>(noteFile())
-  if (!read || typeof read !== 'object' || Array.isArray(read))
-    throw unread(
+  const read = readJson<unknown>(noteFile())
+  const wrong = () =>
+    unread(
       `What It notes of its database, in ${noteFile()}, is not as It wrote it.`,
       'It says there which It and which backend program the database is at, and It does not start on the database without knowing. Put the file back as it was. If that cannot be done, move it away: It then takes the database for one it knows nothing of, and keeps a copy of it before it goes on.',
     )
-  const text = (value: unknown) => (typeof value === 'string' ? value : undefined)
-  const behind = read.behind as Partial<Behind> | undefined
-  const unsettled = read.unsettled as Partial<NonNullable<Note['unsettled']>> | undefined
+  /** Something with names in it, as the note is, and as what it says is unsettled or behind is. */
+  const named = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+  const text = (value: unknown): value is string => typeof value === 'string'
+  /** A moment as a clock gives it, which is how It notes when: a whole number of milliseconds. */
+  const moment = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0
+  /** A number that a port can have. */
+  const port = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535
+  if (!named(read)) throw wrong()
+  /** What the note has under a name, where it has anything there, and only as the kind It writes there. */
+  const field = <T>(name: keyof Note, is: (value: unknown) => value is T): T | undefined => {
+    if (!Object.hasOwn(read, name)) return undefined
+    const value = read[name]
+    if (!is(value)) throw wrong()
+    return value
+  }
+  // Each It that has noted either of these wrote every part of it
+  const unsettled = field(
+    'unsettled',
+    (value): value is NonNullable<Note['unsettled']> => named(value) && text(value.it) && Array.isArray(value.functions) && value.functions.every(text),
+  )
+  const behind = field(
+    'behind',
+    (value): value is Behind => named(value) && text(value.functions) && (value.why === 'refused' || value.why === 'no_copy') && moment(value.at),
+  )
   const note: Note = {
-    made: typeof read.made === 'number' ? read.made : undefined,
-    release: text(read.release),
-    it: text(read.it),
-    functions: text(read.functions),
-    load: text(read.load),
-    functionsOf: text(read.functionsOf),
-    port: typeof read.port === 'number' ? read.port : undefined,
-    loading: text(read.loading),
-    unsettled:
-      unsettled && typeof unsettled.it === 'string' && Array.isArray(unsettled.functions) && unsettled.functions.every((hash) => typeof hash === 'string')
-        ? { it: unsettled.it, functions: unsettled.functions }
-        : undefined,
-    behind:
-      behind && typeof behind.functions === 'string' && (behind.why === 'refused' || behind.why === 'no_copy') && typeof behind.at === 'number'
-        ? { functions: behind.functions, why: behind.why, at: behind.at }
-        : undefined,
+    made: field('made', moment),
+    release: field('release', text),
+    it: field('it', text),
+    functions: field('functions', text),
+    load: field('load', text),
+    functionsOf: field('functionsOf', text),
+    port: field('port', port),
+    loading: field('loading', text),
+    unsettled: unsettled && { it: unsettled.it, functions: unsettled.functions },
+    behind: behind && { functions: behind.functions, why: behind.why, at: behind.at },
   }
   return Object.fromEntries(Object.entries(note).filter(([, value]) => value !== undefined))
 }
