@@ -7,8 +7,9 @@ import http from 'node:http'
 import net, { type AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import {
+  addressOf,
   conversationsOf,
   holderIn,
   likeliest,
@@ -101,73 +102,84 @@ describe('a note of its server that T3 Code left behind when it ended', () => {
     return was.port
   }
   const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
+  /** For how long an address has to refuse here before its note is taken to be left over: a few seconds, where It gives it ten. */
+  const FOR_MS = 3000
+  const look = (folder: string) => t3Server(folder, FOR_MS)
   /** Looks for the server every little while until it is found, or is found no more, and says whether it came to that in time. */
-  const comesTo = async (folder: string, found: boolean, withinMs = 30_000) => {
-    for (const until = Date.now() + withinMs; Date.now() < until; await pause(50)) if ((t3Server(folder) !== undefined) === found) return true
+  const comesTo = async (folder: string, found: boolean, withinMs = 40_000) => {
+    for (const until = Date.now() + withinMs; Date.now() < until; await pause(50)) if ((look(folder) !== undefined) === found) return true
     return false
   }
   const said: string[] = []
   beforeAll(() => t3Tells((line) => said.push(line)))
   afterAll(() => t3Tells(undefined))
 
-  test('names no server once its address has refused a connection twice, though the number of its process is now another program’s, and that is said without the address or the folder', async () => {
+  test('names no server once its address has refused every connection for long enough, though the number of its process is now another program’s, and that is said without the address or the folder', async () => {
     const port = await unheard()
     const folder = notedAt(port)
+    const began = Date.now()
     // Not before the address has been asked: unasked, a T3 Code that is running would be taken for gone
-    expect(t3Server(folder)).toMatchObject({ origin: `http://127.0.0.1:${port}`, home: folder })
-    // Nor on the word of one refusal, which a moment later is asked for again
-    await pause(300)
-    expect(t3Server(folder)).toBeDefined()
+    expect(look(folder)).toMatchObject({ origin: `http://127.0.0.1:${port}`, home: folder })
+    // Nor on the word of a refusal or two, which a server whose queue is full gives as well
+    await pause(1000)
+    expect(look(folder)).toBeDefined()
     expect(await comesTo(folder, false)).toBe(true)
+    expect(Date.now() - began).toBeGreaterThanOrEqual(FOR_MS)
     // It stays so for as long as the note names that process and that address
     await pause(300)
-    expect(t3Server(folder)).toBeUndefined()
+    expect(look(folder)).toBeUndefined()
     const lines = said.filter((line) => line.includes('t3_note_stale'))
     expect(lines.length).toBeGreaterThan(0)
     for (const line of lines) expect([line.includes(String(port)), line.includes(folder), line.includes(String(process.pid))]).toEqual([false, false, false])
-  }, 60_000)
+  }, 90_000)
 
   test('still names the server where it takes a connection and answers nothing: a T3 Code that is slow is running', async () => {
     const slow = await silent()
     const before = said.length
     try {
       const folder = notedAt(slow.port)
-      expect(t3Server(folder)).toBeDefined()
-      // Longer than it takes a refusal to be asked for again and believed
-      await pause(2500)
-      expect(t3Server(folder)).toMatchObject({ origin: `http://127.0.0.1:${slow.port}` })
+      expect(look(folder)).toBeDefined()
+      // Longer than an address that refuses is given here
+      await pause(FOR_MS + 2500)
+      expect(look(folder)).toMatchObject({ origin: `http://127.0.0.1:${slow.port}` })
       expect(said.length).toBe(before)
     } finally {
       await slow.close()
     }
-  }, 60_000)
+  }, 90_000)
 
   test('names the server again once something listens at its address, and at once where T3 Code notes another', async () => {
     const port = await unheard()
     const folder = notedAt(port)
-    t3Server(folder)
+    look(folder)
     expect(await comesTo(folder, false)).toBe(true)
     // T3 Code is started again, and notes a server at another address: nothing is known of that one yet, so it is taken at its word
     const again = await silent()
     let late: Awaited<ReturnType<typeof silent>> | undefined
-    const clock = vi.spyOn(performance, 'now')
     try {
       notedAt(again.port, folder)
-      expect(t3Server(folder)).toMatchObject({ origin: `http://127.0.0.1:${again.port}` })
-      // And one that noted its server before it listened is found once it does, when its address is next asked
+      expect(look(folder)).toMatchObject({ origin: `http://127.0.0.1:${again.port}` })
+      // And one that noted its server long before it listened is found once it does, when its address is next asked
       notedAt(port, folder)
-      t3Server(folder)
+      look(folder)
       expect(await comesTo(folder, false)).toBe(true)
       late = await silent(port)
-      const now = performance.now()
-      clock.mockImplementation(() => now + 60_000)
       expect(await comesTo(folder, true)).toBe(true)
     } finally {
-      clock.mockRestore()
       await again.close()
       await late?.close()
     }
-  }, 90_000)
+  }, 120_000)
+
+  test('asks the port its note writes, whatever plain http would leave unsaid, and takes a note at its word whose port is none', () => {
+    expect(addressOf('http://127.0.0.1:80')).toEqual({ host: '127.0.0.1', port: 80 })
+    expect(addressOf('http://localhost:3773')).toEqual({ host: 'localhost', port: 3773 })
+    expect(addressOf('http://[::1]:65535')).toEqual({ host: '::1', port: 65535 })
+    for (const origin of ['http://127.0.0.1:0', 'http://127.0.0.1:65536', 'http://127.0.0.1:99999', 'http://127.0.0.1', 'http://10.0.0.5:3773'])
+      expect([origin, addressOf(origin)]).toEqual([origin, undefined])
+    // A port no server can listen at was a server's before, and looking for it does not fail now
+    for (const port of [0, 65536, 99999]) expect(look(notedAt(port))).toMatchObject({ origin: `http://127.0.0.1:${port}` })
+  })
 })
 
 describe('T3 Code’s own command, as T3 Code keeps it', () => {
