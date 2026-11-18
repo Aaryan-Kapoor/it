@@ -2981,6 +2981,41 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(existsSync(path.join(bin, 'given'))).toBe(false)
   }, 60_000)
 
+  test('a Hermes conversation is reopened in Approvals, as it always was, where the It this machine joined names no mode for it, and in the mode It names where it names one', async () => {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'it-hermes-bin-'))
+    const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
+    made.push(bin, folder)
+    // A stand-in for Hermes that notes the words it was started with, under the conversation it was started for
+    writeFileSync(path.join(bin, 'hermes'), `#!/bin/sh\necho "$*" > ${bin}/argv-$3\ncat > /dev/null\nexit 0\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`
+    const first = { harness: 'hermes', id: '20261118_101010_abcdef' }
+    const second = { harness: 'hermes', id: '20261118_111111_abcdef' }
+    const held = { harness: 'hermes', id: `local-${'0f'.repeat(32)}` }
+    await start('socket', { wanted: ['hermes'], found: [...CONNECTED, { id: 'hermes', version: '0.23.2', addon: 'connected' }] }, () => {
+      for (const session of [first, second, held]) noteConversation(session, folder)
+    })
+    stand.watching.get('machines:me')!({ wanted: ['hermes'], wakes: [{ harness: 'hermes', since: Date.now() - 60_000 }] })
+    const startedWith = (id: string) => (existsSync(path.join(bin, `argv-${id}`)) ? readFileSync(path.join(bin, `argv-${id}`), 'utf8').trim() : null)
+    // An It from before there was a choice for Hermes names no mode as the run begins, and its page
+    // offers none: this machine, which would start Hermes in YOLO by itself, runs it without --yolo
+    stand.answer = (name) => (name === 'machines:runBegan' ? { stopped: false } : undefined)
+    offered({ ...click(1), session: first })
+    await until(() => startedWith(first.id) !== null)
+    expect(startedWith(first.id)).toBe(`chat --resume ${first.id} --query-file -`)
+    // A conversation Hermes's gateway holds cannot be held to Approvals, so it is not reopened, and
+    // the page is told that it is the It this machine joined that is to be updated
+    offered({ ...click(2), session: held })
+    await until(() => stand.calls.some((c) => c.name === 'machines:wakeFailed'), 25_000)
+    expect(stand.calls.find((c) => c.name === 'machines:wakeFailed')!.args.why).toBe(wake.HERMES_KEEPS_ITS_OWN_UNTOLD)
+    expect(wake.HERMES_KEEPS_ITS_OWN_UNTOLD.length).toBeLessThanOrEqual(300)
+    expect(startedWith(held.id)).toBeNull()
+    // An It that names YOLO, as this one does where nothing is chosen, has it started with --yolo
+    stand.answer = (name) => (name === 'machines:runBegan' ? { stopped: false, mode: 'yolo' } : undefined)
+    offered({ ...click(3), session: second })
+    await until(() => startedWith(second.id) !== null)
+    expect(startedWith(second.id)).toBe(`chat --resume ${second.id} --yolo --query-file -`)
+  }, 60_000)
+
   test('a conversation is not reopened for something the person stopped while it was being got ready: It is told which clicks the run is for, and says so', async () => {
     const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
     const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))

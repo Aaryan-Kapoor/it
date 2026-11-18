@@ -20,7 +20,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { describeClick, modesKnown, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeNoteFits, wakeNoteText } from '@it/protocol'
+import { describeClick, modesKnown, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeModeUntold, wakeNoteFits, wakeNoteText } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
 import { claimLock } from './src/legacy-lock'
@@ -409,6 +409,29 @@ describe('the command each agent app is carried on with', () => {
     expect(WAKE_MODE_LEGACY.opencode).toBe(WAKE_MODES.opencode?.default)
     expect(WAKE_MODES.hermes?.default).toBe('yolo')
     expect(WAKE_MODE_LEGACY.hermes).toBe('approvals')
+  })
+
+  test('where the It a machine joined names no mode for an app, the app is run in no more than an It from before the choice ran it in: Hermes in Approvals, and every other app as the machine would run it', () => {
+    // Hermes's starting value allows more than an It from before the choice ran it in, whose page offers no choice
+    expect(wakeModeUntold('hermes', wakeModeOf([], 'hermes')!)).toBe('approvals')
+    expect(wakeModeUntold('hermes', 'approvals')).toBe('approvals')
+    // OpenCode and Pi start on what such an It ran, and a choice kept from a newer It is not run beyond it
+    expect(wakeModeUntold('opencode', wakeModeOf([], 'opencode')!)).toBe('ask')
+    expect(wakeModeUntold('opencode', 'auto')).toBe('ask')
+    expect(wakeModeUntold('pi', 'full-access')).toBe('full-access')
+    // Codex and Claude Code where nothing is chosen are as they were, and so is every mode of Claude
+    // Code's, the conversation's own among them: an It from before the choice could run it in any
+    expect(wakeModeUntold('codex', wakeModeOf([], 'codex')!)).toBe('approve-for-me')
+    expect(wakeModeUntold('codex', 'read-only')).toBe('read-only')
+    for (const c of WAKE_MODES['claude-code']!.choices) expect(wakeModeUntold('claude-code', c.id)).toBe(c.id)
+    // An app with no modes has nothing to step down to
+    expect(wakeModeUntold('openclaw', 'anything')).toBe('anything')
+  })
+
+  test('the line beside YOLO names both things Hermes still refuses in it, its hardline blocklist and the person’s deny rules', () => {
+    const says = WAKE_MODES.hermes!.choices.find((c) => c.id === 'yolo')!.says
+    expect(says).toContain('hardline blocklist')
+    expect(says).toContain('deny rules')
   })
 
   test('Ask for approval is exactly what It ran before there was a choice, but that the person’s own reviewer cannot approve anything there', () => {

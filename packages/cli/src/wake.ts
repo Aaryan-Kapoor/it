@@ -332,6 +332,14 @@ export const autoCouldNotCheck = (printed: string): boolean => /auto mode could 
 export const HERMES_KEEPS_ITS_OWN =
   'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals; to reopen it with them, choose YOLO, the starting value, beside Hermes’s Auto-wake under Machines'
 
+/**
+ * The same, where the It this machine joined is from before there was a choice of how Hermes is
+ * reopened, and so runs it in Approvals: its Machines page has nothing to choose, and it is that It
+ * that is to be updated.
+ */
+export const HERMES_KEEPS_ITS_OWN_UNTOLD =
+  'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals, and the It this machine joined is from before the choice of how Hermes is reopened; update It on the machine it runs on, and this conversation is reopened'
+
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
   argv: string[]

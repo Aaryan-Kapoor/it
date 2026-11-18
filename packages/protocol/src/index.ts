@@ -559,7 +559,7 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
         id: 'yolo',
         label: 'YOLO',
         recommended: true,
-        says: 'Hermes approves all but its hardline blocklist; from 0.22.7 a conversation keeps its own.',
+        says: 'Approves all but Hermes’s hardline blocklist and your deny rules; 0.22.7+ keeps its approvals.',
       },
       {
         id: 'approvals',
@@ -614,6 +614,20 @@ export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | 
   if (list.choices.some((c) => c.id === mode)) return mode
   const ordered = list.choices.filter((c) => c.id !== CONVERSATIONS_OWN)
   return ordered[ordered.length - 1]?.id ?? list.default
+}
+/**
+ * The mode an app's conversations are reopened in on a machine whose It names none as a run begins
+ * (`runBegan`): an It from before that app had a choice, whose Machines page offers none for it and
+ * whose documents say the app is reopened as it always was. That is `mode`, what the machine would
+ * run by itself, unless what an It from before the choice ran the app in (`WAKE_MODE_LEGACY`)
+ * allows less: then it is that, so that no machine runs an app in more than the It it joined says.
+ * For Hermes that is Approvals in place of YOLO. A mode with no place in the order, as the
+ * conversation's own, is left as it is.
+ */
+export function wakeModeUntold(harness: string, mode: string): string {
+  const legacy = WAKE_MODE_LEGACY[harness as Harness]
+  const at = wakeModeRank(harness, mode)
+  return legacy !== undefined && at >= 0 && wakeModeRank(harness, legacy) > at ? legacy : mode
 }
 /**
  * Why a reopened run is not in the mode chosen, as its machine says it with `runNoted` and the
