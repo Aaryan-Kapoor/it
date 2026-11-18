@@ -8383,7 +8383,7 @@ describe('more cases at the edges', () => {
 })
 
 describe('a step of publishing that the backend gave up on because another touched the same record', () => {
-  test('is asked again by the action itself until it is let through, for ten seconds at most, and nothing else is', async () => {
+  test('is asked again by the action itself until it is let through, for a quarter of a minute at most or the time its caller gives, and nothing else is', async () => {
     const { overClashes, clashed, CLASH_MS } = await import('./lib/clash')
     const clash = () =>
       new Error('Documents read from or written to the "tallies" table changed while this mutation was being run and on every subsequent retry.')
@@ -8422,8 +8422,8 @@ describe('a step of publishing that the backend gave up on because another touch
     expect(began.every((at) => at < CLASH_MS)).toBe(true)
     // Given up on when the next asking would have begun too late, which is within one wait of that time
     expect(now + 1050).toBeGreaterThanOrEqual(CLASH_MS)
-    // More often than the few times the backend asks by itself, and with a wait before each asking but the first
-    expect(began.length).toBeGreaterThan(5)
+    // Far more often than the few times the backend asks by itself, and with a wait before each asking but the first
+    expect(began.length).toBeGreaterThan(10)
     expect(pauses).toHaveLength(began.length - 1)
     // Each wait is its own, between a twentieth of a second and what the asking's number allows, which is never much more than a second
     expect(pauses.every((ms, i) => ms >= 50 && ms <= 50 + Math.min(150 * (i + 1), 1000))).toBe(true)
@@ -8441,6 +8441,22 @@ describe('a step of publishing that the backend gave up on because another touch
     } finally {
       longest.mockRestore()
     }
+    // A caller that waits less gives a shorter time, which is kept to in the same way
+    now = 0
+    began.length = 0
+    await expect(
+      overClashes(
+        async () => {
+          began.push(now)
+          now += 500
+          throw clash()
+        },
+        { ...clock, within: 4000 },
+      ),
+    ).rejects.toSatisfy(clashed)
+    expect(began.length).toBeGreaterThan(2)
+    expect(began.every((at) => at < 4000)).toBe(true)
+    expect(now + 1050).toBeGreaterThanOrEqual(4000)
     // A wait that ends later than it was asked to, as one does on a machine that slept through it, is followed by no asking
     now = 0
     asked = 0

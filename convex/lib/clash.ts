@@ -6,21 +6,25 @@
 export const clashed = (err: unknown): boolean => /changed while this mutation was being run/.test(String((err as Error)?.message ?? err))
 
 /**
- * For how long a step that keeps being given up on is asked again. Callers that write one record
- * at the same moment are let through one after another, so the last of many is let through well
- * after the first, and on a machine with little to spare each asking takes seconds. A step is
- * given up on here, with the clash as the reason, once it has been asked for this long. Of those
- * that wait for a step asked for here, the one that waits the shortest is a machine asking for
- * its token, which gives It a quarter of a minute: so the asking that is under way when the time
- * is up still has five seconds to be answered in.
+ * For how long a step that keeps being given up on is asked again, where its caller says no
+ * other time. Callers that write one record at the same moment are let through one after
+ * another, so the last of many is let through well after the first, and on a machine with little
+ * to spare each asking takes seconds. A step is given up on here, with the clash as the reason,
+ * once it has been asked for this long. The site, and a machine that is joining, wait a third of
+ * a minute for the routes that ask here, and the door half a minute: so the asking that is under
+ * way when the time is up still has five seconds to be answered in. A route whose caller waits
+ * less gives a shorter time of its own.
  */
-export const CLASH_MS = 10_000
+export const CLASH_MS = 15_000
 
 /** The time, and a wait, as an action has them: a test gives its own. */
 const real = { now: () => Date.now(), pause: (ms: number): Promise<unknown> => new Promise((r) => setTimeout(r, ms)) }
 
-export async function overClashes<T>(run: () => Promise<T>, clock: { now(): number; pause(ms: number): Promise<unknown> } = real): Promise<T> {
-  const until = clock.now() + CLASH_MS
+export async function overClashes<T>(
+  run: () => Promise<T>,
+  { within = CLASH_MS, now = real.now, pause = real.pause }: { within?: number; now?: () => number; pause?: (ms: number) => Promise<unknown> } = {},
+): Promise<T> {
+  const until = now() + within
   for (let n = 1; ; n++) {
     try {
       return await run()
@@ -29,10 +33,10 @@ export async function overClashes<T>(run: () => Promise<T>, clock: { now(): numb
       // those that clashed would otherwise all come back at the same moment, and clash again
       const wait = 50 + Math.random() * Math.min(150 * n, 1000)
       // Nothing is asked once the time is up, so nothing is waited for that would be
-      if (!clashed(err) || clock.now() + wait >= until) throw err
-      await clock.pause(wait)
+      if (!clashed(err) || now() + wait >= until) throw err
+      await pause(wait)
       // A wait can end later than it was asked to, on a machine that was busy or asleep meanwhile: nothing is asked then either
-      if (clock.now() >= until) throw err
+      if (now() >= until) throw err
     }
   }
 }

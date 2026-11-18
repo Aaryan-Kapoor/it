@@ -2,7 +2,7 @@
 // credential is turned into something the backend believes: it checks the credential itself,
 // strictly, and mints a five-minute token for one audience. A machine's credential is the key
 // it enrolled with, and a browser's is the session it was paired into.
-import { AUDIENCE, PROTOCOL_VERSION, TAKES } from '@it/protocol'
+import { AUDIENCE, PROTOCOL_VERSION, TAKES, TOKEN_WAIT_MS } from '@it/protocol'
 import { httpRouter } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { base64url, createLocalJWKSet, importJWK, type JWK, jwtVerify } from 'jose'
@@ -191,9 +191,11 @@ http.route({
     }
     try {
       // Counted against the machine's own limit before anything else, so that what follows is
-      // written down no faster than that
-      const spent = await overClashes(() =>
-        ctx.runMutation(internal.bridge.spend, { machineId: m.id, jti: payload.jti as string, issuedAt: payload.iat as number }),
+      // written down no faster than that. Asked again for less time than elsewhere, since the
+      // machine waits only TOKEN_WAIT_MS for the answer.
+      const spent = await overClashes(
+        () => ctx.runMutation(internal.bridge.spend, { machineId: m.id, jti: payload.jti as string, issuedAt: payload.iat as number }),
+        { within: TOKEN_WAIT_MS - 5000 },
       )
       // The machine was revoked: said by the mutation, once an hour
       if (spent === 'revoked') return json(401, { error: 'Unknown or revoked machine.', reason: 'revoked' })
