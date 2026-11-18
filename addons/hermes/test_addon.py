@@ -1232,6 +1232,33 @@ class OpenedInAGatewayBeforeTheFirstMessage(Case):
         self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
         self.assertEqual(hermes.messages, [(TEXT, "user", Gateway.name_of(A))])
 
+    def test_a_refusal_that_comes_after_the_conversation_was_opened_again_is_not_held_against_it(self):
+        addon.REFUSED_SECONDS = 30
+        hermes = self.gateway()
+        asked = threading.Event()
+        answer = threading.Event()
+        takes = hermes.inject_message
+
+        def slow_to_refuse(content, role="user", *, session_key=None):
+            # Hermes is handed the click as the program lets go of the conversation, and is slow to refuse it
+            if not asked.is_set():
+                hermes.tried += 1
+                asked.set()
+                answer.wait(5)
+                return False
+            return takes(content, role, session_key=session_key)
+
+        hermes.inject_message = slow_to_refuse
+        hermes.open(A)
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(asked.wait(5))
+        hermes.close(A)
+        hermes.open(A)
+        answer.set()
+        # The refusal was of the conversation as it was before, so the click is handed over at the next asking
+        self.assertTrue(until(lambda: self.connector.acks() == [("k1",)]))
+        self.assertEqual(hermes.messages, [(TEXT, "user", Gateway.name_of(A))])
+
     def test_nothing_is_asked_for_an_opened_conversation_until_the_person_has_allowed_messages(self):
         hermes = self.gateway(allowed=False)
         hermes.open(A)

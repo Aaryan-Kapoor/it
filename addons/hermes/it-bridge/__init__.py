@@ -191,6 +191,7 @@ class _Talk:
         self.closed = False  # Hermes put it away: nothing is asked for it until it has another turn
         self.refused = 0
         self.wait_until = 0.0
+        self.opens = 0  # how often Hermes has said that it was opened, so that a refusal from before the last time is not held against it
         self.seen = 0.0
         self.looked_up = None  # the last other id the terminal showed, which Hermes's record was asked about
         self.carried = None  # the last id its commands were seen to carry that was not its own
@@ -383,9 +384,7 @@ class _Bridge:
             talk = self._talks.get(session_id)
             if talk is None:
                 talk = self._talks[session_id] = _Talk(session_id, session_id)
-            # Opened afresh, it can take a message now, whatever Hermes said of one before
-            talk.refused = 0
-            talk.wait_until = 0.0
+            self._opened_afresh(talk)
             self._heard(talk)
 
     def client_opened(self, session_id="", **_):
@@ -407,9 +406,19 @@ class _Bridge:
             return
         talk = self._note(session_id)
         if talk:
-            # Opened afresh, it can take a message now, whatever Hermes said of one before
-            talk.refused = 0
-            talk.wait_until = 0.0
+            with self._lock:
+                self._opened_afresh(talk)
+
+    def _opened_afresh(self, talk):
+        """A conversation that was just opened can take a message now, whatever Hermes said of one before. Called with the lock held.
+
+        Hermes may still be answering for a message handed over before this, and refuse it. The
+        count tells that answer apart, so that it does not leave the conversation alone for a
+        minute once it is open again.
+        """
+        talk.opens += 1
+        talk.refused = 0
+        talk.wait_until = 0.0
 
     def conversation_closed(self, session_id="", **_):
         with self._lock:
@@ -671,6 +680,7 @@ class _Bridge:
             # another conversation. A click for the one it left stays with the connector.
             if talk.closed or talk.id != session or self._talks.get(talk.key) is not talk:
                 return
+            opens = talk.opens
         try:
             # The host accepts only a chat key, with no expected conversation id. This check
             # cannot prevent a switch inside Hermes after we hand the message to it.
@@ -682,13 +692,16 @@ class _Bridge:
         if not taken:
             # Hermes would not take it, so the agent does not have it and nothing is reported.
             # The conversation is left alone for a while, which lets the connector give the
-            # click to something else that is listening.
-            talk.refused += 1
-            talk.wait_until = time.monotonic() + REFUSED_SECONDS
-            if talk.refused >= REFUSED_TIMES:
-                with self._lock:
-                    if self._talks.get(talk.key) is talk:
-                        del self._talks[talk.key]
+            # click to something else that is listening. Not where the conversation was opened
+            # again while Hermes answered: that refusal was of the conversation as it was before,
+            # and the click is offered again at the next asking.
+            with self._lock:
+                if talk.opens != opens:
+                    return
+                talk.refused += 1
+                talk.wait_until = time.monotonic() + REFUSED_SECONDS
+                if talk.refused >= REFUSED_TIMES and self._talks.get(talk.key) is talk:
+                    del self._talks[talk.key]
             return
         talk.refused = 0
         with self._lock:
