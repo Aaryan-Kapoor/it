@@ -8383,35 +8383,74 @@ describe('more cases at the edges', () => {
 })
 
 describe('a step of publishing that the backend gave up on because another touched the same record', () => {
-  test('is asked again by the action itself, a few times, and nothing else is', async () => {
-    const { overClashes, clashed } = await import('./lib/clash')
-    vi.useRealTimers()
+  test('is asked again by the action itself until it is let through, for a quarter of a minute at most, and nothing else is', async () => {
+    const { overClashes, clashed, CLASH_MS } = await import('./lib/clash')
     const clash = () =>
       new Error('Documents read from or written to the "tallies" table changed while this mutation was being run and on every subsequent retry.')
+    // The time is the test's own: it passes while a step is waited for, and while one runs
+    let now = 0
+    const pauses: number[] = []
+    const clock = {
+      now: () => now,
+      pause: async (ms: number) => {
+        pauses.push(ms)
+        now += ms
+      },
+    }
     let asked = 0
     expect(
       await overClashes(async () => {
         if (++asked < 3) throw clash()
         return 'done'
-      }),
+      }, clock),
     ).toBe('done')
     expect(asked).toBe(3)
-    asked = 0
+    expect(pauses).toHaveLength(2)
+    // One that keeps being given up on is asked for as long as CLASH_MS says, each asking taking
+    // the half second it takes on a machine with little to spare, and is then given up on with
+    // the clash as the reason. No asking begins once that time is up.
+    now = 0
+    pauses.length = 0
+    const began: number[] = []
     await expect(
       overClashes(async () => {
-        asked++
+        began.push(now)
+        now += 500
         throw clash()
-      }),
+      }, clock),
     ).rejects.toSatisfy(clashed)
-    expect(asked).toBe(4)
+    expect(began.every((at) => at < CLASH_MS)).toBe(true)
+    // Given up on when the next asking would have begun too late, which is within one wait of that time
+    expect(now + 1050).toBeGreaterThanOrEqual(CLASH_MS)
+    // Far more often than the few times the backend asks by itself, and with a wait before each asking but the first
+    expect(began.length).toBeGreaterThan(10)
+    expect(pauses).toHaveLength(began.length - 1)
+    // Each wait is its own, between a twentieth of a second and what the asking's number allows, which is never much more than a second
+    expect(pauses.every((ms, i) => ms >= 50 && ms <= 50 + Math.min(150 * (i + 1), 1000))).toBe(true)
+    expect(new Set(pauses).size).toBe(pauses.length)
+    const longest = vi.spyOn(Math, 'random').mockReturnValue(1)
+    try {
+      now = 0
+      pauses.length = 0
+      await expect(
+        overClashes(async () => {
+          throw clash()
+        }, clock),
+      ).rejects.toSatisfy(clashed)
+      expect(pauses.slice(0, 8)).toEqual([200, 350, 500, 650, 800, 950, 1050, 1050])
+    } finally {
+      longest.mockRestore()
+    }
+    // Anything else is not asked again: it may have been done, or is a refusal that says why
     asked = 0
+    pauses.length = 0
     await expect(
       overClashes(async () => {
         asked++
         throw new ConvexError({ code: 'limit', message: 'no' })
-      }),
+      }, clock),
     ).rejects.toBeInstanceOf(ConvexError)
-    expect(asked).toBe(1)
+    expect([asked, pauses]).toEqual([1, []])
   })
 })
 
