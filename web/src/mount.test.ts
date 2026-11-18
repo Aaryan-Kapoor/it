@@ -2252,7 +2252,7 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(tracks.map((t) => t.stopped)).toEqual([true])
   }, 15_000)
 
-  test('a document of It’s too busy at its own load to answer which document it is loses nothing it had: what it held for that load it opens over its next channel, without the person being asked, and keeps however long after', async () => {
+  test('a document too busy at its own load to answer which document it is is given, when it says hello again, a channel that says its load is counted, and the microphone it asks for there opens without the person being asked and stays live however long after', async () => {
     const { page } = await shownFor(FIRST, ['mic'])
     const { currentQuestion, microphoneFor } = await import('./media')
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -2264,7 +2264,8 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     // Its answer comes late, and changes nothing
     await page.fromFrame({ type: 'it:here', nonce, doc: 'doc-1' })
     expect(page.posted.filter((p) => p.data.type === 'it:loaded')).toEqual([])
-    // It says hello again under a new name, as on any it:gone, and its new channel says its load is counted already
+    // It says hello again under a new name, as It's script does on any it:gone, and its new channel says its load is counted
+    // already, which is what the script waits for before it sends the microphone it held
     await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
     expect(page.posted.filter((p) => p.data.type === 'it:port').map((p) => p.data.loaded)).toEqual([false, true])
     const port = page.ports()[1]!
