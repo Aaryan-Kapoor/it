@@ -876,6 +876,12 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
    * it has. Each is kept with the last time the person asked for it to be tried again, as It
    * said when it was given up on: see `retried`.
    */
+  /**
+   * The clicks this machine holds under a receipt and gave to a waiter from before receipts,
+   * each with that waiter: once the waiter says it has printed one, this machine tells It of
+   * the hand-over by the receipt, since It refuses what such a waiter tells it with none.
+   */
+  const toldFor = new Map<string, string>()
   /** Given up on, and It still to be told: each with the taking that gave up on it, where it is held by one of this connector's. */
   const toPark = new Map<string, { for: { harness: string; id: string } | null; tag: string; retry: number; attempt?: Taking }>()
   /** Set aside, and It has confirmed it. Should one come back on offer, it is left alone, unless the person has asked since for it to be tried again. */
@@ -4906,8 +4912,21 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
       for (const id of got) {
         const sent = submitting.get(id)
         if (sent?.given?.who === who) sent.printed = true
+        // A waiter from before receipts has printed a click this machine holds under one: what
+        // it tells It of that itself, with no receipt, It refuses, so this machine tells It for
+        // it, by the receipt it holds the click by
+        if (toldFor.get(id) === who) {
+          toldFor.delete(id)
+          if (!toConfirm.has(id) && !confirmed.has(id)) {
+            toConfirm.set(id, 'waiter')
+            journal('acked', id)
+            void confirmAll()
+          }
+        }
       }
       if (body.done) {
+        // What it was given and never said it printed is told to nobody: its hold runs out, and it is offered again
+        for (const [id, waiter] of [...toldFor]) if (waiter === who) toldFor.delete(id)
         // Kept, as one that has ended: see `waiters`
         const ended = waiters.get(who)
         if (ended) ended.endedAt = Date.now()
@@ -4927,14 +4946,19 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
          * Whether the waiter says by a receipt that it has printed a click this machine holds:
          * an `it wait` of this version says that it does. It is then given, with such a click,
          * the receipt this machine holds it by, and tells It of the hand-over by it. One still
-         * running from before an update does not, and what it would say of the click, with no
-         * receipt, It would refuse: so it is given nothing that is held under a receipt It
-         * knows, and takes for itself what is given back for it.
+         * running from before an update does not, and what it tells It of the click, with no
+         * receipt, It refuses. It is given the click all the same, as it always was: withheld,
+         * the click would wait behind the very turn that is waiting for it. This machine then
+         * tells It of the hand-over itself, once that waiter says it has printed the click.
          */
         const waiterReceipts = body.receipts === true
-        const mayHave = (id: string) => waiterReceipts || claimAttempts.get(id)?.told !== true
         const handed = (click: Offered): Offered & { receipt?: string } => {
           const taking = claimAttempts.get(click.id)
+          if (taking?.told && !waiterReceipts) {
+            toldFor.delete(click.id)
+            toldFor.set(click.id, who)
+            if (toldFor.size > 500) toldFor.delete(toldFor.keys().next().value!)
+          }
           return waiterReceipts && taking?.told ? { ...click, receipt: taking.receipt } : click
         }
         // A machine that does not fit the It it joined hands nothing over, to a waiter either, and nor does a connector that is stopping
@@ -4958,8 +4982,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // the waiter is given it too, still held for this machine. Should the add-on hand it
           // over as well, the agent can tell by its id that it is the same click.
           const given = h.served && steady() < h.leaseUntil - 1000
-          // Left with the add-on it was given to, where this waiter could not tell It that it printed it
-          if (given && !mayHave(clickId)) continue
           if (given && !fits(h.click)) continue
           held.delete(clickId)
           if (given) handedBack.push(handed(h.click))
@@ -4975,8 +4997,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // Once: an agent that took it, dealt with it and waits again is not given it a second
           // time. Unless it never had it: the same waiter asking again with no word of it was
           // sent an answer that did not arrive
-          if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !mayHave(sent.click.id) || !fits(sent.click))
-            continue
+          if (sent.printed || (sent.toWaiter && sent.given?.who !== who) || !waitedFor(waiter, sent.click) || !fits(sent.click)) continue
           sent.toWaiter = true
           if (sent.given?.who !== who) sent.given = { who, at: Date.now() }
           handedBack.push(handed(sent.click))

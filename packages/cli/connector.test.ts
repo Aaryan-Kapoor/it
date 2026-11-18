@@ -4975,26 +4975,39 @@ describe.skipIf(process.platform === 'win32')('receipts, by which what this mach
     expect(kept().receipts).toEqual([])
   })
 
-  test('a waiter that tells It by receipt is given a click its add-on was given with the receipt it is held by, and one from before receipts is given nothing that is held under one', async () => {
+  test('a waiter that tells It by receipt is given a click its add-on was given with the receipt it is held by, and one from before receipts is given it as it always was and has It told for it', async () => {
     await start()
     await doorAnswered()
     await listening()
-    offered(click(1))
-    await until(async () => (await held()) === 1)
-    const receipt = (await asks())!.clicks[0]!.receipt!
-    // An `it wait` still running from before an update: what it would tell It of the click, with
-    // no receipt, It would refuse. The click stays with the add-on it was given to
-    expect(await local('/waiting', { method: 'POST', body: { id: 'old-waiter', session: pi } })).toEqual({ ok: true, sessions: [pi] })
-    expect(await held()).toBe(1)
-    await local('/waiting', { method: 'POST', body: { id: 'old-waiter', done: true } })
-    // One of this version says that it tells It by receipt, and is given the click with its receipt
+    offered(click(1), click(2))
+    await until(async () => (await held()) === 2)
+    const given = (await asks())!.clicks
+    expect(given.map((c) => c.id)).toEqual(['click-1', 'click-2'])
+    // One of this version, waiting on the first click's page, says that it tells It by receipt, and is given the click with its receipt
     const answer = await local<{ clicks?: { id: string; receipt?: string }[] }>('/waiting', {
       method: 'POST',
-      body: { id: 'waiter', session: pi, receipts: true },
+      body: { id: 'waiter', slug: 'page-1', receipts: true },
     })
-    expect(answer?.clicks?.map((c) => [c.id, c.receipt])).toEqual([['click-1', receipt]])
+    expect(answer?.clicks?.map((c) => [c.id, c.receipt])).toEqual([['click-1', given[0]!.receipt]])
+    expect(await held()).toBe(1)
+    // An `it wait` still running from before an update, on the second click's page, says no such
+    // thing. It is given the click all the same, with no receipt: withheld, the click would wait
+    // behind the very turn that is waiting for it, which its add-on cannot hand it to
+    const old = await local<{ clicks?: { id: string; receipt?: string }[] }>('/waiting', { method: 'POST', body: { id: 'old-waiter', slug: 'page-2' } })
+    expect(old?.clicks?.map((c) => [c.id, 'receipt' in c])).toEqual([['click-2', false]])
     expect(await held()).toBe(0)
-    expect(written()).not.toContain(receipt)
+    // What it tells It of the click itself, with no receipt, It refuses. So once it says it has
+    // printed it, this machine tells It for it, by the receipt it holds the click by, and not before
+    expect(told('delivery:handedOff')).toEqual([])
+    await local('/waiting', { method: 'POST', body: { id: 'old-waiter', slug: 'page-2', got: ['click-2'] } })
+    await until(() => told('delivery:handedOff').length === 1)
+    expect(told('delivery:handedOff')).toEqual([{ id: 'click-2', route: 'waiter', receipt: given[1]!.receipt }])
+    // And only for the waiter that was given it, once
+    await local('/waiting', { method: 'POST', body: { id: 'old-waiter', slug: 'page-2', got: ['click-2', 'click-1'], done: true } })
+    await local('/waiting', { method: 'POST', body: { id: 'another-old-waiter', slug: 'page-1', got: ['click-1'] } })
+    await settled()
+    expect(told('delivery:handedOff')).toHaveLength(1)
+    for (const c of given) expect(written()).not.toContain(c.receipt)
   })
 
   test('a connector that starts again tells It by the kept receipt what the one before handed over, and by none where the record is from before receipts', async () => {
