@@ -456,6 +456,10 @@ export default defineSchema({
   // many names it took a value away from are still kept (`gone`), and the revision before which
   // a display is sent the whole state again rather than what changed (`floor`). A record that
   // does not say how many values the page keeps has none of these, and they are counted afresh.
+  //
+  // `keptFrom` is the revision at which everything the page keeps was last written afresh, as
+  // a change to thousands of its values at once is made. A record of a value from before that
+  // revision is no part of the state, and waits to be removed.
   revisions: defineTable({
     artifactId: v.id('artifacts'),
     revision: v.number(),
@@ -466,6 +470,7 @@ export default defineSchema({
     keptBytes: v.optional(v.number()),
     gone: v.optional(v.number()),
     floor: v.optional(v.number()),
+    keptFrom: v.optional(v.number()),
   }).index('by_artifact', ['artifactId']),
 
   // What a page keeps for itself with It.store, one record for each name it keeps something
@@ -473,7 +478,8 @@ export default defineSchema({
   // page is sent that value alone. A name the page took its value away from is kept a while
   // with no value (`gone`), so that a display which had the value is told that it went.
   // `revision` is the page's revision when the value was last set or taken away, and `bytes`
-  // is what the value comes to in the page's state as JSON, under its name.
+  // is what the value comes to in the page's state as JSON, under its name. Each index ends in
+  // the revision, so that the records from before the page's `keptFrom` are never read as its state.
   stored: defineTable({
     artifactId: v.id('artifacts'),
     key: v.string(),
@@ -483,7 +489,7 @@ export default defineSchema({
     revision: v.number(),
     bytes: v.number(),
   })
-    .index('by_artifact_key', ['artifactId', 'key'])
+    .index('by_artifact_key', ['artifactId', 'key', 'revision'])
     .index('by_artifact_gone', ['artifactId', 'gone', 'revision'])
     .index('by_artifact_revision', ['artifactId', 'revision']),
 
