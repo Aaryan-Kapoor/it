@@ -193,9 +193,13 @@ interface Listening {
 }
 const listening = new Map<string, Listening>()
 /** Where what the looking for T3 Code's server has to say is said: the connector's log, once the connector has named it. */
-let tell: ((line: string) => void) | undefined
-/** Names where the looking for T3 Code's server says what it finds. The lines hold nothing of the person's: no folder, no address. */
-export function t3Tells(say: ((line: string) => void) | undefined): void {
+let tell: ((line: string, home: string) => void) | undefined
+/**
+ * Names where the looking for T3 Code's server says what it finds. The lines hold nothing of the
+ * person's: no folder, no address. Which of T3 Code's folders a line is about is given beside
+ * it, for whoever looks in more than one, and is not for the log.
+ */
+export function t3Tells(say: ((line: string, home: string) => void) | undefined): void {
   tell = say
 }
 
@@ -302,6 +306,7 @@ function knockFor(home: string, known: Listening, at: { host: string; port: numb
       known.gone = true
       tell?.(
         `T3 Code’s note of its server names a process that is running and an address that has refused every connection for ${Math.round(forMs / 1000)} seconds, so the note is taken to be left over from a T3 Code that has ended, and T3 Code as not running here (t3_note_stale)`,
+        home,
       )
       return
     }

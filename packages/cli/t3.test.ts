@@ -110,8 +110,10 @@ describe('a note of its server that T3 Code left behind when it ended', () => {
     for (const until = Date.now() + withinMs; Date.now() < until; await pause(50)) if ((look(folder) !== undefined) === found) return true
     return false
   }
-  const said: string[] = []
-  beforeAll(() => t3Tells((line) => said.push(line)))
+  /** What was said of each of T3 Code's folders: a note that an earlier test left is asked about for a while yet, and what is said of it is not this test's. */
+  const said: { line: string; home: string }[] = []
+  const saidOf = (folder: string) => said.filter((of) => of.home === folder).map((of) => of.line)
+  beforeAll(() => t3Tells((line, home) => said.push({ line, home })))
   afterAll(() => t3Tells(undefined))
 
   test('names no server once its address has refused every connection for long enough, though the number of its process is now another program’s, and that is said without the address or the folder', async () => {
@@ -128,21 +130,21 @@ describe('a note of its server that T3 Code left behind when it ended', () => {
     // It stays so for as long as the note names that process and that address
     await pause(300)
     expect(look(folder)).toBeUndefined()
-    const lines = said.filter((line) => line.includes('t3_note_stale'))
+    const lines = saidOf(folder)
     expect(lines.length).toBeGreaterThan(0)
+    expect(lines.every((line) => line.includes('t3_note_stale'))).toBe(true)
     for (const line of lines) expect([line.includes(String(port)), line.includes(folder), line.includes(String(process.pid))]).toEqual([false, false, false])
   }, 90_000)
 
   test('still names the server where it takes a connection and answers nothing: a T3 Code that is slow is running', async () => {
     const slow = await silent()
-    const before = said.length
     try {
       const folder = notedAt(slow.port)
       expect(look(folder)).toBeDefined()
-      // Longer than an address that refuses is given here
-      await pause(FOR_MS + 2500)
+      // Longer than an address that refuses is given here, on Windows too, where each refusal is two seconds in coming
+      await pause(FOR_MS + 5000)
       expect(look(folder)).toMatchObject({ origin: `http://127.0.0.1:${slow.port}` })
-      expect(said.length).toBe(before)
+      expect(saidOf(folder)).toEqual([])
     } finally {
       await slow.close()
     }
