@@ -510,7 +510,7 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       {
         id: 'read-only',
         label: 'Read Only',
-        says: 'Reads and answers on the page; only commands you have allowed can change anything.',
+        says: 'Reads; answers on the page only as plain it. Commands you allowed can change things.',
       },
     ],
   },

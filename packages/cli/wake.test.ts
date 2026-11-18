@@ -55,6 +55,7 @@ import {
   endTree,
   IN_JOB,
   identity,
+  itRules,
   jobName,
   KEPT_NOT,
   keeper,
@@ -1332,7 +1333,7 @@ describe('whether a Codex conversation’s last turn was interrupted', () => {
 
 describe('the mode a Claude Code conversation is reopened in', () => {
   const UUID = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
-  const has = { codex: ['codex'], itHome: '/home/someone/.it' }
+  const has = { codex: ['codex'], itHome: '/home/someone/.it', platform: 'linux' as const }
   const words = (how: unknown) => (how as { argv: string[] }).argv
 
   const MODES = ['default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']
@@ -1458,6 +1459,25 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     // And the page says no raise It would not make
     expect(wakeNoteFits('claude-code', 'raised', 'auto', 'default')).toBe(false)
     expect(wakeNoteFits('codex', 'raised', 'ask', 'full-access')).toBe(false)
+  })
+
+  test('It’s own program may run in every mode by its name and by the whole path of each place it is installed, and never by a spelling from `~`, which Claude Code matches quoted as well', () => {
+    // As the guide installs it, in the home folder: the name, and the whole path, which also covers `$HOME/…`, which Claude Code expands
+    expect(itRules(['/home/ana/.it/bin/it'], 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/ana/.it/bin/it:*)'])
+    // A place with a space in its path: Claude Code would read the whole path as two rules, so only the name is given
+    expect(itRules(['/home/ana lee/.it/bin/it'], 'linux')).toEqual(['Bash(it:*)'])
+    // On Windows the program's name with its ending too, which Claude Code does not take for `it`
+    expect(itRules([], 'win32')).toEqual(['Bash(it:*)', 'Bash(it.exe:*)'])
+    // And the reopened command carries them, with nothing written from `~`: such a rule would also let `"~/.it/bin/it"` run
+    // a program of that name inside the conversation's folder, since the shell does not expand a quoted `~`
+    const argv = words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'default', itAt: ['/home/ana/.it/bin/it'] }))
+    expect(argv).toContain('Bash(/home/ana/.it/bin/it:*)')
+    expect(argv.filter((w) => w.includes('~'))).toEqual([])
+  })
+
+  test('a conversation reopened in a mode that refuses is told to run It as `it` alone, since another spelling may be refused there', () => {
+    for (const mode of ['default', 'dontAsk', 'acceptEdits', 'plan'])
+      expect(claudeModeNote(mode)).toContain('Run It as `it`, by that name alone, even where you ran it another way before')
   })
 
   test('Claude Code is taken to refuse Bypass Permissions as root only outside a sandbox it is told of, as its own check has it', () => {
