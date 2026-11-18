@@ -21,7 +21,15 @@ if (process.platform !== 'win32' || !program || !existsSync(program)) {
   process.exit(2)
 }
 
-// The stand-in: it answers what the command asks before a call, and notes each call
+// The stand-in: it answers what the command asks before a call, and notes each call. It answers
+// `it tour answer` with an action of the tour's first page and that page's state, so that the
+// command goes on to send its answer
+const REQUEST = '0123456789abcdef0123456789abcdef'
+const ANSWERS = {
+  'state:patch': { revision: 2 },
+  'state:get': { json: '{}', revision: 1 },
+  'delivery:get': { id: 'k57abc', artifact: 'tour-start', payload: JSON.stringify({ part: 'sums', request: REQUEST }) },
+}
 const calls = []
 const server = http.createServer((req, res) => {
   const chunks = []
@@ -40,7 +48,7 @@ const server = http.createServer((req, res) => {
         call = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
       } catch {}
       calls.push({ path: call.path, args: call.args?.[0] ?? {} })
-      json({ status: 'success', value: call.path === 'state:patch' ? { revision: 2 } : null, logLines: [] })
+      json({ status: 'success', value: ANSWERS[call.path] ?? null, logLines: [] })
     })
 })
 await new Promise((r) => server.listen(0, '127.0.0.1', r))
@@ -134,8 +142,8 @@ for (const [name, run] of shells) {
   // with its backslashes doubled and one with forward slashes, a backslash just before a quote, a
   // dash in a string, an array of strings that are numbers, an apostrophe, which PowerShell
   // writes as two, a letter Codex refuses written as its escape, a path that Git Bash would
-  // rewrite as an argument of its own, the line the tour gives for the drums, and JSON with a
-  // space outside its strings, which Windows PowerShell puts in quotes of its own. cmd hands JSON
+  // rewrite as an argument of its own, the line the tour gives for the drums, with a note and
+  // with an empty one, and JSON with a space outside its strings, which Windows PowerShell puts in quotes of its own. cmd hands JSON
   // on bare, and reads a space outside its strings as the end of a word, so that form is not
   // written there
   for (const written of [
@@ -148,6 +156,7 @@ for (const [name, run] of shells) {
     String.raw`{"say":"a \u2014 b"}`,
     '{"path":"/tmp/board.json"}',
     '{"theirs":{"request":"k57abc","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}}',
+    '{"theirs":{"request":"k57abc","pattern":["..x...x.","....x...","........","...x...."],"note":""}}',
     ...(name === 'cmd' ? [] : ['{"a": 1, "b": "x y"}']),
   ]) {
     calls.length = 0
@@ -255,14 +264,15 @@ for (const [name, run] of shells) {
       one.status === 0 && oneSent?.patch === '{"order":["1","2"]}',
       `exit ${one.status}, sent ${JSON.stringify(oneSent)}, said ${one.stderr.trim().slice(0, 400)}`,
     )
+    // Under a title of its own, since a command given again takes up the publication it began and sends no state
+    const state = '{"steps":{"build":"not yet"},"say":"she said \\"hi\\""}'
     calls.length = 0
-    // The state is read before anything is asked of It, so a call made at all means the file was read and its JSON taken
-    const made = await run(['create', 'Plan', '--html', '<p>hi</p>', '--state-file', inFile('state.json', '{"steps":{"build":"not yet"}}')])
-    const madeSaid = `${made.stdout}${made.stderr}`
+    const made = await run(['create', `In a file from ${name}`, '--html', '<p>hi</p>', '--state-file', inFile('state.json', state)])
+    const begun = calls.find((c) => c.path === 'publish:begin')?.args
     check(
-      `${name}: it create Plan --html <p>hi</p> --state-file <path> takes its JSON`,
-      calls.length > 0 && !/not valid JSON|does not know what to do with/.test(madeSaid),
-      madeSaid.trim().slice(0, 400),
+      `${name}: it create --html <p>hi</p> --state-file <path> sends the state in the file`,
+      begun?.state === state,
+      `sent ${JSON.stringify(begun)}, said ${`${made.stdout}${made.stderr}`.trim().slice(0, 400)}`,
     )
   }
   calls.length = 0
@@ -273,21 +283,27 @@ for (const [name, run] of shells) {
     set.status === 0 && setSent?.patch === '{"order":["c1","c 2"]}',
     `exit ${set.status}, sent ${JSON.stringify(setSent)}, said ${set.stderr.trim().slice(0, 400)}`,
   )
-  // These go on to ask for more than the stand-in answers; what is checked is that their JSON was taken, as JSON
-  for (const words of [
-    ['create', 'Plan', '--html', '<p>hi</p>', '--state', '{"steps":{"build":"not yet"}}'],
-    ['tour', 'answer', 'k57abc', '{"say":"Right: twelve times twelve is 144."}', '--no-wait'],
-    // An apostrophe in an answer, which the tour has an agent write as two in PowerShell
-    ['tour', 'answer', 'k57abc', `{"say":"That's it."}`, '--no-wait'],
-  ]) {
+  // The state a page starts with, under a title of its own, since a command given again takes up the publication it began and sends no state
+  {
+    const state = '{"steps":{"build":"not yet"}}'
     calls.length = 0
-    const done = await run(words)
-    const said = `${done.stdout}${done.stderr}`
-    // Its JSON is read before it asks anything of It, so a call made at all means the JSON was taken
+    const done = await run(['create', `On the line from ${name}`, '--html', '<p>hi</p>', '--state', state])
+    const begun = calls.find((c) => c.path === 'publish:begin')?.args
     check(
-      `${name}: it ${words.join(' ')} takes its JSON`,
-      calls.length > 0 && !/not valid JSON|does not know what to do with/.test(said),
-      said.trim().slice(0, 400),
+      `${name}: it create --html <p>hi</p> --state ${state} sends that state`,
+      begun?.state === state,
+      `sent ${JSON.stringify(begun)}, said ${`${done.stdout}${done.stderr}`.trim().slice(0, 400)}`,
+    )
+  }
+  // An answer to the tour's first page, which is put under the part its action came from, with the action's request: one with a colon and a number in it, and one with an apostrophe, which the tour has an agent write as two in PowerShell
+  for (const answer of [{ say: 'Right: twelve times twelve is 144.' }, { say: "That's it." }]) {
+    calls.length = 0
+    const done = await run(['tour', 'answer', 'k57abc', JSON.stringify(answer), '--no-wait'])
+    const sent = calls.find((c) => c.path === 'state:patch')?.args
+    check(
+      `${name}: it tour answer k57abc ${JSON.stringify(answer)} --no-wait`,
+      sent?.slug === 'tour-start' && sent?.patch === JSON.stringify({ sums: { ...answer, request: REQUEST } }) && sent?.baseRevision === 1,
+      `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${`${done.stdout}${done.stderr}`.trim().slice(0, 400)}`,
     )
   }
 }
