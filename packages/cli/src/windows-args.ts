@@ -315,7 +315,8 @@ function joinedAtUnknownSwitches(line: string, after: readonly Word[]): { words:
  * switch or another word; no word it stands in for is one the command would read as its own
  * (`takeable`); it is at a
  * place where the command takes JSON (`jsonPlaces`), and runs over every word the command would
- * read after it there; and it parses.
+ * read after it there; and it parses. Where spoilt JSON that the runtime split into several words
+ * is not taken, nothing on the line is, since the command would read those words as its own.
  *
  * Two lines are the same on the line as the one-argument line they are taken for, and so are
  * taken as it: two arguments that together make one JSON value with a space inside a string
@@ -346,18 +347,17 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
       const wrapped = line[at] === '"'
       const from = at + (wrapped ? 1 : 0)
       const reach = places.get(k)
-      const candidate = reach !== undefined && spoilt(word.value) && (line[from] === '{' || line[from] === '[')
+      const candidate = spoilt(word.value) && (line[from] === '{' || line[from] === '[')
       const end = candidate ? jsonEnd(line, from) : -1
       const stop = end === -1 ? -1 : end + (wrapped ? 1 : 0)
       // The words the value would stand in for: from this one to the last that begins inside it
       let last = k
       while (stop !== -1 && last + 1 < after.length && after[last + 1]!.start < stop) last++
       const json = end === -1 ? '' : line.slice(from, end)
+      // Whether the value closes on the line where a word ends, as JSON spoilt on the way does
+      const closes = end !== -1 && (!wrapped || line[end] === '"') && (stop >= line.length || space(line[stop])) && after[last]!.end === stop
       const fits =
-        end !== -1 &&
-        (!wrapped || line[end] === '"') &&
-        (stop >= line.length || space(line[stop])) &&
-        after[last]!.end === stop &&
+        closes &&
         COUNTINGS.some((counting) => rendered(json, counting) === line.slice(at, stop)) &&
         takeable(
           after.slice(k + 1, last + 1).map((w) => w.value),
@@ -372,6 +372,11 @@ export function wholeJson(line: string, given: readonly string[]): string[] | nu
         k = last + 1
         continue
       }
+      // Spoilt JSON that the runtime split into several words and that is not taken leaves those
+      // words to the command, which may read one as an option of its own beside JSON taken
+      // elsewhere: `--open` out of a first --state of `{"a": "x --open"}`, which a second --state
+      // overrides. Nothing is taken then, so that what runs is never other than what was written
+      if (closes && last > k) return null
       out.push(word.value)
       k++
     }

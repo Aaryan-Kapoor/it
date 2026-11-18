@@ -224,6 +224,17 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
       expect([args, wholeJson(line, given(line))]).toEqual([args, null])
     }
   })
+  test('where spoilt JSON that the runtime split into several words is not taken, nothing is, so that no word split out of it is read as an option beside JSON taken elsewhere', () => {
+    // A first --state with --open in a string, which the runtime hands on as a switch of its own, and a second that would be taken: --open would stay on
+    for (const second of ['{"b": "x --unknown y"}', '{"b": "x - y"}', '{"b": "x y"}', '{"b":"y"}']) {
+      const args = ['create', 'Plan', '--state', '{"a": "x --open --html=unused"}', '--state', second, '--html', 'hi']
+      const line = windowsPowerShell(args)
+      expect([args, wholeJson(line, given(line))]).toEqual([args, null])
+    }
+    // A first --state that the runtime did not split leaves no word of its own, and the second, which the command reads, is taken
+    const args = ['create', 'Plan', '--state', '{"a":"x"}', '--state', '{"b": "x - y"}', '--html', 'hi']
+    expect(run(windowsPowerShell(args))).toEqual(['create', 'Plan', '--state', '{a:x}', '--state', '{"b": "x - y"}', '--html', 'hi'])
+  })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()
     expect(wholeJson(`${IT} status`, ['status'])).toBeNull()
