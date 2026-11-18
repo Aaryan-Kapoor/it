@@ -212,6 +212,16 @@ The Hermes add-on checks that a click still belongs to the conversation in its c
 
 Browser retries of a page click or typed message share its original identity and a server deadline of at most seven days. After that deadline, a missing receipt is refused rather than treated as new work. A saved request with no deadline can only confirm a receipt It still holds. The time a browser says a request was made can only make it older than when it arrived, and never older than the browser's pairing or eight days, so a browser cannot use it to slip a click past a Stop or Auto-wake's cutoff. A notification accepts one answer, and Stop names the run shown when it was pressed. Signing out or pairing again discards pending requests from the old pairing; queued requests cannot execute under the replacement pairing.
 
+### A machine or an add-on from before receipts is held to less
+
+Every taking of a click to hand it over has a receipt of its own, so that a word about one hand-over that arrives late cannot count for a later hand-over of the same click. A machine that joined this It and runs an It from before receipts, and an add-on of such an It that an agent app still has loaded, go on without receipts, and are held to less:
+
+- Between such a machine's own takings of the same click the protection is missing, as it was before: a late word about one of them can still count for the next. An add-on from before receipts is believed by a click's id alone, for a click it was given in the taking that holds the click now, so between two takings that were both given to such an add-on it is missing too.
+- Apart from `it ack`, nothing such a machine says with no receipt keeps, gives back, sets aside or confirms a taking that was made with a receipt, whether that taking still holds the click or is over. Once nothing holds the click, the machine can take it afresh, as any machine can.
+- Where a delivery of such a machine's gives up just as the click's conversation is heard from again, the click is set aside as that machine asks, as it was before, and waits until the conversation is next heard from after a minute and a half of quiet, or until you ask for it to be tried again from its page.
+
+`it ack` needs no receipt, and is taken at its word. Update It on every machine that joined, and start agent apps again after an update.
+
 ### It is not made for the public internet
 
 Do not forward a port to It, give it a public address, open it to the internet with Tailscale Funnel, or put it where strangers can reach it. It has no encryption, it answers only to the machine's own names, and its limits on how fast a caller may try things are sized for one household. `it network on` does not reach the internet, and `it network internet`, which does, is there for a person who has weighed all of this and means to be reached from anywhere, not as a way to reach It from outside your home: Tailscale is that way.
