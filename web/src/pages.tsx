@@ -1289,7 +1289,9 @@ function ActionStatus({
   const settled = last.delivery === 'handed_off' && last.route !== 'stopped' && (last.outcome === 'succeeded' || last.outcome === 'failed')
   // (A turn that is running now began after that stop, or it would not be said to be running)
   // (Whether it was done before the stop is told by where the two stand in the order they were written in, where they have a place in it: see `beforeStop`)
-  const stopped = stoppedAt !== null && beforeStop(last, { stoppedAt, stoppedSequence })
+  // (And so is what that very stop dropped as it arrived: something a browser held from before the stop and sent after it)
+  const withThatStop = last.route === 'stopped' && stoppedSequence !== null && (last as { stoppedSequence?: number | null }).stoppedSequence === stoppedSequence
+  const stopped = stoppedAt !== null && (beforeStop(last, { stoppedAt, stoppedSequence }) || withThatStop)
   if (stopped && !settled && working) return <WorkingNow agent={agent} />
   if (stopped && !settled) {
     // Everything of that conversation's that was waiting went with the stop, and is said to have.

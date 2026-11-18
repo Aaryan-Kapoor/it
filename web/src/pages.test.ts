@@ -1022,6 +1022,12 @@ describe('what the page’s bar says of the last thing the person did', () => {
     recent = [dropped(NOW + 60_000, 9, 10), dropped(NOW - 5000, 8, 10), dropped(NOW - 9000, 3, 4)]
     await shown()
     expect(said()).toBe('Stopped, with 1 more that was waiting')
+    await act(async () => root.unmount())
+    host.remove()
+    // One a browser held from before the stop arrives after it, and goes with it as it arrives: it is the last thing done, and is counted with the rest
+    recent = [dropped(NOW + 90_000, 11, 10), dropped(NOW + 60_000, 9, 10), dropped(NOW - 5000, 8, 10), dropped(NOW - 9000, 3, 4)]
+    await shown()
+    expect(said()).toBe('Stopped, with 2 more that were waiting')
     Object.assign(PAGE, { stoppedAt: null, stoppedSequence: null })
   })
 
