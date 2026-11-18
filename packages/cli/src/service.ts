@@ -598,6 +598,127 @@ const unitPath = () => {
 }
 const plistPath = () => path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const launchdDomain = () => `gui/${process.getuid?.() ?? 501}`
+const launchdTarget = () => `${launchdDomain()}/${LABEL}`
+
+// What launchd is asked, and how what it answers is read. `launchctl` says of its newer
+// subcommands that what they print may change from one release to the next, so each answer is
+// read for the least that tells it from another, and one that is not known is taken for no
+// answer at all: what is said and done then is what the definition's file alone gives. The
+// forms below are the ones macOS 15.7 and macOS 26.7 print.
+
+/**
+ * Whether launchd said that the person has no domain to hold an agent in. The domain is made
+ * when they log in at the Mac's own screen, and is not there for an account that is only
+ * reached over SSH: asked of it then, `launchctl` ends with 112, "Could not find domain for
+ * user gui: 502", or with 125, "Domain does not support specified action", whatever it was asked.
+ */
+const noDomain = (asked: Ran): boolean =>
+  !asked.ok && (asked.status === 112 || asked.status === 125 || /Could not find domain|Domain does not support specified action/.test(asked.out))
+
+/**
+ * Whether what `launchctl print-disabled` printed has a label switched off, or nothing where it
+ * cannot be read. Under `disabled services = {`, each label that was ever switched on or off
+ * has a line, `"dev.it" => disabled` or `"dev.it" => enabled`, which earlier releases wrote as
+ * `=> true` and `=> false`. A label with no line was never switched off.
+ */
+export function launchdDisabled(printed: string, label: string = LABEL): boolean | undefined {
+  const lines = printed.split(/\r?\n/)
+  const from = lines.findIndex((line) => /^\s*disabled services\s*=\s*\{\s*$/.test(line))
+  // The list ends at its own closing brace: what follows it is of something else
+  const to = from < 0 ? -1 : lines.findIndex((line, at) => at > from && /^\s*\}\s*$/.test(line))
+  if (from < 0 || to < 0) return undefined
+  // A label can have more than one line, as some have in the system's own list: they are believed where they agree
+  const said = new Set<boolean | undefined>()
+  for (const line of lines.slice(from + 1, to)) {
+    const entry = /^\s*"((?:[^"\\]|\\.)*)"\s*=>\s*([A-Za-z]+);?\s*$/.exec(line)
+    if (entry?.[1] !== label) continue
+    said.add(entry[2] === 'disabled' || entry[2] === 'true' ? true : entry[2] === 'enabled' || entry[2] === 'false' ? false : undefined)
+  }
+  return said.size === 0 ? false : said.size === 1 ? [...said][0] : undefined
+}
+
+/**
+ * How launchd stands to It's agent, as far as it says:
+ *   `loaded`      it holds the agent, running or not, and `state` is what it says of it
+ *   `no login`    the person has no login at the Mac's own screen, so nothing could be loaded:
+ *                 launchd reads the definition's file when they next log in there
+ *   `disabled`    it does not hold the agent, and the label is switched off, so that it will not
+ *                 load it at the next login either
+ *   `not loaded`  it has the person's domain and does not hold the agent: it refused the
+ *                 definition, or someone took the agent out by hand
+ *   `unknown`     it could not be asked, or what it answered is not known
+ * A question that failed is not an answer: only launchd saying that it has no such service,
+ * which it ends with 113 for, is taken for the agent not being there.
+ */
+export function launchdHas(): { has: 'loaded' | 'no login' | 'disabled' | 'not loaded' | 'unknown'; state?: string } {
+  const seen = run('launchctl', ['print', launchdTarget()], ASKED_MS)
+  if (seen.ok) return { has: 'loaded', state: /state = (\w+)/.exec(seen.out)?.[1] ?? 'loaded' }
+  if (noDomain(seen)) return { has: 'no login' }
+  if (seen.status !== 113) return { has: 'unknown' }
+  const off = run('launchctl', ['print-disabled', launchdDomain()], ASKED_MS)
+  return { has: off.ok && launchdDisabled(off.out) === true ? 'disabled' : 'not loaded' }
+}
+
+/**
+ * Whether launchd starts the agent by itself: it holds it, or it will read the definition at
+ * the person's next login at the screen, where there is none now. Where launchd could not be
+ * asked, the definition's file is what there is to go by.
+ */
+const launchdStarts = (has: ReturnType<typeof launchdHas>['has'] = launchdHas().has): boolean => has === 'loaded' || has === 'no login' || has === 'unknown'
+
+/**
+ * A load that launchd refused, with why where that could be told. `launchctl bootstrap` prints
+ * one line, "Bootstrap failed: 5: Input/output error", for an agent that is loaded already, a
+ * label that is switched off, a file that is no property list and a file that others may write,
+ * so launchd is asked which it was. What this says is for a person to read: it names the
+ * definition's file, and is never written to a log.
+ */
+export class LaunchdRefused extends Error {
+  constructor(
+    message: string,
+    /** `disabled`, `unreadable`, `invalid`, or `unknown` where only what `launchctl` printed is known. */
+    readonly why: 'disabled' | 'unreadable' | 'invalid' | 'unknown',
+  ) {
+    super(message)
+    this.name = 'LaunchdRefused'
+  }
+}
+
+/** Why launchd would not load the definition it was just given, asked of launchd and of the file. */
+function launchdRefusal(loading: Ran): Error {
+  const printed = `loading the agent failed: ${loading.out || loading.why}`
+  // No login at the screen is no refusal: nothing could be loaded, and the definition waits for one
+  if (noDomain(loading)) return new Error(printed)
+  const off = run('launchctl', ['print-disabled', launchdDomain()], ASKED_MS)
+  if (off.ok && launchdDisabled(off.out) === true)
+    return new LaunchdRefused(
+      `macOS has It’s background service switched off for your account, so launchd would not load it. Turn it on again in System Settings, under General and then Login Items, or with \`launchctl enable ${launchdTarget()}\`, and run \`it setup\` again. If another tool manages what starts on this Mac, It has to be allowed there.`,
+      'disabled',
+    )
+  try {
+    readFileSync(plistPath())
+  } catch (err) {
+    return new LaunchdRefused(
+      `launchd would not load its definition, ${plistPath()}, and It cannot read that file itself (${(err as NodeJS.ErrnoException).code ?? 'it could not be opened'}). Make the file yours to read, or move it away, and run \`it setup\` again.`,
+      'unreadable',
+    )
+  }
+  // `plutil -lint` ends well and says OK of a property list, and otherwise says what is wrong with it after the file's name
+  const lint = run('plutil', ['-lint', plistPath()], ASKED_MS)
+  if (lint.status === 1 && lint.out) {
+    const wrong = lint.out
+      .split('\n')[0]!
+      .replace(plistPath(), '')
+      .replace(/^:\s*/, '')
+      .replace(/^\((.*)\)$/, '$1')
+      .trim()
+    return new LaunchdRefused(
+      `launchd would not load its definition, ${plistPath()}, which is not a valid property list${wrong ? ` (${wrong})` : ''}. \`plutil -lint\` on the file says where it is wrong. \`it setup\` writes the file from the settings of the terminal it is run in, its PATH among them, so the fault is in one of those: put it right and run \`it setup\` again.`,
+      'invalid',
+    )
+  }
+  return new LaunchdRefused(printed, 'unknown')
+}
 
 /** A failed question is not proof of absence. launchctl returns 113 when the job is gone. */
 export function waitForLaunchdUnload(forMs = STOP_MS): void {
@@ -621,7 +742,22 @@ export function waitForLaunchdUnload(forMs = STOP_MS): void {
 // names the folder it is started in: a launcher left in a folder says only that the folder once
 // registered the task, and another folder may have registered it since. Where Windows could not
 // be asked, that is thrown, with why: see `installedHereOr` for a caller that can go on without.
+//
+// On macOS the definition naming this folder is not yet the service being registered: launchd
+// is asked as well. A definition that launchd refused, or whose label is switched off, starts
+// nothing, now or at the next login, and is no registration. One that launchd has had no chance
+// to load, because the person has no login at the Mac's own screen, as over SSH, is read at
+// their next login there, and is one.
 export function installedHere(): boolean {
+  return definedHere() && (process.platform !== 'darwin' || launchdStarts())
+}
+
+/**
+ * Whether the service this machine has a definition of is this folder's, whatever the system
+ * makes of the definition: see `definedFor`. On Windows the task is asked, and where it could
+ * not be asked that is thrown.
+ */
+function definedHere(): boolean {
   if (process.platform === 'win32') {
     const registered = windowsRegisteredFor()
     return registered !== null && sameWindowsFolder(registered, home())
@@ -698,8 +834,13 @@ export function given(definition: string, platform: NodeJS.Platform = process.pl
 export function kept(): Record<string, string> {
   const file =
     process.platform === 'linux' ? unitPath() : process.platform === 'darwin' ? plistPath() : process.platform === 'win32' ? windowsLauncherFile() : null
-  // Where Windows cannot be asked whose the task is, this folder's own launcher is what there is to go by
-  if (!file || !installedHereOr(true)) return {}
+  // Where Windows cannot be asked whose the task is, this folder's own launcher is what there is to go by.
+  // A definition the system would not take holds what this folder's service was given all the same
+  let here = true
+  try {
+    here = definedHere()
+  } catch {}
+  if (!file || !here) return {}
   try {
     const { PATH: _path, ...rest } = given(readFileSync(file, 'utf8'))
     return rest
@@ -730,7 +871,7 @@ export function definedFor(): 'this folder' | 'another folder' | 'none' {
   }
   const definition = process.platform === 'linux' ? unitPath() : process.platform === 'darwin' ? plistPath() : null
   if (!definition || !existsSync(definition)) return 'none'
-  return installedHere() ? 'this folder' : 'another folder'
+  return definedHere() ? 'this folder' : 'another folder'
 }
 
 /**
@@ -755,7 +896,7 @@ const enabled = (): boolean => {
   const asked = run('systemctl', ['--user', 'is-enabled', `${NAME}.service`], ASKED_MS)
   return asked.ok && asked.out.split('\n')[0] === 'enabled'
 }
-/** How long what systemd said of the service is gone by before it is asked again. */
+/** How long what systemd or launchd said of the service is gone by before it is asked again. */
 const ENABLED_FOR_MS = 60_000
 let enabledWhen: { file: string; at: number; enabled: boolean } | undefined
 
@@ -763,12 +904,13 @@ let enabledWhen: { file: string; at: number; enabled: boolean } | undefined
  * Whether It is registered with the system to start by itself from this folder, as the running
  * service says it of itself.
  *
- * The definition on the disk says which folder the service is for. On macOS it is also what
- * makes the system start the service when the person logs in. On Linux it is not: systemd
- * starts what was enabled, so systemd is asked. The service asks often, and asking starts a
- * program, so what systemd said is gone by for a minute, and only for as long as the
- * definition's file is the one it was said of: whatever registers the service or takes it
- * away writes or removes that file.
+ * The definition on the disk says which folder the service is for. It is not what makes the
+ * system start the service: systemd starts what was enabled, and launchd what it holds or will
+ * read at the next login, and neither a definition it refused nor one whose label is switched
+ * off. So the system is asked. The service asks often, and asking starts a program, so what
+ * the system said is gone by for a minute, and only for as long as the definition's file is
+ * the one it was said of: whatever registers the service or takes it away writes or removes
+ * that file.
  *
  * On Windows only the task can say, and asking it starts a PowerShell. Nothing registers or
  * removes the task there without first asking this folder's service to stop, so there it is
@@ -780,16 +922,18 @@ export function startsByItself(): boolean {
     registeredOnWindows ??= installedHereOr(undefined)
     return registeredOnWindows ?? false
   }
-  if (!installedHere()) return false
-  if (process.platform !== 'linux') return true
+  if (!definedHere()) return false
+  if (process.platform !== 'linux' && process.platform !== 'darwin') return true
+  const linux = process.platform === 'linux'
   let file = ''
   try {
-    const seen = statSync(unitPath())
+    const seen = statSync(linux ? unitPath() : plistPath())
     file = `${seen.ino}:${seen.size}:${seen.mtimeMs}`
   } catch {
     return false
   }
-  if (enabledWhen?.file !== file || Date.now() - enabledWhen.at >= ENABLED_FOR_MS) enabledWhen = { file, at: Date.now(), enabled: enabled() }
+  if (enabledWhen?.file !== file || Date.now() - enabledWhen.at >= ENABLED_FOR_MS)
+    enabledWhen = { file, at: Date.now(), enabled: linux ? enabled() : launchdStarts() }
   return enabledWhen.enabled
 }
 let registeredOnWindows: boolean | undefined
@@ -949,16 +1093,23 @@ export function install(): ServiceStatus {
     try {
       waitForLaunchdUnload()
       absent = true
-      must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'loading the agent')
+      const loading = run('launchctl', ['bootstrap', launchdDomain(), plistPath()])
+      // launchd prints one line for every cause, so it is asked why, while the definition it
+      // refused is still the one on the disk
+      if (!loading.ok) throw launchdRefusal(loading)
     } catch (err) {
       // A failed replacement gives the earlier definition back to launchd. Where no agent
-      // was loaded, as over SSH, the definition is only kept for the next login.
+      // was loaded, as over SSH, the definition is only kept for the next login. One that
+      // launchd refused is kept too, where there was none before it: with its label switched
+      // off, it is what the person turns on again, and `installedHere` asks launchd, so that
+      // the file alone never passes for a registration.
       if (before !== null) {
         try {
           writeDefinition(plistPath(), before)
           if (unloaded && absent) must('launchctl', ['bootstrap', launchdDomain(), plistPath()], 'restoring the earlier agent')
         } catch (recovery) {
-          throw new Error(`${(err as Error).message}; ${(recovery as Error).message}`)
+          const both = `${(err as Error).message}${/[.!?]$/.test((err as Error).message) ? ' And' : ';'} ${(recovery as Error).message}`
+          throw err instanceof LaunchdRefused ? new LaunchdRefused(both, err.why) : new Error(both)
         }
       }
       throw err
@@ -1030,8 +1181,9 @@ export function uninstall(patience = STOP_MS): void {
  * How the system has the service: whether it is registered there to be started by itself, and
  * what state the system says it is in. On Linux the service is registered when systemd says it
  * is enabled, and not by its definition's file alone, which is there from before systemd was
- * asked to take it. On macOS the definition's file is the registration: the system loads it
- * when the person next logs in, whatever it says of it now.
+ * asked to take it. On macOS it is registered when launchd holds the agent, or has had no login
+ * of the person's at the screen to load it in and reads the definition at the next one: a
+ * definition that launchd refused, or whose label is switched off, is none.
  */
 export function status(): ServiceStatus {
   const system = systemStatus()
@@ -1055,8 +1207,8 @@ function systemStatus(): ServiceStatus {
     return { registered, state: r.out.split('\n')[0] || 'unknown', where: unitPath() }
   }
   if (process.platform === 'darwin') {
-    const r = run('launchctl', ['print', `${launchdDomain()}/${LABEL}`], ASKED_MS)
-    return { registered: existsSync(plistPath()), state: r.ok ? (/state = (\w+)/.exec(r.out)?.[1] ?? 'loaded') : 'not loaded', where: plistPath() }
+    const { has, state } = launchdHas()
+    return { registered: existsSync(plistPath()) && launchdStarts(has), state: state ?? (has === 'disabled' ? 'disabled' : 'not loaded'), where: plistPath() }
   }
   if (process.platform === 'win32') return windowsStatus()
   return { registered: false, state: 'unsupported', where: home() }

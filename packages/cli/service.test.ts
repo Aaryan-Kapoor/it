@@ -290,7 +290,8 @@ esac
         writeFileSync(loaded, '')
         expect(() => install()).toThrow(recoveryFails ? /replacement refused.*restoring the earlier agent failed: recovery refused/ : /replacement refused/)
         expect(readFileSync(definition, 'utf8')).toBe(earlier)
-        expect(readFileSync(asked, 'utf8').trim().split('\n')).toEqual(['bootout', 'print', 'bootstrap', 'bootstrap'])
+        // Between the two, launchd is asked why it refused the first
+        expect(readFileSync(asked, 'utf8').trim().split('\n')).toEqual(['bootout', 'print', 'bootstrap', 'print-disabled', 'bootstrap'])
         expect(existsSync(loaded)).toBe(!recoveryFails)
       } finally {
         homedir.mockRestore()
