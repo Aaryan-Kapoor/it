@@ -984,6 +984,37 @@ describe('a display locked to a page', () => {
     expect(host.querySelector('header .lock-mark')).not.toBeNull()
   })
 
+  test('has no mark of a newer It in the bar of its settings, which would lead to the home page it is kept from', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    const machine = {
+      id: 'machine-1',
+      name: 'the desk',
+      lastSeenAt: Date.now(),
+      connectorVersion: '0.1.41',
+      system: 'linux',
+      runsIt: true,
+      latest: '0.1.44',
+      upgrade: null,
+      harnesses: [],
+      wanted: [],
+      wakes: [],
+      descendants: { browsers: 1, mine: true, machines: 1 },
+    }
+    watched['machines:list'] = [machine]
+    // Where it is not locked the mark is there, so that its absence below is the lock's doing
+    watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: false }
+    await start('/settings')
+    expect(host.querySelector('.update-mark')?.textContent).toBe('update')
+    await act(async () => root.unmount())
+    host.remove()
+    watched['displays:mine'] = locked
+    await start('/settings')
+    expect(location.pathname).toBe('/settings')
+    expect(host.textContent).toContain('Paired as yours')
+    expect(host.querySelector('.update-mark')).toBeNull()
+  })
+
   test('a page on a display that is not locked offers to lock the display to it, where the backend names the lock', async () => {
     cookie = CODES.screencode0000000002!
     watched['artifacts:get'] = PAGE

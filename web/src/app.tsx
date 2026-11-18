@@ -1057,8 +1057,8 @@ function TopBar({
         <span className="grid-version">{`v${version}`}</span>
       </div>
       <div className="grid-actions">
-        {/* Beside the version, and kept on a phone, where the version is not shown */}
-        {owner && (
+        {/* Beside the version, and kept on a phone, where the version is not shown. Not on a display locked to a page, which is kept from the home page the mark leads to */}
+        {owner && !locked && (
           <Quietly>
             <UpdateMark />
           </Quietly>
