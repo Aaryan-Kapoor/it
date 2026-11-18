@@ -1461,24 +1461,18 @@ describe('the mode a Claude Code conversation is reopened in', () => {
     expect(wakeNoteFits('codex', 'raised', 'ask', 'full-access')).toBe(false)
   })
 
-  test('It’s own program may run in every mode by each spelling Claude Code can match against a rule: its name, each place it is installed, and that place from `~`, and nothing wider', () => {
-    // As the guide installs it, in the home folder: the name, the whole path (which also covers `$HOME/…`, which Claude Code expands), and `~/…`
-    expect(itRules(['/home/ana/.it/bin/it'], '/home/ana', 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/ana/.it/bin/it:*)', 'Bash(~/.it/bin/it:*)'])
-    // Elsewhere in the home folder, as `IT_HOME` may put it
-    expect(itRules(['/home/ana/tools/it/bin/it'], '/home/ana', 'linux')).toContain('Bash(~/tools/it/bin/it:*)')
-    // Outside it, no `~` spelling names it, and none is made up
-    expect(itRules(['/opt/it/bin/it'], '/home/ana', 'linux')).toEqual(['Bash(it:*)', 'Bash(/opt/it/bin/it:*)'])
-    expect(itRules(['/home/anabel/.it/bin/it'], '/home/ana', 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/anabel/.it/bin/it:*)'])
-    // A home folder with a space in its path: Claude Code would read the whole path as two rules, so only the name and `~/…` are given
-    expect(itRules(['/home/ana lee/.it/bin/it'], '/home/ana lee', 'linux')).toEqual(['Bash(it:*)', 'Bash(~/.it/bin/it:*)'])
-    // No home folder known: the name and the place alone, as before
-    expect(itRules(['/home/ana/.it/bin/it'], undefined, 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/ana/.it/bin/it:*)'])
+  test('It’s own program may run in every mode by its name and by the whole path of each place it is installed, and never by a spelling from `~`, which Claude Code matches quoted as well', () => {
+    // As the guide installs it, in the home folder: the name, and the whole path, which also covers `$HOME/…`, which Claude Code expands
+    expect(itRules(['/home/ana/.it/bin/it'], 'linux')).toEqual(['Bash(it:*)', 'Bash(/home/ana/.it/bin/it:*)'])
+    // A place with a space in its path: Claude Code would read the whole path as two rules, so only the name is given
+    expect(itRules(['/home/ana lee/.it/bin/it'], 'linux')).toEqual(['Bash(it:*)'])
     // On Windows the program's name with its ending too, which Claude Code does not take for `it`
-    expect(itRules([], undefined, 'win32')).toEqual(['Bash(it:*)', 'Bash(it.exe:*)'])
-    // And the reopened command carries them
-    expect(words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'default', itAt: ['/home/ana/.it/bin/it'], homeDir: '/home/ana' }))).toContain(
-      'Bash(~/.it/bin/it:*)',
-    )
+    expect(itRules([], 'win32')).toEqual(['Bash(it:*)', 'Bash(it.exe:*)'])
+    // And the reopened command carries them, with nothing written from `~`: such a rule would also let `"~/.it/bin/it"` run
+    // a program of that name inside the conversation's folder, since the shell does not expand a quoted `~`
+    const argv = words(carrying('claude-code', UUID, 'x', { ...has, wakeMode: 'default', itAt: ['/home/ana/.it/bin/it'] }))
+    expect(argv).toContain('Bash(/home/ana/.it/bin/it:*)')
+    expect(argv.filter((w) => w.includes('~'))).toEqual([])
   })
 
   test('a conversation reopened in a mode that refuses is told to run It as `it` alone, since another spelling may be refused there', () => {

@@ -241,8 +241,10 @@ const clickTurns = []
 const wokenSteps = {}
 /** The number of the reopened turn whose first answer the stand-in keeps waiting, so that the bar can be looked at while it runs. */
 let slowTurn = 2
-/** The number of the reopened turn that runs It by `~/.it/bin/it`, as the guide that installs It writes it. */
+/** The number of the reopened turn that first runs It by `\~/.it/bin/it`, which the shell does not expand, and then as plain `it`. */
 let tildeTurn = 0
+/** What that turn saw: whether it was told to run It as plain `it`, and what Claude Code answered to the spelling from `~`. */
+const tildeSaw = {}
 /** What a reopened turn sets the page's state to: the first as before, and each after it by its number. */
 const pressedBy = (n) => (n === 2 ? 'again' : `woken-${n}`)
 
@@ -265,13 +267,20 @@ try {
       clickTurns.push(turn)
       const n = clickTurns.length
       if (n === 1) return runs(`it patch ${PAGE} '{"pressed":"yes"}'`, 'Marking the page as pressed.')
-      // It run as the conversation that installed It learned to run it, from `~`
-      if (n === tildeTurn)
-        return runs(`~/.it/bin/${windows ? 'it.exe' : 'it'} patch ${PAGE} '{"pressed":"${pressedBy(n)}"}'`, 'Marking the page as pressed.', `toolu_tilde_${n}`)
+      // It spelled from `~` with the `~` escaped, which the shell does not expand: what that names is a program in the
+      // conversation's folder, which must not run. Then It as plain `it`, as the turn is told to run it
+      if (n === tildeTurn) {
+        tildeSaw.told = turn.text.includes('Run It as `it`, by that name alone')
+        return runs(`\\~/.it/bin/${windows ? 'it.exe' : 'it'} patch ${PAGE} '{"pressed":"literal"}'`, 'Marking the page as pressed.', `toolu_tilde_${n}`)
+      }
       // A reopened turn does what the owner's did not get to do: it writes a file in its project's
       // folder with Claude Code's own Write tool, runs an ordinary command there, and then changes the page
       const reply = writes(path.join(folders.work, `woken-${n}.txt`), `written by reopened turn ${n}\n`, `toolu_wake_write_${n}`)
       return n === slowTurn ? { ...reply, after: patience(8000) } : reply
+    }
+    if (result && String(result.tool_use_id).startsWith('toolu_tilde_')) {
+      tildeSaw.literal = { is_error: result.is_error === true, said: resultText.slice(0, 300) }
+      return runs(`it patch ${PAGE} '{"pressed":"${pressedBy(tildeTurn)}"}'`, 'Marking the page as pressed.', `toolu_plain_${tildeTurn}`)
     }
     if (result && String(result.tool_use_id).startsWith('toolu_wake_')) {
       const [, , step, n] = result.tool_use_id.split('_')
@@ -745,9 +754,17 @@ try {
       else writeFileSync(settingsFile, settingsBefore)
     }
 
-    // Manual chosen beside Claude Code's Auto-wake: the reopened turn runs It as `~/.it/bin/it`, as the guide that installs It
-    // writes it, which Claude Code matches against no rule but one written from `~` too. It must run, and the page show it
+    // Manual chosen beside Claude Code's Auto-wake: the reopened turn first runs `\~/.it/bin/it`, whose `~` the shell
+    // does not expand, so that it names a program the conversation's folder holds, as a repository's files could put one
+    // there. Claude Code must refuse it, and that program must not run. The turn is told to run It as plain `it`, which it
+    // then does, and the page shows it
     must('the last fallback run ends by itself', await runOver())
+    const planted = path.join(folders.work, '~', '.it', 'bin')
+    const plantedRan = path.join(scratch, 'planted-ran')
+    if (!windows) {
+      mkdirSync(planted, { recursive: true })
+      writeFileSync(path.join(planted, 'it'), `#!/bin/sh\ntouch '${plantedRan}'\n`, { mode: 0o755 })
+    }
     await tab.goto(new URL('/machines', pairing).href)
     const choice = tab.locator('.wake-modes select').first()
     await choice.waitFor({ timeout: 30_000 })
@@ -767,17 +784,22 @@ try {
       (r) => r.json?.state?.pressed === pressedBy(5),
       patience(90_000),
     )
+    const lastResults = model.turns
+      .slice(-3)
+      .flatMap((t) => t.results)
+      .map((r) => String(typeof r.content === 'string' ? r.content : JSON.stringify(r.content)).slice(0, 200))
+    check('in Manual, the reopened turn is told to run It as plain `it`', tildeSaw.told === true, JSON.stringify(tildeSaw))
     check(
-      'in Manual, a reopened turn that runs It as `~/.it/bin/it` is let run it, and the page shows it',
-      tilde.json?.state?.pressed === pressedBy(5),
-      JSON.stringify({
-        state: tilde.json?.state,
-        results: model.turns
-          .slice(-3)
-          .flatMap((t) => t.results)
-          .map((r) => String(typeof r.content === 'string' ? r.content : JSON.stringify(r.content)).slice(0, 200)),
-      }),
+      'in Manual, Claude Code refuses `\\~/.it/bin/it`, which names a program in the conversation’s folder, and that program does not run',
+      tildeSaw.literal !== undefined && /approval|permission/i.test(tildeSaw.literal.said) && !existsSync(plantedRan),
+      JSON.stringify({ ...tildeSaw, plantedRan: existsSync(plantedRan) }),
     )
+    check(
+      'in Manual, the reopened turn then runs It as plain `it`, and the page shows it',
+      tilde.json?.state?.pressed === pressedBy(5),
+      JSON.stringify({ state: tilde.json?.state, results: lastResults }),
+    )
+    rmSync(path.join(folders.work, '~'), { recursive: true, force: true })
     if (model.faults.length) check('the stand-in for the model answered every request', false, model.faults.join('; '))
   }
 } catch (err) {

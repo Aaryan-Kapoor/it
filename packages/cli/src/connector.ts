@@ -13,7 +13,6 @@ import { execFile, spawn } from 'node:child_process'
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
-import os from 'node:os'
 import path from 'node:path'
 import {
   ALIVE,
@@ -2947,8 +2946,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         itAt: [
           ...new Set([path.join(home(), 'bin', process.platform === 'win32' ? 'it.exe' : 'it'), process.execPath].filter((p) => /[\\/]it(\.exe)?$/.test(p))),
         ],
-        // The home folder the reopened app has, from which `~` names It's program
-        homeDir: env.HOME || env.USERPROFILE || os.homedir(),
       })
     let runMode = runIn(chosen)
     let how = carryingWith(runMode.mode)
