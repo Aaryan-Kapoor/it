@@ -1108,6 +1108,57 @@ describe('fullscreen, which a page asks the site for', () => {
     expect([box.style.transform, box.style.visibility]).toEqual(['', 'hidden'])
   })
 
+  /**
+   * A page with a player whose own button the person has just pressed: the browser made the
+   * player's frame fullscreen and It asked to leave that, which this browser answers only when
+   * `left` is called, so that a test can end the page or its document in that wait.
+   */
+  async function playerLeaving() {
+    const page = await connected()
+    await page.send(page.ports()[0]!, { type: 'it:embed', id: 'e1', url: 'https://www.youtube.com/embed/a' })
+    const player = host.querySelector<HTMLIFrameElement>('.mount > .embeds iframe')!
+    let left = () => {}
+    document.exitFullscreen = () => {
+      browser.asked.push('leave')
+      return new Promise<void>((resolve) => {
+        left = () => {
+          browser.element = null
+          changed()
+          resolve()
+        }
+      })
+    }
+    browser.element = player
+    await act(async () => changed())
+    expect(browser.asked).toEqual(['leave'])
+    return { ...page, left: () => left() }
+  }
+
+  test('a player whose page is closed while the browser leaves the player’s own fullscreen does not make It fullscreen once the page has gone', async () => {
+    const page = await playerLeaving()
+    await act(async () => root.unmount())
+    await act(async () => {
+      page.left()
+      await tick()
+    })
+    expect(browser.asked).toEqual(['leave'])
+    expect(browser.element).toBeNull()
+    // Torn down already: the test's own teardown has nothing left to do
+    root = createRoot(host)
+  })
+
+  test('nor does a player whose document was replaced in the frame in that wait, though the page is still shown', async () => {
+    const page = await playerLeaving()
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-2' })
+    expect(host.querySelectorAll('.mount > .embeds iframe').length).toBe(0)
+    await act(async () => {
+      page.left()
+      await tick()
+    })
+    expect(browser.asked).toEqual(['leave'])
+    expect(browser.element).toBeNull()
+  })
+
   test('where the browser has no fullscreen, as on an iPhone, the page is told so', async () => {
     browser.enabled = false
     const page = await connected()

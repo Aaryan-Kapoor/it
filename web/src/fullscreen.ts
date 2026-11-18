@@ -54,6 +54,10 @@ export interface PlayerHost {
   unfill(): void
 }
 const hosts = new Set<PlayerHost>()
+/** How many players' own fullscreen is being made It's, with the browser asked for the site's and yet to answer. */
+let pending = 0
+/** How many times It's fullscreen was asked for by the bar or by a page, or given to a player that was laid over the page in it. */
+let taken = 0
 /** Hosts players, whose own fullscreen is made It's: see `changed`. Gives back what stops that. */
 export function hostPlayers(host: PlayerHost): () => void {
   hosts.add(host)
@@ -72,13 +76,7 @@ function changed(): void {
   if (now !== null && now !== whole()) {
     const host = [...hosts].find((h) => h.owns(now))
     const left = leaveTop()
-    if (host)
-      void left
-        .then(() => enterFullscreen())
-        .then(
-          () => hosts.has(host) && host.fill(now),
-          () => {},
-        )
+    if (host) void handOver(host, now, left)
   }
   const was = on
   if (now === whole()) on = true
@@ -92,6 +90,38 @@ function changed(): void {
   for (const listener of [...listeners]) listener()
 }
 for (const kind of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(kind, changed)
+
+/**
+ * Gives a player It's fullscreen in place of its own, which the browser is leaving: `left` says
+ * when it has. The browser takes its time over leaving and again over making the site
+ * fullscreen, and the player's page can be closed or replaced in either wait, which ends its
+ * host, its document or the player itself. So each step asks again whether the player is still
+ * hosted. The site is not made fullscreen for a player that has gone by the time its own
+ * fullscreen is left. A browser that was asked already cannot be told to forget it, so a
+ * fullscreen it grants once the player has gone is left again, where it was for players alone
+ * and none of them is there: not where It was fullscreen before, where the bar or a page has
+ * asked for It's fullscreen since, or where another player is laid in it or still waits for it.
+ */
+async function handOver(host: PlayerHost, frame: Element, left: Promise<void>): Promise<void> {
+  const hosted = () => hosts.has(host) && host.owns(frame)
+  await left
+  if (!hosted()) return
+  const was = on || shownWhole() === whole()
+  const before = taken
+  pending += 1
+  try {
+    await request()
+  } catch {
+    // The browser would not make the site fullscreen: the player stays where the page keeps it
+    return
+  } finally {
+    pending -= 1
+  }
+  if (hosted()) {
+    taken += 1
+    host.fill(frame)
+  } else if (!was && taken === before && pending === 0 && shownWhole() === whole()) await leaveTop()
+}
 
 /** Leaves whatever is fullscreen on top, and only that, and says when the browser has. */
 function leaveTop(): Promise<void> {
@@ -128,6 +158,12 @@ export const useFullscreen = (): boolean => useSyncExternalStore(onFullscreenCha
  * called in the same turn as the click on the bar, or as the message that a click in the page sent.
  */
 export function enterFullscreen(): Promise<void> {
+  taken += 1
+  return request()
+}
+
+/** Asks the browser to make the site fullscreen, for whoever wants it: the bar, a page, or a player's own button. */
+function request(): Promise<void> {
   if (on) return Promise.resolve()
   const el = whole()
   try {
