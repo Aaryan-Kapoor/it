@@ -400,8 +400,8 @@ class _Bridge:
         page of a saved conversation starts a turn before the person has sent anything in it.
 
         Only a conversation with a name is taken, since a message by that name reaches that
-        conversation and no other. An earlier Hermes has no such hook, and there a saved
-        conversation is asked about from its next turn.
+        conversation and no other. An earlier Hermes has no such hook. Where its gateway holds
+        the conversations, from 0.22.3 in the TUI, a saved one is asked about from its next turn.
         """
         if not _session_key():
             return
