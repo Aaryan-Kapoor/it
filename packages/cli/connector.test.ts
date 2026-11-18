@@ -3656,12 +3656,30 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     })
     await turn(7, true)
     offeredEarlier(click(6), click(7))
-    await until(() => (via === 't3' ? stand.t3.sent.length === 1 : stand.codex.length === 1))
-    if (via === 'codex') stand.codex[0]!.end()
-    await until(() => called('delivery:handedOff').includes('click-7'))
-    expect(called('delivery:claim')).toEqual(['click-7'])
-    const kept = readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!
-    expect(kept.waiters).toHaveLength(200)
+    // Codex's command is ended as soon as it is started, for each click in its turn
+    let ended = 0
+    const handedOver = (id: string) =>
+      until(() => {
+        while (via === 'codex' && ended < stand.codex.length) stand.codex[ended++]!.end()
+        return called('delivery:handedOff').includes(id)
+      })
+    await handedOver('click-7')
+    // The copy kept for click 7 takes the place of the oldest restored one, which leaves
+    // conversation 6 one short of its limit: its click follows on the connector's next pass,
+    // a moment later. That is waited for, with every save it makes, so that what is looked at
+    // below is how things stand once the connector has nothing more to do.
+    await handedOver('click-6')
+    await settled()
+    // Click 6 is the older and is looked at first in every pass. That it was claimed second
+    // says it was held back while its conversation was at its limit, and that click 7 did
+    // not wait behind it.
+    expect(called('delivery:claim')).toEqual(['click-7', 'click-6'])
+    expect(via === 't3' ? stand.t3.sent.map((m) => m.thread) : stand.codex.map((c) => c.args.find((a) => a.startsWith('--thread=')))).toEqual(
+      via === 't3' ? ['t3-7', 't3-6'] : ['--thread=thread-7', '--thread=thread-6'],
+    )
+    const kept = readJson<{ waiters: [string, unknown][] }>(path.join(home, 'delivery-recovery.json'))!.waiters.map(([id]) => id)
+    expect(kept).toHaveLength(200)
+    expect(kept.filter((id) => !id.startsWith('old-'))).toEqual(['click-7'])
     expect((await waitingFor(7))?.clicks?.map((c) => c.id)).toEqual(['click-7'])
   })
 
