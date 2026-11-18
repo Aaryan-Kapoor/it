@@ -399,10 +399,15 @@ process.once('SIGTERM', () => {
     } else {
       const shared = mkdtempSync(path.join('/tmp', 'it-no-login-'))
       try {
-        const copy = path.join(shared, 'it')
-        writeFileSync(copy, readFileSync(program), { mode: 0o755 })
-        spawnSync('chmod', ['755', shared, copy])
+        // The program keeps a lock beside its own file, so the account is given a copy in a folder of its own
+        const handed = path.join(shared, 'it')
+        writeFileSync(handed, readFileSync(program), { mode: 0o755 })
+        spawnSync('chmod', ['755', shared, handed])
         const theirs = sudo('-u', account, '-H', 'sh', '-c', 'echo "$HOME"').out.trim()
+        const copy = `${theirs}/it-program/it`
+        sudo('-u', account, '-H', 'mkdir', '-p', `${theirs}/it-program`)
+        const copied = sudo('-u', account, '-H', 'cp', handed, copy)
+        if (copied.code !== 0) console.log(`  ----  the program could not be handed to the account: ${copied.said.slice(-300)}`)
         const as = (words, forMs = 600_000) => {
           const ran = spawnSync(
             'sudo',
