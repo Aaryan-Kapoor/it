@@ -102,6 +102,17 @@ export const t3ClaudeLine = (running: string | undefined): string =>
     : 'What you do on It’s pages already reaches this thread through T3 Code. Type /reload-plugins here too, so it also reaches me in the middle of a reply.'
 
 /**
+ * What a person in a Claude Code conversation that has not loaded It's add-on is told where T3
+ * Code is on the machine and It cannot tell whether one of its threads holds the conversation:
+ * what is so in each case. Outside a thread nothing reaches the conversation until the add-on is
+ * loaded, and in a thread it reaches it already, through T3 Code.
+ */
+export const reloadOrT3Line = (running: string | undefined): string =>
+  tooOldToReload(running)
+    ? 'Start a new Claude Code chat to use It: this Claude Code is too old to load It’s add-on into this one. In a T3 Code thread there’s no need: what you do on It’s pages reaches the thread through T3 Code.'
+    : 'Type /reload-plugins in this chat, so that what you do on It’s pages reaches me without you telling me. If I’m still replying, it takes effect when I’m done. In a T3 Code thread it reaches me already, and typing it lets it reach me in the middle of a reply too.'
+
+/**
  * What the person is told, in so many words, so that a Pi conversation that was already open
  * when It's add-on was installed loads it: Pi reads its extensions as a conversation starts, and
  * `/reload` reads them again in the one that is open.
@@ -333,7 +344,9 @@ export function claudeReloadLine(e: NodeJS.ProcessEnv = process.env): string | u
  * the add-on loads it with `/reload-plugins`; in Pi, that one which has not loaded it loads it
  * with `/reload`; in Codex, that Codex is to be started again so that it runs It's hooks. In a
  * thread of T3 Code, what is so there instead: what the person does reaches the thread through
- * T3 Code, and nothing is asked for that T3 Code would never show. Nothing where nothing is left
+ * T3 Code, and nothing is asked for that T3 Code would never show. Where T3 Code is on the
+ * machine and It cannot tell whether a thread holds the conversation, what is so in each case,
+ * in Claude Code as in Codex. Nothing where nothing is left
  * to do in this conversation, and nothing in Hermes or OpenCode, which do not let It tell whether
  * the conversation has loaded the add-on: there the app's own note is what the person is told.
  */
@@ -353,7 +366,8 @@ export function setupLine(f: {
 }): string | undefined {
   if (!f.connected || !f.session) return undefined
   const held = f.route?.thread === 'held'
-  if (f.session.harness === 'claude-code' && f.addonHere === false) return held ? t3ClaudeLine(f.claude) : reloadLine(f.claude)
+  if (f.session.harness === 'claude-code' && f.addonHere === false)
+    return held ? t3ClaudeLine(f.claude) : heldNowhere(f.route, f.t3) ? reloadLine(f.claude) : reloadOrT3Line(f.claude)
   if (f.session.harness === 'codex' && f.codexPending) return held ? T3_CODEX : heldNowhere(f.route, f.t3) ? CODEX_RESTART : CODEX_RESTART_OR_T3
   // Pi has no thread of T3 Code to take what the person does there another way
   if (f.session.harness === 'pi' && f.addonHere === false) return PI_RELOAD

@@ -3825,6 +3825,10 @@ async function main(given: string[]): Promise<void> {
         started === 'by hand' && after.running ? 'It is still running as the old version: stop `it serve` where it is running, and start it again.' : undefined
       const reload = claude ? RELOAD_OPEN : undefined
       const hint = [byHand, reload].filter(Boolean).join(' ')
+      // Where T3 Code is on this machine the connector is asked of the way to the conversation this ran in, since in a thread
+      // of T3 Code what is so there is said instead. Where it is not, no thread can hold it, and nothing is waited for
+      const inClaude = claude && sessionAsked()?.session.harness === 'claude-code'
+      const here = !inClaude ? undefined : t3Here() ? await lineHere((harness) => harness === 'claude-code') : claudeReloadLine()
       const result = {
         upgraded: true,
         from: done.from,
@@ -3836,7 +3840,7 @@ async function main(given: string[]): Promise<void> {
         ...(hint ? { hint } : {}),
         // An agent that upgraded It from a Claude Code conversation that never loaded the add-on tells the person, word for word.
         // One that loaded it goes on with it, as every open conversation does, and has nothing to tell
-        ...(claude && sessionAsked()?.session.harness === 'claude-code' && claudeReloadLine() ? { tell: tellWordForWord(claudeReloadLine()!) } : {}),
+        ...(here ? { tell: tellWordForWord(here) } : {}),
       }
       if (!forPerson(a)) return out(result)
       return tell([

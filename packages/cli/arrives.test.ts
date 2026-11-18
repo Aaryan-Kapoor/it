@@ -21,6 +21,7 @@ import {
   piNotLoadedHere,
   RELOAD_PLUGINS_SINCE,
   reloadLine,
+  reloadOrT3Line,
   setupLine,
   T3_CODEX,
   t3ClaudeLine,
@@ -234,6 +235,29 @@ describe('what setup says of the conversation it ran in, where it has just conne
     )
   })
 
+  test('in a Claude Code conversation where T3 Code is on the machine and It cannot tell whether a thread holds it: what is so in each case, and never only that nothing reaches it', () => {
+    const onT3 = { ...facts, t3: true }
+    // The connector could not be asked, or T3 Code has not said: outside a thread the add-on has to be loaded, and in one it reaches the thread already
+    for (const r of [null, route({ thread: 'unknown' })]) expect(setupLine({ ...onT3, route: r })).toBe(reloadOrT3Line('2.1.321'))
+    const said = reloadOrT3Line('2.1.321')
+    expect(said.startsWith('Type /reload-plugins in this chat, so that what you do on It’s pages reaches me without you telling me.')).toBe(true)
+    expect(said).toContain('In a T3 Code thread it reaches me already')
+    expect(said).toContain('in the middle of a reply too')
+    // A Claude Code too old to load it that way: a new chat outside a thread, and nothing to do in one
+    const old = setupLine({ ...onT3, claude: '2.1.286', route: null })!
+    expect(old).toBe(reloadOrT3Line('2.1.286'))
+    expect(old).toContain('Start a new Claude Code chat to use It')
+    expect(old).toContain('In a T3 Code thread there’s no need')
+    expect(old).not.toContain('/reload-plugins')
+    // The connector found no thread holding it: said outright, as where T3 Code is not on the machine at all
+    expect(setupLine({ ...onT3, route: route({ thread: 'none' }) })).toBe(reloadLine('2.1.321'))
+    expect(setupLine({ ...facts, t3: false, route: route({ thread: 'unknown' }) })).toBe(reloadLine('2.1.321'))
+    // Where whether T3 Code is here was not looked at, it is not taken to be absent
+    expect(setupLine({ ...facts, t3: undefined, route: null })).toBe(reloadOrT3Line('2.1.321'))
+    // And a thread that is known to hold it is told only what is so there
+    expect(setupLine({ ...onT3, route: route({ thread: 'held' }) })).toBe(t3ClaudeLine('2.1.321'))
+  })
+
   test('in a Codex conversation, while Codex has yet to run It’s hooks: to start Codex again now, and why', () => {
     const said = setupLine({ ...facts, session: codex, addonHere: undefined, codexPending: true })
     expect(said).toBe(CODEX_RESTART)
@@ -305,6 +329,11 @@ describe('what setup says of the conversation it ran in, where it has just conne
     }
     expect(CODEX_RESTART.length).toBeLessThan(260)
     expect(reloadLine('2.1.321')).toContain('reaches me')
+    // What says both cases is longer, and still the agent's own words to the person
+    for (const line of [reloadOrT3Line('2.1.321'), reloadOrT3Line('2.1.286')]) {
+      expect(line.length).toBeLessThan(280)
+      expect(line).not.toMatch(/\bagent\b|\bIt’s add-on is not running\b/)
+    }
   })
 })
 
