@@ -172,7 +172,7 @@ Build it now, small and whole. The person is watching the seconds count, and the
 it create "<the idea's name>" --id <a-short-id> --open --html '<the whole page>'
 ```
 
-In Windows PowerShell, which takes the double quotes out of an argument, write the page with your own file tool to a file in the temporary folder, and give `--file "<its path, with forward slashes>"` in place of `--html`.
+In Windows PowerShell, which takes the double quotes out of an argument, and where It reads JSON back whole from its own command line but not a page, write the page with your own file tool to a file in the temporary folder, and give `--file "<its path, with forward slashes>"` in place of `--html`.
 
 3. Only then take the tour away. In this order the new page takes the tour's place on their screen and they are never left looking at nothing:
 
@@ -345,10 +345,10 @@ it tour show drums
 The `beat` action carries `request`, the id of this beat, `rows` (`hat`, `clap`, `snare`, `kick`, from the top) and `pattern`, one string of eight steps for each row, with `x` where they put a hit. The eight steps are one bar: the first, third, fifth and seventh are its four beats, and the others fall between them. Answer with your own hits in the same form, on steps they left empty, so that the two together make a groove: hats between the beats, a clap on the third or the seventh step if nothing is there, a kick that pushes into the next beat:
 
 ```sh
-it set tour-drums theirs '{"request":"the exact request id","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}'
+it patch tour-drums '{"theirs":{"request":"the exact request id","pattern":["..x...x.","....x...","........","...x...."],"note":"I added hats between your hits."}}'
 ```
 
-**Say:** one sentence about what you added. They will hear it. Keep the exact `request` id with the pattern and optional note in the same value. The page ignores replies for an earlier beat. `cleared` means the page has emptied both patterns already. Say nothing and send no pattern in response.
+**Say:** one sentence about what you added. They will hear it. Keep the exact `request` id with the pattern and the note in the same value. A note you leave out stays as the one before it, which the page does not say again, so write `"note":""` where you have none. The page ignores replies for an earlier beat. `cleared` means the page has emptied both patterns already. Say nothing and send no pattern in response.
 
 ## The big red button
 

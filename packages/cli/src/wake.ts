@@ -70,8 +70,9 @@ export const WOKEN =
  * refuses where nobody can approve it, as in a conversation reopened in Ask for approval or Read
  * Only (in Approve for me its reviewer decides it, and in Full Access it runs). A woken Codex that wrote JSON with `--%`, as it
  * had been told to in PowerShell, was refused, and the page said only "Your agent could not do
- * that" (the Windows rehearsal, Codex 0.167.2). JSON in single quotes is read whole however
- * PowerShell hands it on (`windows-args.ts`), so it is told to write JSON as it would anywhere.
+ * that" (the Windows rehearsal, Codex 0.167.2). JSON in single quotes is read back whole from
+ * the command line where PowerShell spoilt it (`windows-args.ts`), so it is told to write JSON as
+ * it would anywhere.
  */
 export const WOKEN_POWERSHELL =
   "[It] Codex runs your commands here in PowerShell, and in the modes in which it asks before a command, it lets an `it` command through without asking only where it can read it as plain words: write JSON in single quotes as you would anywhere, with an apostrophe as two (`''`), never after `--%`, and with ’ ‘ “ ” – — ― written as `\\u2019`, `\\u2018`, `\\u201c`, `\\u201d`, `\\u2013`, `\\u2014` and `\\u2015`, since any of those in a command can have Codex refuse it."

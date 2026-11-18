@@ -267,10 +267,23 @@ describe('the agent skill', () => {
     expect(more.page).toContain('in cmd write it in quotes with backslashes')
   })
 
-  test('tells an agent on Windows to give JSON as anywhere, never after `--%`, with what Codex refuses written as escapes, and not to pipe it there', () => {
+  test('tells an agent on Windows to give JSON in single quotes as anywhere but cmd, never after `--%`, with what Codex refuses written as escapes, and not to pipe it there', () => {
     expect(more.page).toContain('## On Windows')
-    expect(more.page).toContain(`JSON is given on Windows as everywhere, as in \`it.exe patch board '{"order":["c1"]}'\``)
+    expect(more.page).toContain(`JSON is given on Windows in single quotes, as everywhere but cmd: \`it.exe patch board '{"order":["c1"]}'\``)
     expect(more.page).toContain('keep `--%` out of it')
+    // How a backslash is written, what Windows PowerShell 5.1 is held to, the habits that avoid a refusal, and what `it set` changes without a word
+    expect(more.page).toContain('JSON itself writes a backslash inside a string as two')
+    expect(more.page).toContain('either reads the JSON exactly as written or refuses it and changes nothing')
+    expect(more.page).toContain('write the JSON with no space outside its strings')
+    expect(more.page).toContain('put every option before the JSON')
+    expect(more.page).toContain('never as `--state=\'{"a":1}\'`')
+    expect(more.page).toContain(
+      'The only JSON that can be read as something else has a first key that is empty or begins with a space, `}` or `\\"`, or is given to `--state` and has `--state` inside it',
+    )
+    expect(more.page).toContain('`\'"true"\'` is set as the boolean')
+    expect(more.page).toContain('text with a `"` in it arrives changed')
+    expect(more.page).toContain('text with no `"` in it and no `\\` at its end')
+    expect(more.page).toContain('anything else with `it patch`')
     expect(more.page).toContain('`\\u2014`')
     expect(more.page).toContain('`it.exe patch board --file ')
     expect(more.page).toContain('`--state-file "<path>"` on `it.exe create`')
