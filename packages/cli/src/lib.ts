@@ -23,7 +23,7 @@ import { mkdir, open, rm } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { type Harness, PORTS } from '@it/protocol'
+import { type Harness, PORTS, TOKEN_WAIT_MS } from '@it/protocol'
 import { ConvexClient, ConvexHttpClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import { ConvexError } from 'convex/values'
@@ -1544,7 +1544,7 @@ export async function token(
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ machine: m.id, proof }),
-    signal: within(15_000, ending),
+    signal: within(TOKEN_WAIT_MS, ending),
   }).catch(async (err) => {
     ending?.throwIfAborted()
     // Given up on after waiting, which a connection that was refused never is: something took it and did not answer

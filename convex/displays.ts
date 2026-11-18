@@ -19,7 +19,7 @@ import {
   requireOwner,
   speaksFor,
 } from './lib/authz'
-import { overClashes } from './lib/clash'
+import { askingUntil, overClashes } from './lib/clash'
 import { counted, screenOf } from './lib/counted'
 import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
@@ -475,10 +475,11 @@ export const _signOutClaims = internalMutation({
 export const signOutToken = action({
   args: { key: v.string() },
   handler: async (ctx, { key }): Promise<{ token: string; raisesTo: number; display: string }> => {
-    const c = await overClashes(() => ctx.runMutation(internal.displays._signOutClaims, { key }))
+    const until = askingUntil()
+    const c = await overClashes(() => ctx.runMutation(internal.displays._signOutClaims, { key }), { until })
     // `raisesTo` is the number the token raises the display to. Once the display is already
     // there, the token does nothing, and the site must not count on it.
-    return { token: await mint(ctx, AUDIENCE.signOut, c.displayId, { u: c.userId, e: c.epoch }, 14 * 86_400), raisesTo: c.epoch, display: c.displayId }
+    return { token: await mint(ctx, AUDIENCE.signOut, c.displayId, { u: c.userId, e: c.epoch }, 14 * 86_400, until), raisesTo: c.epoch, display: c.displayId }
   },
 })
 

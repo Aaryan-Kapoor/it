@@ -154,6 +154,13 @@ export const AUDIENCE = {
 } as const
 
 /**
+ * How long a machine waits for the backend to give it a token, at `/bridge/token`. The backend
+ * asks again for a step of that route that clashed for five seconds less than this, so that the
+ * asking under way when its time is up is still answered while the machine waits.
+ */
+export const TOKEN_WAIT_MS = 15_000
+
+/**
  * Whether an address is this machine's own: the addresses that never leave it, in either
  * family, and the first of them as it is written when it arrives over the other. What only the
  * backend may ask is taken from these and from nowhere else, by every part that is asked.

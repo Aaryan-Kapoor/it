@@ -2,14 +2,14 @@
 // credential is turned into something the backend believes: it checks the credential itself,
 // strictly, and mints a five-minute token for one audience. A machine's credential is the key
 // it enrolled with, and a browser's is the session it was paired into.
-import { AUDIENCE, PROTOCOL_VERSION, TAKES } from '@it/protocol'
+import { AUDIENCE, PROTOCOL_VERSION, TAKES, TOKEN_WAIT_MS } from '@it/protocol'
 import { httpRouter } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { base64url, createLocalJWKSet, importJWK, type JWK, jwtVerify } from 'jose'
 import { internal } from './_generated/api'
 import { httpAction } from './_generated/server'
 import { doorKey, issuer } from './config'
-import { overClashes } from './lib/clash'
+import { askingUntil, overClashes, ROUTE_CLASH_MS } from './lib/clash'
 import { cookieFor, FAMILY } from './lib/cookie'
 import { sha256 } from './lib/hash'
 import { kind, log } from './lib/log'
@@ -72,7 +72,9 @@ http.route({
   method: 'GET',
   handler: httpAction(
     async (ctx) =>
-      new Response(JSON.stringify(await publicKeys(ctx)), { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=300' } }),
+      new Response(JSON.stringify(await publicKeys(ctx, askingUntil(ROUTE_CLASH_MS))), {
+        headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=300' },
+      }),
   ),
 })
 
@@ -97,6 +99,8 @@ http.route({
   path: '/bridge/enroll',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together, as long as its caller waits: see `askingUntil`
+    const until = askingUntil(ROUTE_CLASH_MS)
     const body = await objectBody(request)
     // Nothing that could be a code: it is refused before anything is looked up
     if (!body || typeof body.code !== 'string' || body.code.length > 64) return json(401, { error: 'Send the code this machine was invited with.' })
@@ -126,13 +130,15 @@ http.route({
     try {
       // Asked again if the backend gave up on it because another call touched the same count at
       // the same instant
-      const made = await overClashes(() =>
-        ctx.runMutation(internal.bridge.enrollInvited, {
-          codeHash,
-          name: typeof body.name === 'string' ? body.name : 'machine',
-          publicKey,
-          ...(typeof body.replaces === 'string' && body.replaces.length <= 64 ? { replaces: body.replaces } : {}),
-        }),
+      const made = await overClashes(
+        () =>
+          ctx.runMutation(internal.bridge.enrollInvited, {
+            codeHash,
+            name: typeof body.name === 'string' ? body.name : 'machine',
+            publicKey,
+            ...(typeof body.replaces === 'string' && body.replaces.length <= 64 ? { replaces: body.replaces } : {}),
+          }),
+        { until },
       )
       if ('error' in made)
         return made.error === 'code'
@@ -155,6 +161,8 @@ http.route({
   path: '/bridge/token',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together: the machine waits only TOKEN_WAIT_MS for the answer, see `askingUntil`
+    const until = askingUntil(TOKEN_WAIT_MS - 5000)
     const body = await objectBody(request)
     if (!body || typeof body.machine !== 'string' || typeof body.proof !== 'string' || body.machine.length > 64 || body.proof.length > 2000)
       return json(400, { error: 'Send a machine id and a proof.' })
@@ -192,8 +200,9 @@ http.route({
     try {
       // Counted against the machine's own limit before anything else, so that what follows is
       // written down no faster than that
-      const spent = await overClashes(() =>
-        ctx.runMutation(internal.bridge.spend, { machineId: m.id, jti: payload.jti as string, issuedAt: payload.iat as number }),
+      const spent = await overClashes(
+        () => ctx.runMutation(internal.bridge.spend, { machineId: m.id, jti: payload.jti as string, issuedAt: payload.iat as number }),
+        { until },
       )
       // The machine was revoked: said by the mutation, once an hour
       if (spent === 'revoked') return json(401, { error: 'Unknown or revoked machine.', reason: 'revoked' })
@@ -205,7 +214,7 @@ http.route({
     } catch (err) {
       return refusal(err, 'token')
     }
-    return json(200, { token: await mint(ctx, AUDIENCE.machine, m.id, { kind: 'machine' }, 300), expires_in: 300 })
+    return json(200, { token: await mint(ctx, AUDIENCE.machine, m.id, { kind: 'machine' }, 300, until), expires_in: 300 })
   }),
 })
 
@@ -275,12 +284,14 @@ http.route({
   path: '/session/code',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together, as long as its caller waits: see `askingUntil`
+    const until = askingUntil(ROUTE_CLASH_MS)
     const refused = notTheSite(request)
     if (refused) return refused
     const body = await objectBody(request)
     if (!body || typeof body.code !== 'string' || body.code.length > 64) return json(400, { error: 'Send a code.' })
     try {
-      const role = await overClashes(async () => ctx.runMutation(internal.sessions._codeFor, { codeHash: await sha256(body.code as string) }))
+      const role = await overClashes(async () => ctx.runMutation(internal.sessions._codeFor, { codeHash: await sha256(body.code as string) }), { until })
       return role ? json(200, { role }) : json(401, { error: WRONG_CODE })
     } catch (err) {
       return refusal(err, 'code')
@@ -296,6 +307,8 @@ http.route({
   path: '/session/redeem',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together, as long as its caller waits: see `askingUntil`
+    const until = askingUntil(ROUTE_CLASH_MS)
     const refused = notTheSite(request)
     if (refused) return refused
     const body = await objectBody(request)
@@ -306,7 +319,7 @@ http.route({
     // Whatever session this browser holds already ends when the new one begins
     const held = await presented(request)
     try {
-      const made = await overClashes(() => ctx.runMutation(internal.sessions._redeem, { codeHash, secretHash, presented: named(held) }))
+      const made = await overClashes(() => ctx.runMutation(internal.sessions._redeem, { codeHash, secretHash, presented: named(held) }), { until })
       if (!made) return json(401, { error: WRONG_CODE })
       if ('refused' in made)
         return json(409, {
@@ -330,13 +343,15 @@ http.route({
   path: '/session/token',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together, as long as its caller waits: see `askingUntil`
+    const until = askingUntil(ROUTE_CLASH_MS)
     const refused = notTheSite(request)
     if (refused) return refused
     const held = await presented(request)
     if (held.length === 0) return json(401, { error: NOT_PAIRED })
     let found: { session: { sessionId: string; userId: string; role: 'owner' | 'screen'; renew: boolean } | null; over: string[] }
     try {
-      found = await overClashes(() => ctx.runMutation(internal.sessions._present, { presented: named(held) }))
+      found = await overClashes(() => ctx.runMutation(internal.sessions._present, { presented: named(held) }), { until })
     } catch (err) {
       return refusal(err, 'session')
     }
@@ -344,7 +359,7 @@ http.route({
     const cookies = found.over.map(cleared)
     // None of it is a session that has not ended
     if (!s) return json(401, { error: NOT_PAIRED }, cookies)
-    const token = await mint(ctx, AUDIENCE.browser, s.userId, { kind: 'browser', sid: s.sessionId, role: s.role }, 300)
+    const token = await mint(ctx, AUDIENCE.browser, s.userId, { kind: 'browser', sid: s.sessionId, role: s.role }, 300, until)
     const again = s.renew ? held.find((h) => h.name === cookieFor(s.sessionId)) : undefined
     return json(200, { token, expiresIn: 300, user: s.userId, session: s.sessionId, role: s.role }, [
       ...(again ? [cookie(s.sessionId, again.secret)] : []),
@@ -364,6 +379,8 @@ http.route({
   path: '/session/end',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together, as long as its caller waits: see `askingUntil`
+    const until = askingUntil(ROUTE_CLASH_MS)
     const refused = notTheSite(request)
     if (refused) return refused
     const body = await objectBody(request)
@@ -372,7 +389,7 @@ http.route({
     if (held.length === 0) return json(401, { error: NOT_PAIRED })
     let said: { ended: 'ended' | 'another' | 'none'; over: string[] }
     try {
-      said = await overClashes(() => ctx.runMutation(internal.sessions._end, { presented: named(held), session: body.session as string }))
+      said = await overClashes(() => ctx.runMutation(internal.sessions._end, { presented: named(held), session: body.session as string }), { until })
     } catch (err) {
       // The browser keeps its cookie, so that it can ask again
       log('session.end_failed', { kind: kind(err) }, 'error')
@@ -413,6 +430,8 @@ http.route({
   path: '/display/signout',
   method: 'POST',
   handler: httpAction(async (ctx, request) => {
+    // The time its steps are asked for, all together, as long as its caller waits: see `askingUntil`
+    const until = askingUntil(ROUTE_CLASH_MS)
     const body = await objectBody(request)
     if (!body || typeof body.token !== 'string' || body.token.length > 4000) return json(400, { error: 'Send a token.' })
     // Only a token that is not one is refused for good. Trouble on this side (the keys could
@@ -421,7 +440,7 @@ http.route({
     let claims: { sub?: unknown; u?: unknown; e?: unknown }
     let keys: Awaited<ReturnType<typeof publicKeys>>
     try {
-      keys = await publicKeys(ctx)
+      keys = await publicKeys(ctx, until)
     } catch (err) {
       log('signout_token.failed', { reason: 'keys', kind: kind(err) }, 'error')
       return json(503, { error: 'Try again shortly.' })
@@ -447,8 +466,9 @@ http.route({
     try {
       // Done, or already done: either way there is nothing more for the browser to do. Which
       // of the two it was is written down by the mutation.
-      await overClashes(() =>
-        ctx.runMutation(internal.displays._signOutByToken, { displayId: claims.sub as string, userId: claims.u as string, epoch: claims.e as number }),
+      await overClashes(
+        () => ctx.runMutation(internal.displays._signOutByToken, { displayId: claims.sub as string, userId: claims.u as string, epoch: claims.e as number }),
+        { until },
       )
     } catch (err) {
       log('signout_token.failed', { reason: 'record', kind: kind(err) }, 'error')

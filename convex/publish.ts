@@ -10,7 +10,7 @@ import { prefixOf } from './artifacts'
 import { door, pagesBytes, site } from './config'
 import { isNoRoom, removeLater } from './content'
 import { artifactBySlug, ownArtifact, requireMachine } from './lib/authz'
-import { overClashes } from './lib/clash'
+import { askingUntil, overClashes } from './lib/clash'
 import { fail } from './lib/errors'
 import { quota, rateLimit } from './lib/limits'
 import { kind, log } from './lib/log'
@@ -393,11 +393,12 @@ export const begin = action({
     ctx,
     args,
   ): Promise<{ artifactId: Id<'artifacts'>; slug: string; version: number; operation: string; deadline: number; upload: { url: string; grant: string } }> => {
+    const until = askingUntil()
     const requestHash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(args)))), (b) =>
       b.toString(16).padStart(2, '0'),
     ).join('')
-    const r = await overClashes(() => ctx.runMutation(internal.publish._begin, { ...args, requestHash }))
-    return prepared(ctx, r, args.files, args.operation !== undefined)
+    const r = await overClashes(() => ctx.runMutation(internal.publish._begin, { ...args, requestHash }), { until })
+    return prepared(ctx, until, r, args.files, args.operation !== undefined)
   },
 })
 
@@ -434,13 +435,16 @@ export const _resume = internalQuery({
 export const resume = action({
   args: { operation: v.string() },
   handler: async (ctx, args): Promise<Prepared> => {
+    const until = askingUntil()
     const r = await ctx.runQuery(internal.publish._resume, args)
-    return prepared(ctx, r, r.files)
+    return prepared(ctx, until, r, r.files)
   },
 })
 type Prepared = { artifactId: Id<'artifacts'>; slug: string; version: number; operation: string; deadline: number; upload: { url: string; grant: string } }
 async function prepared(
   ctx: ActionCtx,
+  /** When its caller's steps are asked for no longer (see `askingUntil`). */
+  until: number,
   r: {
     artifactId: Id<'artifacts'>
     versionId?: Id<'versions'>
@@ -471,13 +475,13 @@ async function prepared(
     // No room on the disk is no failure of the moment: the publish is given up, whoever began it,
     // and its share of the quota comes back at once
     if (isNoRoom(err)) {
-      if (r.versionId) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }))
+      if (r.versionId) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }), { until })
       throw err
     }
     log('publish.unavailable', { step: 'stage', artifactId: r.artifactId, version: r.n, kind: kind(err) }, 'error')
     // A caller may have lost this reply and resumed the same named publication already.
     // Keep its staging version for recovery or expiry; a late failure must not erase it.
-    if (!recoverable) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }))
+    if (!recoverable) await overClashes(() => ctx.runMutation(internal.publish._abandon, { versionId: r.versionId! }), { until })
     throw new ConvexError({ code: 'unavailable', message: 'The page could not be prepared for upload. Try again in a moment.' })
   }
   const grant = await mint(
@@ -486,6 +490,7 @@ async function prepared(
     r.prefix,
     { p: r.prefix },
     Math.max(1, Math.ceil((r.deadline - Date.now()) / 1000) + UPLOAD_SECONDS - PUBLICATION.budgetMs / 1000),
+    until,
   )
   return { artifactId: r.artifactId, slug: r.slug, version: r.n, operation: r.operation, deadline: r.deadline, upload: { url: `${door()}/upload/`, grant } }
 }
@@ -697,7 +702,8 @@ async function linked(ctx: ActionCtx, slug: string): Promise<Linked> {
 export const finish = action({
   args: { artifactId: v.id('artifacts'), version: v.number() },
   handler: async (ctx, args): Promise<{ slug: string; version: number; url: string; elsewhere?: boolean; took?: boolean } & Linked> => {
-    const gate = await overClashes(() => ctx.runMutation(internal.publish._gate, args))
+    const until = askingUntil()
+    const gate = await overClashes(() => ctx.runMutation(internal.publish._gate, args), { until })
     if (gate.result) {
       const done = outcome(gate.result)
       return { ...done, ...(await linked(ctx, done.slug)) }
@@ -714,7 +720,7 @@ export const finish = action({
       log('publish.refused', { reason: 'not_intact', artifactId: args.artifactId, version: args.version, files: checked.missing.length }, 'warn')
       fail('invalid', `${checked.missing.length === 1 ? 'One file' : `${checked.missing.length} files`} did not arrive intact. Publish again.`)
     }
-    const done = outcome(await overClashes(() => ctx.runMutation(internal.publish._finish, args)))
+    const done = outcome(await overClashes(() => ctx.runMutation(internal.publish._finish, args), { until }))
     return { ...done, ...(await linked(ctx, done.slug)) }
   },
 })

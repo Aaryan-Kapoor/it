@@ -15,17 +15,25 @@ interface Key {
   publicJwk: JWK
 }
 
-async function signingKey(ctx: ActionCtx): Promise<Key> {
+/** The key, made the first time it is needed, asked for until `until` where the one signing gives a time (see `askingUntil`). */
+async function signingKey(ctx: ActionCtx, until?: number): Promise<Key> {
   const kept = await ctx.runQuery(internal.keys.current, {})
   if (kept) return kept
   const { publicKey, privateKey } = await generateKeyPair('ES256', { extractable: true })
   // Two requests may each find no key and make one: the first to be kept is the key, for both
   const made = { kid: `it-${Date.now().toString(36)}`, privateJwk: await exportJWK(privateKey), publicJwk: await exportJWK(publicKey) }
-  return overClashes(() => ctx.runMutation(internal.keys.keep, made))
+  return overClashes(() => ctx.runMutation(internal.keys.keep, made), { until })
 }
 
-export async function mint(ctx: ActionCtx, audience: string, subject: string, claims: Record<string, unknown>, seconds: number): Promise<string> {
-  const key = await signingKey(ctx)
+export async function mint(
+  ctx: ActionCtx,
+  audience: string,
+  subject: string,
+  claims: Record<string, unknown>,
+  seconds: number,
+  until?: number,
+): Promise<string> {
+  const key = await signingKey(ctx, until)
   return new SignJWT(claims)
     .setProtectedHeader({ alg: 'ES256', kid: key.kid, typ: 'JWT' })
     .setIssuer(issuer())
@@ -38,7 +46,7 @@ export async function mint(ctx: ActionCtx, audience: string, subject: string, cl
 }
 
 /** The key a receiver should believe, as a key set: only what makes it public, never its private part. */
-export async function publicKeys(ctx: ActionCtx): Promise<{ keys: JWK[] }> {
-  const { kid, publicJwk } = await signingKey(ctx)
+export async function publicKeys(ctx: ActionCtx, until?: number): Promise<{ keys: JWK[] }> {
+  const { kid, publicJwk } = await signingKey(ctx, until)
   return { keys: [{ kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x, y: publicJwk.y, kid, alg: 'ES256', use: 'sig' }] }
 }
