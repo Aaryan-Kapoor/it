@@ -379,7 +379,8 @@ process.once('SIGTERM', () => {
     if (!up) why('after the label was switched on again')
     const removed = it(['service', 'uninstall', '--json'], 180_000)
     registered = removed.code !== 0
-    check('and it is taken away again', !registered && !existsSync(macDefinition), removed.said.slice(-600))
+    const quiet = await until(async () => !stands().running && !(await answers()), 60_000, 1000)
+    check('and it is taken away again, and nothing of it runs', !registered && !existsSync(macDefinition) && Boolean(quiet), removed.said.slice(-600))
 
     // An account with no login at the Mac's own screen has no domain in launchd to load an
     // agent into, which is how a Mac reached only over SSH stands. Setup is run as such an
@@ -408,10 +409,12 @@ process.once('SIGTERM', () => {
         sudo('-u', account, '-H', 'mkdir', '-p', `${theirs}/it-program`)
         const copied = sudo('-u', account, '-H', 'cp', handed, copy)
         if (copied.code !== 0) console.log(`  ----  the program could not be handed to the account: ${copied.said.slice(-300)}`)
+        // Each account's It counts from a port of its own, and this one's is outside the blocks this run chose its own from
+        const theirPort = 28_500
         const as = (words, forMs = 600_000) => {
           const ran = spawnSync(
             'sudo',
-            ['-n', '-u', account, '-H', 'env', `IT_HOME=${theirs}/.it`, `IT_PORT=${port}`, 'IT_TELEMETRY_ENABLED=false', 'CI=1', copy, ...words],
+            ['-n', '-u', account, '-H', 'env', `IT_HOME=${theirs}/.it`, `IT_PORT=${theirPort}`, 'IT_TELEMETRY_ENABLED=false', 'CI=1', copy, ...words],
             { encoding: 'utf8', timeout: forMs, cwd: shared },
           )
           let json
