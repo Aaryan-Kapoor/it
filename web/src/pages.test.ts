@@ -23,6 +23,8 @@ let recent: {
   expiresAt?: number | null
   madeAt?: number
   heldBack?: string | null
+  sequence?: number | null
+  stoppedSequence?: number | null
 }[]
 /** The person's machines as the backend gives them to the owner's browser, with the agent apps chosen on each. */
 let machines: { id: string; name?: string; wanted: string[]; harnesses?: { id: string; addon: string; version?: string }[] }[] | undefined
@@ -984,6 +986,43 @@ describe('what the page’s bar says of the last thing the person did', () => {
     await shown()
     expect(said()).toBe('Stopped, with 1 more that was waiting')
     Object.assign(PAGE, { stoppedAt: null })
+  })
+
+  test('what was done after a stop is not said to be stopped though the clock puts it before the stop, and a stop counts what went with it by its place', async () => {
+    // Stopped at place 10 in the order the person's clicks and stops were written in. Done after
+    // that, at place 11, with the backend's clock set back an hour in between
+    Object.assign(PAGE, { stoppedAt: NOW - 1000, stoppedSequence: 10, answeredAt: 0, machineSeenAt: NOW })
+    recent = [{ at: NOW - 3_600_000, delivery: 'pending', outcome: null, sequence: 11 }]
+    await shown()
+    expect(said()).not.toContain('Stopped')
+    await act(async () => root.unmount())
+    host.remove()
+    // Handed over since, with a turn of the conversation that its machine says is running: said as that turn, and not held back as one from before the stop
+    const { turnFor, beforeStop } = await import('./pages')
+    const handed = { at: NOW - 3_600_000, delivery: 'handed_off', outcome: 'running', route: 'addon', handedAt: NOW - 3_599_000, sequence: 11 }
+    const work = { turn: { since: NOW - 500, endedAt: null }, machineSeenAt: NOW, stoppedAt: NOW - 1000 }
+    expect(turnFor(handed, { ...work, stoppedSequence: 10 }, NOW)).toBe('running')
+    expect(turnFor({ ...handed, sequence: 9 }, { ...work, stoppedSequence: 10 }, NOW)).toBeNull()
+    // Functions from before either had a place say neither, and the clock is all there is to go by
+    expect(turnFor({ ...handed, sequence: undefined }, work, NOW)).toBeNull()
+    expect(beforeStop({ at: NOW }, work)).toBe(false)
+    // A click from before clicks had a place is before a stop that has one, and a click that has one is after a stop that has none
+    expect(beforeStop({ at: NOW }, { stoppedAt: NOW - 1000, stoppedSequence: 10 })).toBe(true)
+    expect(beforeStop({ at: NOW - 5000, sequence: 3 }, { stoppedAt: NOW - 1000 })).toBe(false)
+    // Two that went with this stop, whatever the clock says of them, and one an earlier stop dropped
+    const dropped = (at: number, sequence: number, stoppedSequence: number) => ({
+      at,
+      delivery: 'handed_off',
+      outcome: 'failed',
+      route: 'stopped',
+      handedAt: NOW,
+      sequence,
+      stoppedSequence,
+    })
+    recent = [dropped(NOW + 60_000, 9, 10), dropped(NOW - 5000, 8, 10), dropped(NOW - 9000, 3, 4)]
+    await shown()
+    expect(said()).toBe('Stopped, with 1 more that was waiting')
+    Object.assign(PAGE, { stoppedAt: null, stoppedSequence: null })
   })
 
   test('what a stop dropped is said to be stopped, and never to be something the agent could not do, also once the page says no more when it was stopped', async () => {
