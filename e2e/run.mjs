@@ -330,6 +330,21 @@ const closedUnder = (site, itsPages, because) => [
   { says: notMade('ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_RESET', 'ERR_EMPTY_RESPONSE'), of: under(`${itsPages}/`), may: true, times: 20, because },
 ]
 
+/**
+ * What a site may say where the backend ran out of the second it gives a function on the query
+ * of the site's notifications. The words are written by a script of the site's, so they are
+ * foreseen as a script's. The site says that something went wrong and loads itself again,
+ * which it does once in ten minutes.
+ */
+const notificationsRanOutOfTime = (site, times, because) => ({
+  says: /^Error: \[CONVEX Q\(notifications:list\)\] \[Request ID: [0-9a-f]+\] Server Error\b/,
+  of: under(`${site}/assets/`),
+  byScript: true,
+  times,
+  may: true,
+  because,
+})
+
 // How much the stack's log held when this run began. The stack may have served runs before
 // this one, and what one of those left in it is not to stand in for what this one must have caused.
 const serviceLog = path.join(STACK_LOGS, 'service.log')
@@ -1986,20 +2001,14 @@ try {
   one.context.on('request', tokenAsked)
   // On a slow runner the same burst can also find the backend too busy to answer in time: the
   // door says 502 or the backend 500 for a token, and the backend's limit of a second on a
-  // function fails a tab's query of its notifications. The site asks again for each by itself
-  // and the person sees nothing, so these are excused here, in these tabs, and nowhere else.
+  // function fails a tab's query of its notifications. The site asks again for a token by
+  // itself, and a tab whose query failed loads itself again, so these are excused here, in
+  // these tabs. The failed query is excused in one more place, where a machine asks too fast.
   const toldToWait = during(one, [
     { says: refusedWith(429), of: exactly(`${APP}/session/token`), times: () => tokensAsked, may: true, because: 'forty tabs asked for tokens in batches' },
     { says: refusedWith(502), of: exactly(`${APP}/session/token`), times: () => tokensAsked, may: true, because: 'the door found the backend busy' },
     { says: refusedWith(500), of: exactly(`${APP}/session/token`), times: () => tokensAsked, may: true, because: 'the backend was too busy to make a token' },
-    {
-      says: /^Error: \[CONVEX Q\(notifications:list\)\] \[Request ID: [0-9a-f]+\] Server Error\b/,
-      of: under(`${APP}/assets/`),
-      byScript: true,
-      times: () => tokensAsked,
-      may: true,
-      because: 'the backend ran out of time on the notifications',
-    },
+    notificationsRanOutOfTime(APP, () => tokensAsked, 'the backend ran out of time on the notifications'),
   ])
   for (let batch = 0; batch < 4; batch++) {
     const more = await Promise.all(Array.from({ length: 10 }, () => one.context.newPage()))
@@ -6177,7 +6186,17 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
   // ------------------------------------------------------------------
   section('Limits')
   // Far more than a machine may ask in one go: some of it is done, and the rest is refused by name
-  const flood = await Promise.all(Array.from({ length: 24 }, () => refused(it(B, ['notify', `again and again ${PRIVATE_MARK}note`]))))
+  const ASKED_AT_ONCE = 24
+  // Each notice that is sent has every open site ask for its notifications again, while the
+  // backend is busy with the rest of what the machine asked. On a slow runner it can run out of
+  // its second on one of those queries, as it can refuse the machine itself as unavailable. So
+  // that is excused in every browser that is open, while the machine asks and no oftener than
+  // it asked, as it is while forty tabs are opened.
+  const askedTooFast = opened
+    .filter((b) => b.browser.isConnected())
+    .map((b) => during(b, [notificationsRanOutOfTime(APP, ASKED_AT_ONCE, 'the backend ran out of time on the notifications')]))
+  const flood = await Promise.all(Array.from({ length: ASKED_AT_ONCE }, () => refused(it(B, ['notify', `again and again ${PRIVATE_MARK}note`]))))
+  for (const over of askedTooFast) over()
   check(
     'a machine that asks too fast is told to slow down, by name, and what it asked within the limit is done',
     flood.includes('rate_limited') && flood.includes('ok') && flood.every((x) => x === 'ok' || x === 'rate_limited' || x === 'unavailable'),
@@ -7595,6 +7614,9 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       .times()
       .map(({ because, said }) => `${said} times ${because}`)
       .join('; ')}`,
+  )
+  console.log(
+    `  note  excused while a machine asked too fast: ${askedTooFast.reduce((all, over) => all + over.times()[0].said, 0)} times the backend ran out of time on the notifications`,
   )
   check('no browser reported an error of its own', opened.length >= 4 && own.length === 0, own.join(' | '))
   // And nothing is foreseen that does not happen: an excuse for what no browser said is one the
