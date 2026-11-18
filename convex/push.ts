@@ -10,7 +10,7 @@ import { type ActionCtx, action, internalAction, internalMutation, internalQuery
 import { door } from './config'
 import { openNow, seenOf } from './lib/aim'
 import { displayByKey, requireBrowser } from './lib/authz'
-import { overClashes } from './lib/clash'
+import { askingUntil, overClashes } from './lib/clash'
 import { fail } from './lib/errors'
 import { sha256 } from './lib/hash'
 import { rateLimit } from './lib/limits'
@@ -155,9 +155,9 @@ export const _pushed = internalMutation({
  * while, and as the last thing before the request goes: where it says no, nothing is asked, and
  * this answers null.
  */
-async function service(ctx: ActionCtx, op: 'send' | 'key', body?: string, ready?: () => Promise<boolean>): Promise<Response | null> {
+async function service(ctx: ActionCtx, op: 'send' | 'key', body?: string, ready?: () => Promise<boolean>, until?: number): Promise<Response | null> {
   const claims = body === undefined ? {} : { h: await sha256(body) }
-  const token = await mint(ctx, AUDIENCE.push, op, claims, 60)
+  const token = await mint(ctx, AUDIENCE.push, op, claims, 60, until)
   if (ready && !(await ready())) return null
   return fetch(`${door()}/internal/push${op === 'key' ? '/key' : ''}`, {
     method: body === undefined ? 'GET' : 'POST',
@@ -171,9 +171,10 @@ async function service(ctx: ActionCtx, op: 'send' | 'key', body?: string, ready?
 export const publicKey = action({
   args: {},
   handler: async (ctx): Promise<string> => {
-    await overClashes(() => ctx.runMutation(internal.push._gate, {}))
+    const until = askingUntil()
+    await overClashes(() => ctx.runMutation(internal.push._gate, {}), { until })
     try {
-      const r = (await service(ctx, 'key'))!
+      const r = (await service(ctx, 'key', undefined, undefined, until))!
       const said = r.ok ? ((await r.json()) as { key?: unknown } | null) : null
       if (typeof said?.key === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(said.key)) return said.key
       log('push.no_key', { status: r.status }, 'error')

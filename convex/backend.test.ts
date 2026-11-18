@@ -8384,7 +8384,7 @@ describe('more cases at the edges', () => {
 
 describe('a step of publishing that the backend gave up on because another touched the same record', () => {
   test('is asked again by the action itself until it is let through, for a minute at most or the time its caller gives, as is one turned away, and nothing else is', async () => {
-    const { overClashes, clashed, CLASH_MS } = await import('./lib/clash')
+    const { overClashes, askingUntil, clashed, CLASH_MS } = await import('./lib/clash')
     const clash = () =>
       new Error('Documents read from or written to the "tallies" table changed while this mutation was being run and on every subsequent retry.')
     // The time is the test's own: it passes while a step is waited for, and while one runs
@@ -8457,6 +8457,7 @@ describe('a step of publishing that the backend gave up on because another touch
     // A caller that waits less gives a shorter time, which is kept to in the same way
     now = 0
     began.length = 0
+    const until = askingUntil(4000, clock.now)
     await expect(
       overClashes(
         async () => {
@@ -8464,12 +8465,26 @@ describe('a step of publishing that the backend gave up on because another touch
           now += 500
           throw clash()
         },
-        { ...clock, within: 4000 },
+        { ...clock, until },
       ),
     ).rejects.toSatisfy(clashed)
     expect(began.length).toBeGreaterThan(2)
     expect(began.every((at) => at < 4000)).toBe(true)
     expect(now + 1050).toBeGreaterThanOrEqual(4000)
+    // A step that comes after it in the same action or route has the same time, and not a new
+    // one: begun with less than an asking left, it is asked once
+    asked = 0
+    await expect(
+      overClashes(
+        async () => {
+          asked++
+          now += 1050
+          throw clash()
+        },
+        { ...clock, until },
+      ),
+    ).rejects.toSatisfy(clashed)
+    expect(asked).toBe(1)
     // A wait that ends later than it was asked to, as one does on a machine that slept through it, is followed by no asking
     now = 0
     asked = 0

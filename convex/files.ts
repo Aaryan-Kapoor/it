@@ -22,7 +22,7 @@ import { prefixOf } from './artifacts'
 import { actionFilesBytes, door } from './config'
 import { isNoRoom, removeLater } from './content'
 import { ownArtifact, requireBrowser, requireMachine } from './lib/authz'
-import { overClashes } from './lib/clash'
+import { askingUntil, overClashes } from './lib/clash'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { kind, log } from './lib/log'
@@ -144,7 +144,8 @@ export const prepare = action({
     expectedSession: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ id: Id<'attachments'>; stored: boolean; missing?: number[]; grant?: string }> => {
-    const r = await overClashes(() => ctx.runMutation(internal.files._prepare, args))
+    const until = askingUntil()
+    const r = await overClashes(() => ctx.runMutation(internal.files._prepare, args), { until })
     if (r.stored) return { id: r.id, stored: true }
     let missing = r.files.map((_, i) => i + 1)
     try {
@@ -153,7 +154,7 @@ export const prepare = action({
       if (!r.fresh) {
         const found = await ctx.runAction(internal.content.verify, { prefix: r.prefix, files: r.files })
         if (found.ok) {
-          await overClashes(() => ctx.runMutation(internal.files._stored, { id: r.id }))
+          await overClashes(() => ctx.runMutation(internal.files._stored, { id: r.id }), { until })
           return { id: r.id, stored: true }
         }
         const named = new Set(found.missing)
@@ -166,13 +167,13 @@ export const prepare = action({
     } catch (err) {
       // No room on the disk is the click's answer, and is not mended by sending it again
       if (isNoRoom(err)) {
-        await overClashes(() => ctx.runMutation(internal.files._noRoom, { id: r.id }))
+        await overClashes(() => ctx.runMutation(internal.files._noRoom, { id: r.id }), { until })
         throw err
       }
       log('files.unavailable', { attachment: r.id, kind: kind(err) }, 'error')
       throw new ConvexError({ code: 'unavailable', message: 'The file could not be sent just now. It is kept, and sent again in a moment.' })
     }
-    return { id: r.id, stored: false, missing, grant: await mint(ctx, AUDIENCE.upload, r.prefix, { p: r.prefix }, PUBLICATION.grantSeconds) }
+    return { id: r.id, stored: false, missing, grant: await mint(ctx, AUDIENCE.upload, r.prefix, { p: r.prefix }, PUBLICATION.grantSeconds, until) }
   },
 })
 

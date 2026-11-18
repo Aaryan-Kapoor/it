@@ -8,7 +8,7 @@ import { internal } from './_generated/api'
 import { action, internalMutation, mutation } from './_generated/server'
 import { prefixOf } from './artifacts'
 import { displayByKey, ownArtifact, requireBrowser, speaksFor } from './lib/authz'
-import { overClashes } from './lib/clash'
+import { askingUntil, overClashes } from './lib/clash'
 import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
@@ -124,7 +124,8 @@ export const _take = internalMutation({
 export const ticket = action({
   args: { mountId: v.string() },
   handler: async (ctx, { mountId }): Promise<{ ticket: string }> => {
-    const claims = await overClashes(() => ctx.runMutation(internal.mounts._take, { mountId }))
-    return { ticket: await mint(ctx, AUDIENCE.ticket, mountId, claims, 60) }
+    const until = askingUntil()
+    const claims = await overClashes(() => ctx.runMutation(internal.mounts._take, { mountId }), { until })
+    return { ticket: await mint(ctx, AUDIENCE.ticket, mountId, claims, 60, until) }
   },
 })

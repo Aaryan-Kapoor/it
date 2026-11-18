@@ -13,13 +13,14 @@ export const turnedAway = (err: unknown): boolean =>
   /Too many concurrent (requests|commits) in a short period of time/.test(String((err as Error)?.message ?? err))
 
 /**
- * For how long an action asks again for a step that keeps being given up on or turned away.
- * Callers that write one record at the same moment are let through one after another, so the
- * last of many is let through well after the first, and on a machine with little to spare, or
- * whose disk is busy, each of them takes a good part of a second. A step is given up on here,
- * with the backend's reason, once it has been asked for this long. Of those that wait for an
- * action, the command waits the least, a minute and a half: so the asking under way when the
- * time is up still has half a minute to be answered in.
+ * For how long an action asks again for its steps that keep being given up on or turned away,
+ * all of them together (see `askingUntil`). Callers that write one record at the same moment
+ * are let through one after another, so the last of many is let through well after the first,
+ * and on a machine with little to spare, or whose disk is busy, each of them takes a good part
+ * of a second. A step is given up on here, with the backend's reason, once its action has been
+ * asking for this long. Of those that wait for an action, the command waits the least, a minute
+ * and a half: so the asking under way when the time is up still has half a minute to be
+ * answered in.
  */
 export const CLASH_MS = 60_000
 
@@ -34,11 +35,20 @@ export const ROUTE_CLASH_MS = 15_000
 /** The time, and a wait, as an action has them: a test gives its own. */
 const real = { now: () => Date.now(), pause: (ms: number): Promise<unknown> => new Promise((r) => setTimeout(r, ms)) }
 
+/**
+ * When an action, or a route, has asked for the last time for any of its steps. It takes this
+ * as it begins, from as long as its caller waits, and gives it to each step it runs and to its
+ * signing, so that its steps are asked for no longer than that all together, and not each of
+ * them anew. An action it starts takes a time of its own.
+ */
+export const askingUntil = (within: number = CLASH_MS, now: () => number = real.now): number => now() + within
+
+/** Runs one step, and asks for it again while the backend gives up on it or turns it away, until the time its caller gave, or else CLASH_MS from now. */
 export async function overClashes<T>(
   run: () => Promise<T>,
-  { within = CLASH_MS, now = real.now, pause = real.pause }: { within?: number; now?: () => number; pause?: (ms: number) => Promise<unknown> } = {},
+  { until: given, now = real.now, pause = real.pause }: { until?: number; now?: () => number; pause?: (ms: number) => Promise<unknown> } = {},
 ): Promise<T> {
-  const until = now() + within
+  const until = given ?? now() + CLASH_MS
   for (let n = 1; ; n++) {
     try {
       return await run()
