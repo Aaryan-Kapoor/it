@@ -270,6 +270,21 @@ describe('whether the pairing address is opened', () => {
     expect(await openPairing(URL_, asAgent(), mac(), start, file)).toBe(false)
     expect(started).toHaveLength(2)
   })
+  test('what a person opens is noted before the opener is started, so an agent that asks while it is still starting opens nothing', async () => {
+    const file = noteIn()
+    const now = 5_000_000_000_000
+    // An opener that has neither ended nor failed yet, as a browser that is still coming up has not
+    const slow = starter({ never: true })
+    const person = openPairing(URL_, asPerson(), linux(), slow.start, file, now)
+    expect(slow.started).toHaveLength(1)
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: now })
+    const { start, started } = starter()
+    expect(await openPairing(URL_, asAgent(), linux(), start, file, now + 10)).toBe(false)
+    expect(started).toEqual([])
+    expect(await person).toBe(true)
+    // And the person's note stands as they wrote it
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: now })
+  })
   test('a failure to open is said to nobody', async () => {
     const file = noteIn()
     const now = 4_000_000_000_000

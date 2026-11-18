@@ -238,12 +238,13 @@ export async function openPairing(
   if (asked.agent) {
     const displays = await asked.displays().catch(() => null)
     if (seenLately(displays, now) || !takeOpening(file, now)) return false
-  }
-  const opened = (await launch(url, s, start)) === 'opened'
-  // What a person opened counts for an agent that asks right after it. A note that cannot be written leaves nothing worse than before
-  if (!asked.agent)
+  } else {
+    // What a person opened counts for an agent that asks right after it, so it is noted before the
+    // opener is started, which is waited on for up to a second: an agent that asks within that
+    // second finds the note. A note that cannot be written leaves nothing worse than before
     try {
       writePrivate(file, { at: now })
     } catch {}
-  return opened
+  }
+  return (await launch(url, s, start)) === 'opened'
 }
