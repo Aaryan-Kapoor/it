@@ -24,9 +24,10 @@ export const turnedAway = (err: unknown): boolean =>
 export const CLASH_MS = 60_000
 
 /**
- * The same for a route. The site, and a machine that is joining, wait a third of a minute for
- * the routes that ask again, and the door half a minute for any route: so the asking under way
- * when the time is up still has five seconds. A route whose caller waits less gives less.
+ * The same for a route. The site waits no less than a third of a minute for the routes that ask
+ * again, a machine that is joining as long, and the door half a minute for any route: so the
+ * asking under way when the time is up still has five seconds. A route whose caller waits less
+ * gives less.
  */
 export const ROUTE_CLASH_MS = 15_000
 
