@@ -54,6 +54,7 @@ import {
   itForAgent,
   notLoadedHere,
   onWindows,
+  refusedForAgent,
   reloadLine,
   setupLine,
   tellWordForWord,
@@ -2774,12 +2775,15 @@ async function settingUp(a: Args, joined: boolean) {
       begun?.background ?? (leaves && !a.flags['no-service'] ? service.status() : { registered: false, state: 'not installed' })
     // Why It is not running in the background, when it was wanted there
     let trouble = begun?.trouble
+    // Whether that is macOS refusing to load the service, which only the person can put right
+    let refused = begun?.refused === true
     if (inBackground) {
       if (!begun) {
         try {
           background = service.install()
         } catch (err) {
           trouble = `It could not be registered as a background service: ${(err as Error).message}`
+          refused = err instanceof service.LaunchdRefused
         }
       }
       // Registered is not yet running. The connector itself is asked, and given a little while to answer.
@@ -2799,7 +2803,11 @@ async function settingUp(a: Args, joined: boolean) {
                 ? 'It is running now, from the background service that was registered before, as the version that service started.'
                 : 'It is running now, but whether the background service registered before or an `it serve` started by hand runs it could not be told.',
           )
-        } else say(`Until It runs on this machine, nothing done on a page reaches an agent here. Run \`${itForAgent()} serve\` yourself to keep it going.`)
+        } else if (refused && sessionAsked())
+          // An agent is not told to run `it serve` where macOS refused the service: see `refusedForAgent`
+          say('Until It runs on this machine, nothing done on a page reaches an agent here.')
+        else say(`Until It runs on this machine, nothing done on a page reaches an agent here. Run \`${itForAgent()} serve\` yourself to keep it going.`)
+        if (refused && sessionAsked()) say(refusedForAgent())
       }
       // What the system would not do for the service is said here as well, where a person at a terminal reads it: that It stops when they log out, say
       if ('note' in background && background.note) say(background.note)
@@ -2814,6 +2822,8 @@ async function settingUp(a: Args, joined: boolean) {
       say(`\n${line}`)
       notes.push({ id, line })
     }
+    // Why macOS refused the service is the person's to act on, and was said above: it is kept with what is left for them to do, which an agent that led setup passes on whole
+    if (trouble && refused) notes.push({ line: trouble })
     const shut = codexShut(after)
     if (shut) note(shut)
     const restart = restartSaid(outcomes, before)
@@ -4016,7 +4026,7 @@ async function main(given: string[]): Promise<void> {
       }
       // Only the service this folder set up: another folder's is not this one's to remove
       try {
-        if (service.installedHere()) service.uninstall()
+        if (service.definedFor() === 'this folder') service.uninstall()
       } catch (err) {
         say(`The background service could not be removed (${String((err as Error).message).slice(0, 200)}). Run \`it service uninstall\` to try again.`)
       }

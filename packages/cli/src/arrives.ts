@@ -120,6 +120,17 @@ export const OPENCODE_RESTART = 'Quit OpenCode and start it again, then open thi
 export const tellWordForWord = (line: string): string => `Tell the person this in your next message, word for word: “${line}”`
 
 /**
+ * What an agent that led setup is told where macOS would not load It's background service, in
+ * place of being told to run `it serve`: that the reason is the person's to act on, and is
+ * among the words it is given to pass on, and that it is not to start `it serve` itself as the
+ * way to keep It going. An agent that is told to run `it serve` starts it from its own shell,
+ * where It stops when the app ends that command or the conversation, and the person is left
+ * with an It that works for a while and then goes quiet, with nothing that says why.
+ */
+export const refusedForAgent = (): string =>
+  'For the agent that ran this: only the person can turn the background service on, so pass on what setup said of it above, which is given again below among the words to tell them. Do not start `it serve` yourself as the way to keep It going: started from your shell, It stops when the app ends that command or this conversation.'
+
+/**
  * How It's program is named in a command that an agent is told to run. In Windows PowerShell 5.1 a
  * bare `it` runs the `It` command of Pester, the test framework that comes with Windows, wherever
  * It's folder is not on the PATH of the app that runs the command, as it is not in an app that

@@ -41,7 +41,7 @@ import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
-import { CODEX_RESTART, itForAgent, PI_RELOAD, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
+import { CODEX_RESTART, itForAgent, PI_RELOAD, refusedForAgent, reloadLine, T3_CODEX, t3ClaudeLine, tellWordForWord } from './src/arrives'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -5391,6 +5391,231 @@ describe.skipIf(process.platform === 'win32')(
     }, 40_000)
   },
 )
+
+describe.skipIf(process.platform === 'win32')('`it setup` on a Mac where launchd does not load the background service', () => {
+  // The program is run as it runs on a Mac. On another system it is told that it is on one
+  // before anything of it runs, and what stands in for launchd is all it can find either way:
+  // on a Mac too, the real `launchctl` is never reached.
+  const asMac = (m: { home: string }): string[] => {
+    if (process.platform === 'darwin') return []
+    const prelude = path.join(m.home, 'as-a-mac.mjs')
+    writeFileSync(prelude, "Object.defineProperty(process, 'platform', { value: 'darwin' })\n")
+    return ['--import', pathToFileURL(prelude).href]
+  }
+  const uid = process.getuid?.() ?? 501
+  /**
+   * What stands in for launchd, answering in the words and with the codes macOS 15.7 and 26.7
+   * give: it holds no agent to begin with, and each word of `standing` is how it stands
+   * otherwise. `disabled`: the label is switched off. `refuses`: it refuses every definition
+   * and nothing says why. `invalid`: the definition is no property list. `no-login`: the person
+   * has no login at the Mac's own screen, as over SSH.
+   */
+  const launchd = (m: { home: string; bin: string }, ...standing: ('disabled' | 'refuses' | 'invalid' | 'no-login')[]) => {
+    const state = path.join(m.home, 'launchd')
+    mkdirSync(state, { recursive: true })
+    for (const word of standing) writeFileSync(path.join(state, word), '')
+    const is = (word: string) => `[ -f '${path.join(state, word)}' ]`
+    writeFileSync(
+      path.join(m.bin, 'launchctl'),
+      `#!/bin/sh
+if ${is('no-login')}; then
+  case "$1" in print|print-disabled) echo 'Bad request.' ;; esac
+  echo 'Could not find domain for user gui: ${uid}'; exit 112
+fi
+case "$1" in
+  print)
+    if ${is('loaded')}; then printf 'gui/${uid}/dev.it = {\\n\\tstate = running\\n}\\n'
+    else echo 'Bad request.'; echo 'Could not find service "dev.it" in domain for user gui: ${uid}'; exit 113; fi ;;
+  print-disabled)
+    printf '\\n\\tdisabled services = {\\n\\t\\t"com.apple.Siri.agent" => disabled\\n'
+    if ${is('disabled')}; then printf '\\t\\t"dev.it" => disabled\\n'; fi
+    printf '\\t}\\n' ;;
+  bootout)
+    if ${is('loaded')}; then rm -f '${path.join(state, 'loaded')}'; else echo 'Boot-out failed: 3: No such process'; exit 3; fi ;;
+  bootstrap)
+    if ${is('loaded')} || ${is('disabled')} || ${is('refuses')} || ${is('invalid')}; then
+      echo 'Bootstrap failed: 5: Input/output error'; echo 'Try re-running the command as root for richer errors.'; exit 5
+    fi
+    : > '${path.join(state, 'loaded')}' ;;
+esac
+`,
+      { mode: 0o755 },
+    )
+    writeFileSync(
+      path.join(m.bin, 'plutil'),
+      `#!/bin/sh\nif ${is('invalid')}; then echo "$2: (Unexpected character t at line 1)"; exit 1; fi\necho "$2: OK"\n`,
+      { mode: 0o755 },
+    )
+    return { loaded: () => existsSync(path.join(state, 'loaded')) }
+  }
+  /** Counting is on in this folder, as on a machine where It has been set up, so that what setup counts is written down to be read here. */
+  const counted = (m: { it: string }) => {
+    writeFileSync(path.join(m.it, 'telemetry.json'), JSON.stringify({ told: Date.now() - 60_000, installation: '8d0ad1c7-6b6c-4f0e-9d35-3b1f7a1c9e21' }))
+    return () =>
+      (existsSync(path.join(m.it, 'usage.jsonl')) ? readFileSync(path.join(m.it, 'usage.jsonl'), 'utf8').trim().split('\n') : [])
+        .map((line) => JSON.parse(line) as { name: string; properties: Record<string, unknown> })
+        .filter((event) => event.name === 'setup.finished')
+        .map((event) => event.properties)
+  }
+  /** Setup, led from inside an agent's conversation. */
+  const AGENT = { IT_HARNESS: 'pi', IT_SESSION: 'a-conversation' }
+  const definition = (m: { home: string }) => path.join(m.home, 'Library/LaunchAgents/dev.it.plist')
+  const SWITCHED_OFF = `It could not be registered as a background service: macOS has It’s background service switched off for your account, so launchd would not load it. Turn it on again in System Settings, under General and then Login Items, or with \`launchctl enable gui/${uid}/dev.it\`, and run \`it setup\` again. If another tool manages what starts on this Mac, It has to be allowed there.`
+  const UNTIL = 'Until It runs on this machine, nothing done on a page reaches an agent here.'
+  const SERVE_YOURSELF = `${UNTIL} Run \`it serve\` yourself to keep it going.`
+
+  test('with the label switched off, an agent that led setup is given why to pass on, and is told not to start `it serve` itself; it is counted as failed', async () => {
+    const m = machine()
+    launchd(m, 'disabled')
+    const events = counted(m)
+    const b = await backend(m)
+    try {
+      const ran = await run(m, ['setup', '--yes'], { ...b.env, ...AGENT }, process.execPath, asMac(m))
+      expect(ran.code).toBe(1)
+      const said = ran.err.split('\n')
+      expect(said).toContain(SWITCHED_OFF)
+      expect(ran.err).not.toContain('Input/output error')
+      // It is not told to run `it serve`, which from its shell stops with its command or its conversation
+      expect(said).toContain(UNTIL)
+      expect(ran.err).not.toContain('yourself to keep it going')
+      expect(said).toContain(refusedForAgent())
+      // What it is to tell the person has the reason whole, on what it reads as text and in the JSON
+      expect(ran.err).toContain(`Tell them this in your next message, word for word:\n\n  ${SWITCHED_OFF}`)
+      expect(printed(ran)).toMatchObject({ service: { registered: false }, problem: SWITCHED_OFF, tell: tellWordForWord(SWITCHED_OFF) })
+      // The definition is kept for the person to turn on, and is no registration: to setup's count, and to whoever asks after
+      expect(existsSync(definition(m))).toBe(true)
+      expect(events()).toEqual([expect.objectContaining({ led: 'agent', service: 'failed' })])
+      expect(printed(await run(m, ['service', 'status'], b.env, process.execPath, asMac(m)))).toMatchObject({ registered: false, state: 'disabled' })
+      expect(printed(await run(m, ['status'], b.env, process.execPath, asMac(m))).background).toMatchObject({ registered: false })
+      // `it service install` says the same, and not what `launchctl` printed
+      const again = await run(m, ['service', 'install'], b.env, process.execPath, asMac(m))
+      expect([again.code, error(again).message]).toEqual([1, SWITCHED_OFF.replace('It could not be registered as a background service: ', '')])
+    } finally {
+      await b.close()
+    }
+  }, 60_000)
+
+  test('with the label switched off, a setup no agent led is told the same reason, and that `it serve` keeps It going meanwhile', async () => {
+    const m = machine()
+    launchd(m, 'disabled')
+    const events = counted(m)
+    const b = await backend(m)
+    try {
+      const ran = await run(m, ['setup', '--yes'], b.env, process.execPath, asMac(m))
+      expect(ran.code).toBe(1)
+      expect(ran.err.split('\n')).toEqual(expect.arrayContaining([SWITCHED_OFF, SERVE_YOURSELF]))
+      expect(ran.err).not.toContain('For the agent that ran this')
+      // The JSON has it among what is left for the person, as it has every such thing, whoever reads it
+      expect(printed(ran)).toMatchObject({ service: { registered: false }, problem: SWITCHED_OFF, tell: tellWordForWord(SWITCHED_OFF) })
+      expect(events()).toEqual([expect.objectContaining({ led: 'script', service: 'failed' })])
+    } finally {
+      await b.close()
+    }
+  }, 60_000)
+
+  test.each([
+    [
+      'invalid',
+      (m: { home: string }) =>
+        `It could not be registered as a background service: launchd would not load its definition, ${realpathSync(m.home)}/Library/LaunchAgents/dev.it.plist, which is not a valid property list (Unexpected character t at line 1). \`plutil -lint\` on the file says where it is wrong. \`it setup\` writes the file from the settings of the terminal it is run in, its PATH among them, so the fault is in one of those: put it right and run \`it setup\` again.`,
+    ],
+    [
+      'refuses',
+      () =>
+        'It could not be registered as a background service: loading the agent failed: Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.',
+    ],
+  ] as const)(
+    'with a definition launchd refused (%s), an agent passes on what is known of why, and it is counted as failed',
+    async (standing, why) => {
+      const m = machine()
+      launchd(m, standing)
+      const events = counted(m)
+      const b = await backend(m)
+      try {
+        const ran = await run(m, ['setup', '--yes'], { ...b.env, ...AGENT }, process.execPath, asMac(m))
+        expect(ran.code).toBe(1)
+        // The person's folder is named as the program was given it, which on a Mac may be by another name than the one it has
+        const problem = printed(ran).problem as string
+        expect([why(m), why(m).replace(realpathSync(m.home), m.home)]).toContain(problem)
+        expect(ran.err).toContain(problem)
+        expect(ran.err).not.toContain('yourself to keep it going')
+        expect(ran.err.split('\n')).toContain(refusedForAgent())
+        expect(printed(ran)).toMatchObject({ service: { registered: false }, tell: tellWordForWord(problem) })
+        expect(events()).toEqual([expect.objectContaining({ led: 'agent', service: 'failed' })])
+        expect(printed(await run(m, ['service', 'status'], b.env, process.execPath, asMac(m)))).toMatchObject({ registered: false, state: 'not loaded' })
+      } finally {
+        await b.close()
+      }
+    },
+    60_000,
+  )
+
+  test('where an `it serve` started by hand answers after a refused load, that is what is said to run It, and never a background service', async () => {
+    const m = machine()
+    launchd(m, 'refuses')
+    const events = counted(m)
+    const b = await backend(m)
+    const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+    try {
+      // Something that answers as a connector does, where this folder's connector would
+      const socket = path.join(m.it, 'connector.sock')
+      await new Promise<void>((r) => answers.listen(socket, r))
+      writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+      const ran = await run(m, ['setup', '--yes'], b.env, process.execPath, asMac(m))
+      expect(ran.code).toBe(1)
+      expect(ran.err.split('\n')).toContain('It is running now, from an `it serve` that was started by hand, and stops when that does.')
+      expect(ran.err).not.toContain('from the background service that was registered before')
+      expect(events()).toEqual([expect.objectContaining({ service: 'failed' })])
+    } finally {
+      await new Promise((r) => answers.close(r))
+      await b.close()
+    }
+  }, 60_000)
+
+  test('with no login at the Mac’s own screen, as over SSH, the definition is kept for the next login and counted as registered, and what is said is as it was', async () => {
+    const m = machine()
+    launchd(m, 'no-login')
+    const events = counted(m)
+    const b = await backend(m)
+    try {
+      const ran = await run(m, ['setup', '--yes'], { ...b.env, ...AGENT }, process.execPath, asMac(m))
+      expect(ran.code).toBe(1)
+      expect(ran.err.split('\n')).toEqual(
+        expect.arrayContaining([
+          'It could not be registered as a background service: launchd could not confirm that the earlier agent has unloaded. Its definition was kept. Run `it service install` again.',
+          SERVE_YOURSELF,
+        ]),
+      )
+      expect(ran.err).not.toContain('For the agent that ran this: only the person')
+      expect(existsSync(definition(m))).toBe(true)
+      expect(events()).toEqual([expect.objectContaining({ service: 'registered' })])
+      expect(printed(await run(m, ['service', 'status'], b.env, process.execPath, asMac(m)))).toMatchObject({ registered: true, state: 'not loaded' })
+    } finally {
+      await b.close()
+    }
+  }, 60_000)
+
+  test('a definition that launchd loads is counted as registered', async () => {
+    const m = machine()
+    const held = launchd(m)
+    const events = counted(m)
+    const b = await backend(m)
+    const answers = http.createServer((_req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}'))
+    try {
+      const socket = path.join(m.it, 'connector.sock')
+      await new Promise<void>((r) => answers.listen(socket, r))
+      writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+      const ran = await run(m, ['setup', '--yes'], { ...b.env, ...AGENT }, process.execPath, asMac(m))
+      expect([ran.code, printed(ran).problem, held.loaded()]).toEqual([0, undefined, true])
+      expect(ran.err.split('\n')).toContain('It runs in the background (running).')
+      expect(printed(ran)).toMatchObject({ service: { registered: true, state: 'running' } })
+      expect(events()).toEqual([expect.objectContaining({ led: 'agent', service: 'registered' })])
+    } finally {
+      await new Promise((r) => answers.close(r))
+      await b.close()
+    }
+  }, 60_000)
+})
 
 describe.skipIf(process.platform === 'win32')('a page shown when no display is paired', () => {
   const HINT = `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${SITE} in a browser on this machine and pair that browser. Other displays are added from there.`
