@@ -7,6 +7,8 @@
 // (lib/clash.ts). So every caller is to be answered: with what it asked for, or with a refusal
 // that says why. The stand-in backend the other tests here run on never gives up on a write,
 // which is why these start the program itself, in a folder and on ports of their own.
+// With them is one thing more that only the program itself can show: how it orders a field
+// that a record does not have, which the order of clicks and stops leans on (actions.ts).
 // The 120 calls run in bursts of 40 because the backend program admits 64 concurrent actions
 // and answers with an uncoded error beyond that limit. Each burst still exceeds the largest
 // allowance of 30, so callers contend for the same record without exhausting action capacity.
@@ -333,4 +335,79 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
   /** A token for the session a cookie is. */
   const token = async (cookie: string) =>
     ((await (await fetch(`${origin}/session/token`, { method: 'POST', headers: { ...site(), cookie } })).json()) as { token: string }).token
+
+  /**
+   * The backend program's own ordering of a field a record does not have, which the order of
+   * clicks and stops leans on. A click from before clicks had a place in that order has none,
+   * and a stop that has one is to take it: its steps read up to the stop's place, and Convex
+   * says it orders a missing field below every number. The stand-in backend the other tests run
+   * on orders it so, and this asks the program itself. A step of a stop that has no place reads
+   * by the clock, and is to leave alone what has a place, which it tells by the field being
+   * absent. Such records are written as a backup would bring them back, by the backend
+   * program's own way of adding records, since no function of It's writes one any more.
+   */
+  test('a step of a stop that has a place drops the clicks that have none, and a step of a stop that has none leaves alone the clicks that have one', async () => {
+    const { adminKey } = JSON.parse(readFileSync(path.join(folder, 'it/service.json'), 'utf8')) as { adminKey: string }
+    const { api } = backendAt(Number(new URL(origin).port))
+    const asAdmin = async (kind: 'query' | 'mutation', name: string, args: Record<string, unknown>) => {
+      const response = await fetch(`${api}/api/${kind}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Convex ${adminKey}` },
+        body: JSON.stringify({ path: name, args, format: 'json' }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const result = (await response.json()) as { status: string; value?: unknown; errorMessage?: string }
+      if (result.status !== 'success') throw new Error(`${name} was refused: ${result.errorMessage}`)
+      return result.value
+    }
+    const rows = async (table: string) =>
+      ((await asAdmin('query', '_system/cli/tableData', { table, order: 'asc', paginationOpts: { numItems: 100, cursor: null } })) as { page: any[] }).page
+    const add = async (table: string, documents: Record<string, unknown>[]) => {
+      const said = (await asAdmin('mutation', '_system/frontend/addDocument', { table, documents })) as { success?: boolean } | null
+      expect(said?.success ?? true).toBe(true)
+    }
+    const [user] = await rows('users')
+    const [machine] = await rows('machines')
+    const now = Date.now()
+    const placed = { harness: 'codex', id: 'thread-stop-with-a-place' }
+    const unplaced = { harness: 'codex', id: 'thread-stop-with-none' }
+    await add('artifacts', [{ userId: user._id, slug: 'ordering', title: 'Ordering', lastVersion: 1, bytes: 0, createdAt: now, updatedAt: now, waiting: 6 }])
+    const page = (await rows('artifacts')).find((a) => a.slug === 'ordering')
+    const click = (clientActionId: string, sessionId: string, more: Record<string, unknown> = {}) => ({
+      userId: user._id,
+      artifactId: page._id,
+      clientActionId,
+      name: 'press',
+      payload: '{}',
+      contentVersion: 1,
+      title: 'Ordering',
+      createdAt: now,
+      delivery: 'pending',
+      machineId: machine._id,
+      harness: 'codex',
+      sessionId,
+      ...more,
+    })
+    await add('actions', [
+      click('ordering-none', placed.id),
+      click('ordering-before', placed.id, { sequence: 5 }),
+      click('ordering-after', placed.id, { sequence: 50 }),
+      click('ordering-old-none', unplaced.id),
+      click('ordering-old-placed', unplaced.id, { sequence: 7 }),
+      click('ordering-old-later', unplaced.id, { createdAt: now + 60_000 }),
+    ])
+    // A step of a stop that has its place, 10, in the order: what has no place came before it
+    await asAdmin('mutation', 'artifacts:dropRest', { userId: user._id, machineId: machine._id, session: placed, at: 0, sequence: 10 })
+    // A step of a stop from before stops had a place, made at this moment by the clock
+    await asAdmin('mutation', 'artifacts:dropRest', { userId: user._id, machineId: machine._id, session: unplaced, at: now })
+    const after = new Map((await rows('actions')).filter((x) => x.clientActionId.startsWith('ordering-')).map((x) => [x.clientActionId, x]))
+    expect([...after.keys()]).toHaveLength(6)
+    expect(after.get('ordering-none')).toMatchObject({ delivery: 'handed_off', route: 'stopped', stoppedSequence: 10 })
+    expect(after.get('ordering-before')).toMatchObject({ delivery: 'handed_off', route: 'stopped', stoppedSequence: 10 })
+    expect(after.get('ordering-after')).toMatchObject({ delivery: 'pending' })
+    expect(after.get('ordering-old-none')).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
+    expect(after.get('ordering-old-none')).not.toHaveProperty('stoppedSequence')
+    expect(after.get('ordering-old-placed')).toMatchObject({ delivery: 'pending' })
+    expect(after.get('ordering-old-later')).toMatchObject({ delivery: 'pending' })
+  })
 })

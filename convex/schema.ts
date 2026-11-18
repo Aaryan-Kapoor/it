@@ -74,6 +74,8 @@ export default defineSchema({
     stagingBytes: v.number(),
     /** The bytes of the files sent with actions that It holds for the person, kept or still arriving. */
     fileBytes: v.optional(v.number()),
+    /** The last number given out in the one order the person's clicks and stops are written in (see lib/tally.ts). None until the first is. */
+    sequence: v.optional(v.number()),
   }).index('by_user', ['userId']),
 
   // How things stand with the tour an agent gives of It, kept apart from the person's own
@@ -312,8 +314,15 @@ export default defineSchema({
         }),
       ),
     ),
-    /** The last few conversations a person stopped, and when: what was waiting for one by then is not reopened for. */
-    stops: v.optional(v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), run: v.optional(v.string()) }))),
+    /**
+     * The last few conversations a person stopped, when, and where the stop stands in the order
+     * the person's clicks and stops are written in (`sequence`): what was waiting for one by then
+     * is not reopened for. A stop with no place in that order was made before stops had one, and
+     * is before every click that has one.
+     */
+    stops: v.optional(
+      v.array(v.object({ harness: v.string(), sessionId: v.string(), at: v.number(), run: v.optional(v.string()), sequence: v.optional(v.number()) })),
+    ),
     /**
      * The Claude Code conversations open at a person's keyboard on this machine whose add-on its
      * connector does not hear, as one that was already open when the add-on was installed or
@@ -372,6 +381,8 @@ export default defineSchema({
     actionSeq: v.optional(v.number()),
     /** When a person last stopped the agent from this page: what was done on the page up to then is delivered to nobody, whoever the page belongs to by now. */
     stoppedThrough: v.optional(v.number()),
+    /** Where that stop stands in the order the person's clicks and stops are written in, which is what tells what was done up to it. A page stopped before stops had a place has none. */
+    stoppedSequence: v.optional(v.number()),
     /** What the page's agent last said above the page, in its own words, and when. */
     said: v.optional(v.object({ text: v.string(), at: v.number() })),
   })
@@ -559,11 +570,25 @@ export default defineSchema({
      * recorded before It numbered them.
      */
     seq: v.optional(v.number()),
+    /**
+     * Its place in the one order all of the person's clicks and stops are written in, on whatever
+     * page (`seq` is its number on its own page): taken in the step that records it, so that a
+     * stop written before it has a lower number and one written after it a higher, whatever the
+     * backend's clock said at either. A click recorded before clicks had a place has none, and is
+     * before every stop that has one.
+     */
+    sequence: v.optional(v.number()),
+    /** The stop that dropped it, by that stop's place in the same order, where a stop that has one did. */
+    stoppedSequence: v.optional(v.number()),
   })
     .index('by_artifact_client', ['artifactId', 'clientActionId'])
     // A page's waiting clicks in the order `delivery.waitingPage` reads them: those recorded
     // before they were numbered first, then by number
     .index('by_artifact_seq', ['artifactId', 'delivery', 'seq'])
+    // A page's clicks in the order they were written, those from before they had a place first:
+    // what was done last on a page is told by this, and what a stop is to drop of it
+    .index('by_artifact_sequence', ['artifactId', 'sequence'])
+    .index('by_artifact_delivery_sequence', ['artifactId', 'delivery', 'sequence'])
     .index('by_route', ['machineId', 'delivery', 'harness', 'sessionId', 'createdAt'])
     // By when each click was made: a harness's queue and a closed conversation are offered
     // clicks by these, so that what was made before Auto-wake's cutoff, or before a stop, is
@@ -580,6 +605,8 @@ export default defineSchema({
     // One person's clicks for one conversation by whose they are to deliver, oldest first: with
     // no machine and not set aside, they are the ones any of the person's machines may take
     .index('by_user_route', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'createdAt'])
+    // The same in the order they were written, which is the order a stop drops them by
+    .index('by_user_route_sequence', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'sequence'])
     // The same by when each was made: a conversation held in a thread of T3 Code is asked for
     // only what was made after a moment, and what was made before it is outside what is read
     .index('by_user_route_made', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'madeAt'])

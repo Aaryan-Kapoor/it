@@ -2719,9 +2719,16 @@ describe('clicks and their delivery', () => {
     await m.as.mutation(api.delivery.claim, { ids: [first] })
     const later = await t.run(async (ctx) => {
       const { _id, _creationTime, ...base } = (await ctx.db.get(first))!
-      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now() })
+      // A stop written after all of these and before the last, as a stop is that has its place among the person's clicks
+      await ctx.db.patch(base.artifactId, { stoppedThrough: Date.now(), stoppedSequence: base.sequence! + 1 })
       for (let i = 1; i < 64; i++) await ctx.db.insert('actions', { ...base, clientActionId: `stopped-${i}` })
-      return ctx.db.insert('actions', { ...base, clientActionId: 'after-stop', createdAt: Date.now() + 1, madeAt: Date.now() + 1 })
+      return ctx.db.insert('actions', {
+        ...base,
+        clientActionId: 'after-stop',
+        createdAt: Date.now() + 1,
+        madeAt: Date.now() + 1,
+        sequence: base.sequence! + 2,
+      })
     })
     expect(await m.as.mutation(api.delivery.giveBackBatch, {})).toMatchObject({ back: [], done: false })
     expect(await t.run((ctx) => ctx.db.get(first))).toMatchObject({ delivery: 'handed_off', route: 'stopped' })
@@ -6999,8 +7006,14 @@ describe('cases at the edges', () => {
     await insertClicks(t, p.artifactId, 1, { attended }, now - 101)
     const timers = await insertClicks(t, p.artifactId, 80, { attended: false }, now)
     const [attendedId] = await insertClicks(t, p.artifactId, 1, { attended }, now + 100)
-    const answer = await m.as.query(api.delivery.inboxPage, { listening: [], queues: [SESSION.harness], after: [] })
-    expect(answer.clicks.map((c) => c.id)).toEqual([...timers.slice(0, 7), attendedId])
+    const offered = async () => (await m.as.query(api.delivery.inboxPage, { listening: [], queues: [SESSION.harness], after: [] })).clicks.map((c) => c.id)
+    // What the stop took is offered to nobody, though no step of the stop has come to it yet. It
+    // is not read around by the stop's time, which a clock set back would make a click after the
+    // stop fall under: until a step drops it, it has the place of the attended click read for
+    expect(await offered()).toEqual(timers.slice(0, 7))
+    const { userId } = (await t.run((ctx) => ctx.db.get(m.id)))!
+    await t.mutation(internal.artifacts.dropRest, { userId, machineId: m.id, session: SESSION, at: now - 100, artifactId: p.artifactId as never })
+    expect(await offered()).toEqual([...timers.slice(0, 7), attendedId])
   })
 
   test('a queue with large old clicks still offers a recent conversation in its original order on every asking', async () => {

@@ -9,7 +9,7 @@ import { counted } from './lib/counted'
 import { fail } from './lib/errors'
 import { rateLimit } from './lib/limits'
 import { log } from './lib/log'
-import { bump, tally } from './lib/tally'
+import { bump, nextSequence, tally } from './lib/tally'
 
 const DAY = 86_400_000
 /**
@@ -138,6 +138,9 @@ export async function record(
     madeAt: Math.min(input.madeAt ?? now, now),
     delivery: 'pending',
     seq,
+    // Its place among all of the person's clicks and stops, taken as it is written: what tells
+    // whether a stop was written before it or after, whatever the clock says of either
+    sequence: await nextSequence(ctx, artifact.userId),
     ...to,
     ...(attachment ? { attachment: attachment._id, files: attachment.files } : {}),
   })
@@ -162,10 +165,43 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
   if (await ctx.db.get(x.userId)) await bump(ctx, x.userId, { waiting: -1 })
 }
 
+/** A stop as it is kept: when, by the backend's clock, and its place in the order the person's clicks and stops are written in, where it has one. */
+export interface Stop {
+  at: number
+  sequence?: number
+}
+
 /**
- * Whether the person stopped the conversation a click is for after the click was made (by
- * `madeOf`, so that a click that waited in a browser is judged by when the person made it). Such a
- * click is delivered by no way at all from that moment, though the step that marks it so may
+ * Whether a click was made before a stop, so that it goes with it.
+ *
+ * What was written before the stop was waiting when the person stopped, and that is told by the
+ * order the two were written in and never by the clock: a click has a place in that order from
+ * the step that recorded it, and a stop from the step that noted it, so a clock that is set back
+ * between them changes nothing. A click with no place was recorded before clicks had one, and is
+ * before every stop that has one. Where neither has a place, both are from that time, and the
+ * clock is all there is to go by, as it was then.
+ *
+ * What was written after the stop the person did knowing the agent was stopped, and it is kept:
+ * but for a click that a browser held while It could not be reached, which arrives after a stop
+ * it was made before. That one is told by the clock, since the browser's word for when is all
+ * that says so, and only where the clock leaves no doubt. The browser said it was made before
+ * it arrived, and no later than the stop's moment (by `madeOf`, the latest it can have been
+ * made), and it arrived no earlier than that moment. A click that arrives after a stop with an
+ * earlier time than the stop's shows that the clock was set back in between: nothing the clock
+ * says of the two can then be gone by, and it is delivered. So is one that arrives in the very
+ * moment of the stop, after it, with no word of having been made earlier.
+ */
+export function madeBefore(x: Pick<Doc<'actions'>, 'sequence' | 'createdAt' | 'madeAt'>, stop: Stop): boolean {
+  const made = x.madeAt ?? x.createdAt
+  if (x.sequence === undefined) return stop.sequence !== undefined || stop.at >= made
+  if (stop.sequence !== undefined && x.sequence < stop.sequence) return true
+  return made < x.createdAt && made <= stop.at && x.createdAt >= stop.at
+}
+
+/**
+ * The stop a click goes with, where the person stopped the conversation it is for and the click
+ * was made before that (`madeBefore`): the earliest of those, where more than one is known. Such
+ * a click is delivered by no way at all from that moment, though the step that marks it so may
  * not have come to it yet: a stop drops what was waiting in steps, and what a step has not
  * reached must not be taken, or moved out of its reach, in between.
  *
@@ -174,24 +210,36 @@ export async function noLongerWaiting(ctx: MutationCtx, x: Doc<'actions'>): Prom
  * now: a page that has changed hands since takes its waiting clicks along a step at a time,
  * and one made before the stop is stopped whichever of the two it is found under.
  */
-export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
-  const made = madeOf(x)
+export async function stoppedBy(ctx: QueryCtx, x: Doc<'actions'>): Promise<Stop | null> {
+  const found: Stop[] = []
   const noted = async (machineId: Id<'machines'> | undefined, harness: string | undefined, sessionId: string | undefined) => {
-    if (!machineId || !harness || !sessionId) return false
+    if (!machineId || !harness || !sessionId) return
     const machine = await ctx.db.get(machineId)
-    return (machine?.stops ?? []).some((s) => s.harness === harness && s.sessionId === sessionId && s.at >= made)
+    for (const s of machine?.stops ?? []) if (s.harness === harness && s.sessionId === sessionId && madeBefore(x, s)) found.push(s)
   }
   // The page itself keeps when it was last stopped from, which stands whoever it belongs to by now
   const page = await ctx.db.get(x.artifactId)
-  if ((page?.stoppedThrough ?? 0) >= made) return true
-  if (await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)) return true
-  return noted(page?.machineId, page?.session?.harness, page?.session?.id)
+  if (page?.stoppedThrough !== undefined) {
+    const stop = { at: page.stoppedThrough, sequence: page.stoppedSequence }
+    if (madeBefore(x, stop)) found.push(stop)
+  }
+  await noted(x.machineId ?? x.parkedBy, x.harness, x.sessionId)
+  await noted(page?.machineId, page?.session?.harness, page?.session?.id)
+  // One with a place in the order is after every one without
+  const first = (a: Stop, b: Stop) => (a.sequence ?? 0) - (b.sequence ?? 0) || a.at - b.at
+  return found.sort(first)[0] ?? null
+}
+/** Whether the person stopped the conversation a click is for after the click was made (see `stoppedBy`). */
+export async function stoppedSince(ctx: QueryCtx, x: Doc<'actions'>): Promise<boolean> {
+  return (await stoppedBy(ctx, x)) !== null
 }
 /** Marks a click as stopped with its conversation, as the stop itself does for what it reaches: handed over to nobody, and waiting no more. */
 export async function dropStopped(ctx: MutationCtx, x: Doc<'actions'>): Promise<void> {
   await ctx.db.patch(x._id, {
     delivery: 'handed_off',
     route: 'stopped',
+    // Which stop it went with, so that the page can count what went with that one
+    stoppedSequence: (await stoppedBy(ctx, x))?.sequence,
     handedAt: Date.now(),
     outcome: 'failed',
     leaseMachineId: undefined,
@@ -436,15 +484,21 @@ export const forArtifact = query({
   handler: async (ctx, args) => {
     const c = await requireCaller(ctx)
     const a = await resolveArtifact(ctx, c.user._id, args)
+    // The last of them by the order they were written in, which a clock that was set back does
+    // not change: those from before clicks had a place in it are the oldest, in the order they came
     const recent = await ctx.db
       .query('actions')
-      .withIndex('by_artifact', (q) => q.eq('artifactId', a._id))
+      .withIndex('by_artifact_sequence', (q) => q.eq('artifactId', a._id))
       .order('desc')
       .take(30)
     return recent.map((x) => ({
       id: x._id,
       name: x.name,
       at: x.createdAt,
+      // Its place among the person's clicks and stops, and the place of the stop it went with,
+      // where each has one: the page tells by them what was done before its last stop
+      sequence: x.sequence ?? null,
+      stoppedSequence: x.stoppedSequence ?? null,
       // When the person made it, which for a click that waited in a browser is before It got it.
       // What Auto-wake would reopen a conversation for is judged by this (see `madeOf`)
       madeAt: madeOf(x),

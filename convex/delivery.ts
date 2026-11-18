@@ -24,7 +24,7 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
-import { destination, dropStopped, madeOf, noLongerWaiting, stoppedSince } from './actions'
+import { destination, dropStopped, madeBefore, madeOf, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
 import { log } from './lib/log'
@@ -191,6 +191,22 @@ const madeAfter = (ctx: QueryCtx, machineId: Id<'machines'>, harness: string, se
   })
 
 /**
+ * Which clicks of a conversation that may be reopened are still to be offered, after its last
+ * stop on this machine: those the stop did not take (`madeBefore`). What a stop takes it drops in
+ * steps, and what a step has not come to yet is offered to nobody. It is told by the stop's place
+ * in the order the person's clicks and stops are written in, and never read around by the stop's
+ * time: a click made after a stop, with the backend's clock set back in between, carries an
+ * earlier time than the stop and is to be offered all the same. So what is read is read from
+ * Auto-wake's own moment on, every click counted against what may be read, and what the stop
+ * took is left out of it: while a stop's steps are under way a conversation may be offered
+ * fewer than it could be, for that moment.
+ */
+const afterStop = (machine: Doc<'machines'>, harness: string, sessionId: string) => {
+  const stop = (machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)
+  return (x: Doc<'actions'>) => !stop || !madeBefore(x, stop)
+}
+
+/**
  * The array inbox for connectors without paging. Listening conversations have reserved
  * places; queues use fixed samples. The paged inbox below advances through every name.
  */
@@ -223,9 +239,9 @@ export const inbox = query({
     // things more. It is read only where the person has switched that on for it on this
     // machine, whatever the connector asks. Only what was done from about then on is read:
     // what had waited longer is not reopened for, and read with the rest, the oldest few of a
-    // conversation, it would stand in front of every later click for good. The same holds for
-    // what was waiting when the person stopped a conversation. And more of each conversation
-    // is read, since one reopening carries all that is waiting for it.
+    // conversation, it would stand in front of every later click for good. What was waiting
+    // when the person stopped a conversation is not reopened for either (`afterStop`). And more
+    // of each conversation is read, since one reopening carries all that is waiting for it.
     //
     // Where what may still be read is short, each queue yet to be read has the same share of
     // it, so that none goes unread behind another, and spends it on what has waited longest
@@ -241,7 +257,6 @@ export const inbox = query({
         from = on.since - WAKE_BACK_MS
       }
       const each = reopened ? WAKE_MOST : 2
-      const stoppedAt = (sessionId: string) => (reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0)
       const found: string[] = []
       // How many clicks this queue may read now, of the `n` wanted, each taken to be as large as a click can be
       const until = left - left / (asked.length - nth)
@@ -278,11 +293,12 @@ export const inbox = query({
       for (const [foundAt, sessionId] of found.entries()) {
         if (rows.length >= BUDGET) break
         const want = Math.min(each, BUDGET - rows.length)
-        const since = Math.max(from - 1, stoppedAt(sessionId))
+        const since = from - 1
+        const kept = reopened ? afterStop(machine, harness, sessionId) : () => true
         // What was read of the queue's oldest holds this conversation's own oldest, in their
         // order. Where that is all the queue has, or as many as are wanted, it is what reading
         // the conversation would give, and the conversation is not read.
-        const known = oldest.filter((x) => x.sessionId === sessionId && madeOf(x) > since)
+        const known = oldest.filter((x) => x.sessionId === sessionId && madeOf(x) > since && kept(x))
         if (all || known.length >= want) {
           rows.push(...known.slice(0, want))
           continue
@@ -297,7 +313,7 @@ export const inbox = query({
           rows.push(...known)
           continue
         }
-        rows.push(...read(await madeAfter(ctx, machine._id, harness, sessionId, since).take(now)))
+        rows.push(...read(await madeAfter(ctx, machine._id, harness, sessionId, since).take(now)).filter(kept))
       }
     }
     const seen = new Set<string>()
@@ -383,12 +399,12 @@ export const inboxPage = query({
       next.push({ harness, id: cursor })
       for (const [n, sessionId] of found.entries()) {
         const rest = found.length - n - 1
-        const stopped = reopened ? ((machine.stops ?? []).find((s) => s.harness === harness && s.sessionId === sessionId)?.at ?? 0) : 0
-        const since = Math.max(from - 1, stopped)
+        const since = from - 1
+        const kept = reopened ? afterStop(machine, harness, sessionId) : () => true
         // Leave four reads and two response places for each later conversation, and two
         // reads for this conversation's attended lookup. Extra places carry its oldest work.
         const want = Math.min(each, places - 2 * rest, may() - 4 * rest - 2)
-        const batch = read(await madeAfter(ctx, machine._id, harness, sessionId, since).take(want))
+        const batch = read(await madeAfter(ctx, machine._id, harness, sessionId, since).take(want)).filter(kept)
         if (batch.length && batch.every((c) => c.attended === false)) {
           const attended: Doc<'actions'>[] = []
           for (const present of [true, undefined]) {
@@ -399,7 +415,7 @@ export const inboxPage = query({
                 return since > 0 ? all.gt('madeAt', since) : all
               })
               .first()
-            if (first) attended.push(...read([first]))
+            if (first) attended.push(...read([first]).filter(kept))
           }
           attended.sort((a, b) => madeOf(a) - madeOf(b) || a._creationTime - b._creationTime)
           if (attended[0]) {

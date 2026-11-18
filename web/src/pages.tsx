@@ -434,7 +434,12 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
   const recent = useQuery(api.actions.forArtifact, page ? { artifactId: page.id as Id<'artifacts'> } : 'skip')
   /** What is known of whether the page's agent is at work. Functions from before they said it, kept while this program's would not load, say nothing of a turn. */
   const work: Work | undefined = page
-    ? { turn: (page as { turn?: Turn | null }).turn ?? null, machineSeenAt: page.machineSeenAt, stoppedAt: page.stoppedAt }
+    ? {
+        turn: (page as { turn?: Turn | null }).turn ?? null,
+        machineSeenAt: page.machineSeenAt,
+        stoppedAt: page.stoppedAt,
+        stoppedSequence: (page as { stoppedSequence?: number | null }).stoppedSequence ?? null,
+      }
     : undefined
   const underWay = page ? inHand(recent, page.answeredAt ?? null, page.run !== null && page.run !== undefined, now, work) : false
   // Every page is told what the bar goes by: whether its agent is at work, and where what was done on it has got to. As text, so that it is sent on only when it changes
@@ -550,6 +555,7 @@ export function PageView({ slug, user, owner, display = null }: { slug: string; 
               harness={page.session?.harness ?? page.agent}
               agent={agentName(page.agent)}
               stoppedAt={page.stoppedAt}
+              stoppedSequence={(page as { stoppedSequence?: number | null }).stoppedSequence ?? null}
               wakeFailed={page.wakeFailed}
               answeredAt={page.answeredAt ?? null}
               turn={(page as { turn?: Turn | null }).turn ?? null}
@@ -709,6 +715,21 @@ export interface Work {
   turn?: Turn | null
   machineSeenAt?: number | null
   stoppedAt?: number | null
+  /** Where that stop stands in the order the person's clicks and stops were written in. Nothing where the stop is from before stops had a place in it, or the backend does not say. */
+  stoppedSequence?: number | null
+}
+/**
+ * Whether something done on a page was done before the page's last stop. Where both have a
+ * place in the order the person's clicks and stops were written in, that order says, and the
+ * clock is not asked: once the backend's clock has been set back, what was done after a stop
+ * carries an earlier time than the stop. What has no place was done before anything had one,
+ * and so before a stop that has one. And a stop with no place is from that time too: it is told
+ * by the clock, as it was, and of nothing that has a place, all of which came after it.
+ */
+export function beforeStop(x: { at: number; sequence?: number | null }, stop: Pick<Work, 'stoppedAt' | 'stoppedSequence'> | undefined): boolean {
+  if (stop?.stoppedAt == null) return false
+  if (stop.stoppedSequence != null) return x.sequence == null || x.sequence < stop.stoppedSequence
+  return x.sequence == null && x.at <= stop.stoppedAt
 }
 /**
  * What is known of the agent's turn for something done on a page that was handed to it and that
@@ -719,7 +740,7 @@ export interface Work {
  * was running. And a turn is not said to be running past a stop the person asked for.
  */
 export function turnFor(
-  last: { at: number; delivery: string; route?: string | null; outcome?: string | null; handedAt?: number | null },
+  last: { at: number; delivery: string; route?: string | null; outcome?: string | null; handedAt?: number | null; sequence?: number | null },
   work: Work | undefined,
   now: number,
 ): 'running' | 'ended' | null {
@@ -727,7 +748,7 @@ export function turnFor(
   if (!turn || last.delivery !== 'handed_off' || last.route === 'stopped') return null
   if (last.outcome !== null && last.outcome !== undefined && last.outcome !== 'running') return null
   if (turn.endedAt !== null) return last.handedAt != null && turn.endedAt >= last.handedAt ? 'ended' : null
-  if (work.stoppedAt != null && last.at <= work.stoppedAt) return null
+  if (beforeStop(last, work)) return null
   return work.machineSeenAt != null && now - work.machineSeenAt < ALIVE.onlineMs ? 'running' : null
 }
 /**
@@ -1103,6 +1124,7 @@ function ActionStatus({
   harness,
   agent,
   stoppedAt,
+  stoppedSequence,
   wakeFailed,
   answeredAt,
   turn,
@@ -1133,6 +1155,8 @@ function ActionStatus({
   agent: string | null
   /** When a person last stopped the page's agent, if they have. */
   stoppedAt: number | null
+  /** Where that stop stands in the order the person's clicks and stops were written in (see `beforeStop`). */
+  stoppedSequence: number | null
   /** Why the page's conversation could not be reopened, the last time that was tried and did not work. */
   wakeFailed: { at: number; why: string } | null
   /** When the page's agent last changed the page, by publishing it or writing its state. */
@@ -1256,7 +1280,7 @@ function ActionStatus({
   // still waiting for a machine or for an agent, is said for as long as it waits, with what
   // can be done about it: gone from the bar, it looked done when nothing had come of it.
   // (An agent that is still at work on it is neither: its turn is said for as long as it runs)
-  const atWork = turnFor(last, { turn, machineSeenAt, stoppedAt }, now)
+  const atWork = turnFor(last, { turn, machineSeenAt, stoppedAt, stoppedSequence }, now)
   if (now - last.at > 10 * 60_000 && last.delivery === 'handed_off' && atWork !== 'running') return working ? <WorkingNow agent={agent} /> : null
   // The agent was stopped after the last thing done here: said as that, whatever became of it.
   // What was waiting then went with the stop, and the next thing done reopens the conversation.
@@ -1264,15 +1288,23 @@ function ActionStatus({
   // came after that, on this page or another of the conversation's, changed nothing about it)
   const settled = last.delivery === 'handed_off' && last.route !== 'stopped' && (last.outcome === 'succeeded' || last.outcome === 'failed')
   // (A turn that is running now began after that stop, or it would not be said to be running)
-  if (stoppedAt !== null && last.at <= stoppedAt && !settled && working) return <WorkingNow agent={agent} />
-  if (stoppedAt !== null && last.at <= stoppedAt && !settled) {
+  // (Whether it was done before the stop is told by where the two stand in the order they were written in, where they have a place in it: see `beforeStop`)
+  // (And so is what that very stop dropped as it arrived: something a browser held from before the stop and sent after it)
+  const withThatStop = last.route === 'stopped' && stoppedSequence !== null && (last as { stoppedSequence?: number | null }).stoppedSequence === stoppedSequence
+  const stopped = stoppedAt !== null && (beforeStop(last, { stoppedAt, stoppedSequence }) || withThatStop)
+  if (stopped && !settled && working) return <WorkingNow agent={agent} />
+  if (stopped && !settled) {
     // Everything of that conversation's that was waiting went with the stop, and is said to have.
-    // Each is counted by when it was dropped: what an earlier stop of the same conversation
-    // dropped was done before this one too, and is none of this one's. (Functions from before
-    // they said when leave only the hour before the stop to go by)
-    const dropped = (recent ?? []).filter(
-      (x) => x.route === 'stopped' && x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt),
-    ).length
+    // Each is counted by the stop it went with: what an earlier stop of the same conversation
+    // dropped was done before this one too, and is none of this one's. Where the stop or what it
+    // dropped does not say which stop that was, each is counted by when it was dropped. (Functions
+    // from before they said when leave only the hour before the stop to go by)
+    const dropped = (recent ?? []).filter((x) => {
+      if (x.route !== 'stopped') return false
+      const by = (x as { stoppedSequence?: number | null }).stoppedSequence
+      if (stoppedSequence !== null && by != null) return by === stoppedSequence
+      return x.at <= stoppedAt && (x.handedAt == null ? stoppedAt - x.at < 3_600_000 : x.handedAt >= stoppedAt)
+    }).length
     return <span className="status">{dropped > 1 ? `Stopped, with ${dropped - 1} more that ${dropped === 2 ? 'was' : 'were'} waiting` : 'Stopped'}</span>
   }
   // Dropped by a stop the page no longer says the time of, having changed conversation or machine
