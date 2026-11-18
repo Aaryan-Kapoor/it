@@ -625,6 +625,14 @@ export function createFiles(folder: string): Files {
       try {
         for (const q of going) await discard(q)
         if (!mine.handle) {
+          // Whoever sends the part read what was declared before the file had its place here,
+          // and the version may have been deleted between the two, with nothing of the file in
+          // the list for the deletion to find. It is looked for once more now that the file
+          // is in the list: a deletion that comes after this finds the file there
+          if (!(await there(manifestFolder(prefix))) || !(await isFile(path.join(manifestFolder(prefix), 'files.json')))) {
+            await letGoOfPart(key, mine)
+            return 'no_folder'
+          }
           if (!held()) return 'out_of_order'
           mine.handle = await open(mine.temp, 'wx', 0o600)
           // Let go of while its file was being opened: nothing else knows of the file that was
@@ -788,14 +796,21 @@ export function createFiles(folder: string): Files {
     },
 
     async clear(prefix, most) {
+      const letGo = async () => {
+        const going = [...arrivingParts].filter(([key]) => key.startsWith(prefix))
+        for (const [key] of going) arrivingParts.delete(key)
+        for (const [, p] of going) await discard(p)
+      }
       // What was arriving in parts under it goes first, and is not put in place
-      const going = [...arrivingParts].filter(([key]) => key.startsWith(prefix))
-      for (const [key] of going) arrivingParts.delete(key)
-      for (const [, p] of going) await discard(p)
+      await letGo()
       const left = { files: most }
       // What was declared goes first: from that moment no upload under the prefix is accepted,
       // and one that is arriving now removes what it wrote
-      const all = (await empty(manifestFolder(prefix), left)) && (await empty(versionFolder(prefix), left))
+      const declaredGone = await empty(manifestFolder(prefix), left)
+      // A file begun in parts while what was declared was going took its place in the list after
+      // the first look, and goes now. One begun later than this finds nothing declared
+      await letGo()
+      const all = declaredGone && (await empty(versionFolder(prefix), left))
       return { removed: most - left.files, more: !all }
     },
 

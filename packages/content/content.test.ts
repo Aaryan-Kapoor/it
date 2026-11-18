@@ -2665,6 +2665,34 @@ describe('large files', () => {
       expect((await part(again, small, 0, 10, { on })).status).toBe(403)
     } finally {
       held.usual()
+    }
+    // And one deleted after the part's sender read what was declared, and before the file has its place among those arriving
+    const early = filmPrefix('unopened-deleted-early')
+    await control('stage', { prefix: early, files }, undefined, { on })
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).statfs
+    let asked!: () => void
+    let answer!: () => void
+    const reached = new Promise<void>((resolve) => {
+      asked = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      answer = resolve
+    })
+    vi.mocked(fsp.statfs).mockImplementationOnce((async (...given: Parameters<typeof real>) => {
+      asked()
+      await waiting
+      return real(...given)
+    }) as typeof real)
+    try {
+      const first = part(early, small, 0, 10, { on })
+      await reached
+      expect((await control('delete', { prefix: early }, undefined, { on })).json()).toMatchObject({ more: false })
+      answer()
+      // Nothing of it is begun: no part is answered as taken, and no file is made for one
+      expect((await first).status).toBe(403)
+      expect(arrivingUnder(tmp)).toEqual([])
+    } finally {
+      vi.mocked(fsp.statfs).mockImplementation(real)
       await on.close()
     }
   })
