@@ -2444,6 +2444,23 @@ describe('what setup says became of each add-on, and bringing the add-ons up to 
     expect(await refresh(say, true)).toEqual([{ id: 'codex', did: 'failed', detail: 'record_unread' }])
     expect(said).toEqual(['Codex: its installation record could not be read, so the add-on and record were kept'])
   })
+
+  test.each([
+    ['is gone from the machine', () => failing.push('codex --version')],
+    ['is too old for It', () => replies.set('codex --version', 'codex-cli 0.100.0')],
+  ])('refresh says nothing of an app that %s, though its record cannot be read: nothing there would have been brought up to date', async (_what, make) => {
+    await connect('codex', () => {})
+    put(stampFile('codex'), '{broken')
+    make()
+    ran = []
+    const { said, say } = lines()
+    expect(await refresh(say)).toEqual([])
+    expect(said).toEqual([])
+    expect(commands('codex').filter((words) => /\b(?:add|install|update|remove)\b/.test(words))).toEqual([])
+    // The record is kept as it was found, and is still said to be there
+    expect(read(stampFile('codex'))).toBe('{broken')
+    expect(holdsAddons()).toBe(true)
+  })
 })
 
 describe('managed plugin and marketplace ownership', () => {

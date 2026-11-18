@@ -2738,6 +2738,14 @@ export function refresh(say: (line: string) => void, forLog = false): Promise<Ad
       const unread = unreadInstallations(id) !== undefined
       if (!unread && !installations(id).length) continue
       try {
+        // An app that is gone from the machine, or too old for It, has nothing brought up to date
+        // whatever its record holds, so nothing would have gone by the record: it is passed over
+        // here as it is where the record can be read, and the record is left as it is
+        if (unread) {
+          const version = await versionOf(id)
+          const min = KNOWN[id].min
+          if (!version || (min && older(version, min))) continue
+        }
         const now = await statusOf(id)
         // And Codex where all that is wrong is hooks that an It from before wrote, which it cannot
         // run: brought up to date, they may be ones it can
