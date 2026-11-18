@@ -351,7 +351,8 @@ export function namingsHeld(exchanges, notPaired = [], over = []) {
 // browser, in which words, about which address, how often at most, and from when until when.
 // Whatever a browser says by itself that nothing foresaw is an error of its own. So is every
 // error a script of the site's or of a page's wrote or threw: the site writes none for what the
-// backend refuses with a code, and nothing foresees one. The words below are Chromium's.
+// backend refuses with a code, and nothing foresees one unless a run names it as a script's, in
+// its words, for one stretch of one browser. The words below are Chromium's.
 
 /** A text as a pattern takes it for itself, whatever is in it. */
 const literally = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -409,35 +410,42 @@ export function expectations({ linger = 3000 } = {}) {
    * requests were seen to be made. A browser is taken to be sure to say it at least once, so
    * that one that was never said is found out at the end as an excuse nothing needed; `may`
    * marks what a browser says only when the moment falls so. `because` says what provoked it,
-   * for whoever reads that it was never said.
+   * for whoever reads that it was never said. `byScript` marks words that a script of the site
+   * writes rather than the browser by itself: nothing else a script writes or throws is ever
+   * foreseen, so each such excuse is named for what it is and held to its own words.
    */
-  function foresee(who, { says, of, showing, times = 1, may = false, because }) {
+  function foresee(who, { says, of, showing, times = 1, may = false, byScript = false, because }) {
     if (!who?.problems) throw new Error('what is foreseen is foreseen of one browser, and none was named')
-    const one = { who, says, of, showing, times, may, because, from: Date.now(), until: Number.POSITIVE_INFINITY, said: 0 }
+    const one = { who, says, of, showing, times, may, byScript, because, from: Date.now(), until: Number.POSITIVE_INFINITY, said: 0 }
     foreseen.push(one)
     const over = () => {
       one.until = Math.min(one.until, Date.now() + linger)
     }
     // Whether the browser has said it yet, since it was foreseen, for whoever waits for that
-    over.said = () => who.problems.some((problem) => problem.own && problem.at >= one.from && fits(one, problem))
+    over.said = () => who.problems.some((problem) => problem.at >= one.from && fits(one, problem))
     over.sure = !may
+    // How often it was said within what was foreseen, as the last holding to account found
+    over.times = () => one.said
     return over
   }
-  /** Whether what a browser said is what was foreseen of it: in those words, about that address and that showing. */
-  const fits = (f, problem) => f.says.test(problem.says) && (!f.of || f.of.test(problem.of)) && (f.showing === undefined || f.showing === problem.showing)
+  /** Whether what a browser said is what was foreseen of it: by the same speaker, in those words, about that address and that showing. */
+  const fits = (f, problem) =>
+    f.byScript === !problem.own && f.says.test(problem.says) && (!f.of || f.of.test(problem.of)) && (f.showing === undefined || f.showing === problem.showing)
   /**
    * Foresees each of several things of a browser for what is done in the statements that
    * follow, and gives the way to say that the doing is over. What is given has a way of its
    * own, `said`, to wait until the browser has said everything that was foreseen of it for
    * sure: a browser says a thing a moment after it is done, and whoever looks at what became
    * of the doing looks once it has spoken. It waits ten seconds at most, and says whether the
-   * browser has spoken.
+   * browser has spoken. Another, `times`, gives each thing foreseen by what was to provoke it
+   * with how often it was said, once the browsers have been held to account.
    */
   function during(who, reports) {
     const over = reports.map((report) => foresee(who, report))
     const done = () => {
       for (const one of over) one()
     }
+    done.times = () => reports.map((report, n) => ({ because: report.because, said: over[n].times() }))
     done.said = async (ms = 10_000) => {
       for (const end = Date.now() + ms; ; await new Promise((resolve) => setTimeout(resolve, 25))) {
         if (over.every((one) => !one.sure || one.said())) return true
@@ -460,8 +468,8 @@ export function expectations({ linger = 3000 } = {}) {
    * that time, in those words, about that address and that showing, and no oftener than was
    * foreseen. Gives every error that is a browser's own (`own`), each as a sentence, once,
    * with how often it was said: what a browser said by itself that nothing foresaw or that was
-   * said more often than foreseen, and everything a script wrote or threw, which nothing can
-   * foresee. And gives what was foreseen for sure and never said (`neverSaid`), each by what
+   * said more often than foreseen, and everything a script wrote or threw that was not foreseen
+   * in its words as a script's. And gives what was foreseen for sure and never said (`neverSaid`), each by what
    * was to provoke it.
    */
   function heldToAccount(browsers) {
@@ -473,9 +481,7 @@ export function expectations({ linger = 3000 } = {}) {
         // Where more than one thing foreseen fits, the browser is taken to speak of the one
         // that was foreseen last and has not been said yet: what was provoked latest is what
         // it is speaking of, and nothing goes unsaid because another took its words
-        const meant = problem.own
-          ? foreseen.filter((f) => f.who === b && problem.at >= f.from && problem.at <= f.until && fits(f, problem) && f.said < most(f))
-          : []
+        const meant = foreseen.filter((f) => f.who === b && problem.at >= f.from && problem.at <= f.until && fits(f, problem) && f.said < most(f))
         const expected = meant.findLast((f) => f.said === 0) ?? meant.at(-1)
         if (expected) expected.said += 1
         else

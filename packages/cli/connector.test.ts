@@ -2417,10 +2417,11 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
       const bin = mkdtempSync(path.join(os.tmpdir(), 'it-codex-bin-'))
       const folder = mkdtempSync(path.join(os.tmpdir(), 'it-held-'))
       made.push(bin, folder)
-      // The second run leaves a command in its group that carries no mark of it, and is killed: what it left cannot be told to be its own
+      // The second run leaves a command in its group that carries no mark of it, and is killed: what it left cannot be told to be its own.
+      // The command writes its own number only once it has shed the marks, and the run waits for that, so that the run is never over while what it left still carries them and would rightly be ended with it.
       writeFileSync(
         path.join(bin, 'codex'),
-        `#!/bin/sh\ncat > ${bin}/given\nenv -u IT_RUN -u IT_HARNESS -u IT_SESSION sleep 120 &\necho $! > ${bin}/pid\nkill -KILL $$\n`,
+        `#!/bin/sh\ncat > ${bin}/given\nenv -u IT_RUN -u IT_HARNESS -u IT_SESSION sh -c 'echo $$ > ${bin}/pid; exec sleep 120' &\nwhile [ ! -s ${bin}/pid ]; do sleep 0.01; done\nkill -KILL $$\n`,
         { mode: 0o755 },
       )
       process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`

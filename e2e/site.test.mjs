@@ -126,6 +126,52 @@ describe('what a run foresees of its browsers', () => {
     expect(heldToAccount([one]).own).toEqual(['browser 1 had a script write or throw: ConvexError: something was refused'])
   })
 
+  describe('words a script of the site writes', () => {
+    const SITE = 'http://localhost:20000/assets/index.js'
+    const timedOut = 'Error: [CONVEX Q(notifications:list)] [Request ID: 0f603d262c1f6614] Server Error Called by client'
+    /** The words as a script wrote them, and the excuse a run makes for them while the backend is busy. */
+    const written = (words, more = {}) => ({ ...says(words, { of: SITE, ...more }), own: false })
+    const busy = (times) => ({
+      says: /^Error: \[CONVEX Q\(notifications:list\)\] \[Request ID: [0-9a-f]+\] Server Error\b/,
+      of: site.under('http://localhost:20000/assets/'),
+      byScript: true,
+      times,
+      may: true,
+      because: 'the backend was busy',
+    })
+
+    test('are excused where they are foreseen as a script’s, no oftener than was foreseen, and how often is told', () => {
+      const { during, heldToAccount } = site.expectations()
+      const one = browser()
+      const over = during(one, [busy(2)])
+      one.problems.push(written(timedOut), written(timedOut), written(timedOut))
+      over()
+      expect(heldToAccount([one]).own).toEqual([`browser 1 had a script write or throw: ${timedOut} (asked of ${SITE})`])
+      expect(over.times()).toEqual([{ because: 'the backend was busy', said: 2 }])
+    })
+
+    // Each of these is said while most of what was foreseen is still unsaid, so that it is
+    // not for want of allowance that it is an error of the browser's own
+    test.each([
+      ['the browser saying the same words by itself', () => says(timedOut, { of: SITE }), 'said'],
+      ['other words of a script’s', () => written(timedOut.replace('notifications:list', 'pages:list')), 'had a script write or throw'],
+      ['the same words about another address', () => written(timedOut, { of: 'http://localhost:20001/app.js' }), 'had a script write or throw'],
+      ['the same words before they were foreseen', () => written(timedOut, { at: Date.now() - 60_000 }), 'had a script write or throw'],
+      ['the same words long after the stretch was over', () => written(timedOut, { at: Date.now() + 3001 }), 'had a script write or throw'],
+      ['the same words in another browser', () => written(timedOut), 'had a script write or throw', 2],
+    ])('do not excuse %s', (_what, problem, how, inBrowser = 1) => {
+      const { during, heldToAccount } = site.expectations()
+      const [one, two] = [browser(), browser()]
+      const over = during(one, [busy(5)])
+      one.problems.push(written(timedOut))
+      const other = problem()
+      ;[one, two][inBrowser - 1].problems.push(other)
+      over()
+      expect(heldToAccount([one, two]).own).toEqual([`browser ${inBrowser} ${how}: ${other.says} (asked of ${other.of})`])
+      expect(over.times()).toEqual([{ because: 'the backend was busy', said: 1 }])
+    })
+  })
+
   test('what was foreseen for sure and never said is told of by what was to provoke it, and what a browser only may say is not', () => {
     const { foresee, heldToAccount } = site.expectations()
     const one = browser()

@@ -48,7 +48,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterTool, newestUser, standInModel, textOf } from './opencode/model.mjs'
-import { homeOnWindows, nodeAlone, processesIn, runRoot, systemPath, windows } from './windows.mjs'
+import { homeOnWindows, nodeAlone, patience, processesIn, runRoot, systemPath, windows } from './windows.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const argv = process.argv.slice(2)
@@ -509,12 +509,15 @@ try {
   check(`the add-on in place names its build (${build})`, build && build !== 'IT_ADDON_BUILD')
 
   start('it', IT_COMMAND[0], [...IT_COMMAND.slice(1), 'serve'])
+  // Each look is an `it status`, which on GitHub's Windows runner can take half a minute alone,
+  // so It was seen there to take up to 207 seconds to show its connector working while it was
+  // in fact starting as it should. The wait is the patience the other apps' checks give it.
   const up = await until(
     async () => {
       const { status } = await statusOfOpenCode()
       return status?.running && status?.connector?.ok && status
     },
-    180_000,
+    patience(180_000),
     1000,
   )
   check('It is running with its connector', up, running.get('it')?.said().slice(-1500))
