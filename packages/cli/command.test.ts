@@ -8446,6 +8446,41 @@ describe('whether what the person does arrives by itself, as a page’s command 
     }
   })
 
+  test('a page made or updated in a thread of T3 Code passes on to the connector the thread its environment names, for Claude Code and Codex alone, and only what can be a thread’s id', async () => {
+    const m = machine()
+    b = await publishing(m)
+    const c = await connectorSaying(m, { connected: true, listening: false, runtime: 'inactive', thread: 'held' })
+    try {
+      const thread = 'mcp:dacf5dbc-8f4f-45ce-a3f7-ce0a5ec5538f'
+      await run(m, ['create', 'Plan', '--id', 'plan', '--html', '<p>hi</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude, T3CODE_THREAD_ID: thread })
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, CODEX_THREAD_ID: 'codex-1', T3CODE_THREAD_ID: thread })
+      // T3 Code names a delegated thread with a longer id, which is passed on whole
+      const delegated = 'thread:delegated-task:command%3Amcp%3Aafd77451%3Adelegate-task%3Ae82ef3c6'
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude, T3CODE_THREAD_ID: delegated })
+      expect(c.asked).toEqual([
+        `/route?harness=claude-code&session=${claude}&thread=${encodeURIComponent(thread)}`,
+        `/route?harness=codex&session=codex-1&thread=${encodeURIComponent(thread)}`,
+        `/route?harness=claude-code&session=${claude}&thread=${encodeURIComponent(delegated)}`,
+      ])
+      c.asked.length = 0
+      // A value that cannot be a thread's id is no claim, nor is one in an app that T3 Code does not run through It, nor one where no conversation is named
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude, T3CODE_THREAD_ID: 'two words' })
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude, T3CODE_THREAD_ID: 'x'.repeat(1001) })
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, CLAUDE_CODE_SESSION_ID: claude, T3CODE_THREAD_ID: '' })
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, PI_SESSION_ID: 'pi-1', IT_PI_SESSION: 'pi-1', T3CODE_THREAD_ID: thread })
+      await run(m, ['update', 'plan', '--html', '<p>again</p>'], { ...b.env, T3CODE_THREAD_ID: thread })
+      expect(c.asked).toEqual([
+        `/route?harness=claude-code&session=${claude}`,
+        `/route?harness=claude-code&session=${claude}`,
+        `/route?harness=claude-code&session=${claude}`,
+        '/route?harness=pi&session=pi-1',
+      ])
+    } finally {
+      await c.close()
+      await b.close()
+    }
+  })
+
   test('the tour’s first page, shown from such a conversation, is put up as one that cannot be heard yet, and its agent is told to give the line to type and end its turn, and not to wait', async () => {
     const m = machine()
     // The page that was begun last is the one that is finished

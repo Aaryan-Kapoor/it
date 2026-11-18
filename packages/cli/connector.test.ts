@@ -109,6 +109,12 @@ const stand = vi.hoisted(() => ({
     runsUnknown: false,
     /** Where it is set, whether a thread runs a conversation now is answered only once it has settled. */
     runsAfter: null as Promise<void> | null,
+    /** Every time one thread was read for whether it runs a conversation now, as a command's environment named it (`t3RunsIn`). */
+    claimsAsked: [] as { thread: string; harness: string; ids: string[] }[],
+    /** Whether the thread a command named cannot be read, as where T3 Code does not answer for it. */
+    claimsUnread: false,
+    /** Where it is set, the thread a command named is answered for only once it has settled. */
+    claimAfter: null as Promise<void> | null,
   },
 }))
 // T3 Code is asked over its own server and its own command (t3.test.ts tries what is read from
@@ -142,6 +148,13 @@ vi.mock('./src/t3', async (original) => ({
     if (stand.t3.runsUnknown) return { status: 'unknown' }
     const thread = of.ids.map((id) => stand.t3.threads.get(id)).find((t) => t !== undefined)
     return thread ? { status: 'found', thread } : { status: 'none' }
+  },
+  // Whether that one thread runs the conversation now: where the test says T3 Code holds the conversation in it
+  t3RunsIn: async (_t3: unknown, thread: string, of: { harness: string; ids: readonly string[] }) => {
+    stand.t3.claimsAsked.push({ thread, harness: of.harness, ids: [...of.ids] })
+    await stand.t3.claimAfter
+    if (stand.t3.claimsUnread) return false
+    return of.ids.some((id) => stand.t3.threads.get(id) === thread)
   },
   t3Running: async (_t3: unknown, of: { harness: string; ids: readonly string[] }, known?: string) => {
     stand.t3.looked.push({ harness: of.harness, ids: [...of.ids], ...(known === undefined ? {} : { known }) })
@@ -504,7 +517,17 @@ afterEach(async () => {
   stand.restartWay = undefined
   // A lookup a test left unanswered is answered, so that nothing of it outlasts the test
   for (const asked of stand.t3.asked) asked.answer(null)
-  Object.assign(stand.t3, { running: false, slow: false, refusing: null, refusal: null, runsUnknown: false, runsAfter: null })
+  Object.assign(stand.t3, {
+    running: false,
+    slow: false,
+    refusing: null,
+    refusal: null,
+    runsUnknown: false,
+    runsAfter: null,
+    claimsUnread: false,
+    claimAfter: null,
+  })
+  stand.t3.claimsAsked.length = 0
   stand.t3.threads.clear()
   stand.t3.asked.length = 0
   stand.t3.sent.length = 0
@@ -8393,6 +8416,120 @@ describe('how what is done on a conversation’s pages would reach it, as the co
     },
     40_000,
   )
+
+  describe('the thread of T3 Code that a command says it runs in', () => {
+    const asked = (harness: string, session: string, thread: string) =>
+      local<Route>(`/route?harness=${harness}&session=${session}&thread=${encodeURIComponent(thread)}`, { timeoutMs: 6000 })
+    const claudeConnected = { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] }
+    const noted = () => (existsSync(path.join(home, 't3-threads.json')) ? JSON.parse(readFileSync(path.join(home, 't3-threads.json'), 'utf8')) : {})
+    const other = '22222222-2222-4333-8444-555555555555'
+
+    test('is read, and noted where T3 Code says it runs the conversation, even where the running threads could not all be read', async () => {
+      stand.t3.running = true
+      stand.t3.threads.set(claude, 't3-thread-a')
+      // More threads are running than are read, so that the running threads alone would not tell
+      stand.t3.runsUnknown = true
+      await start('socket', claudeConnected)
+      expect(await asked('claude-code', claude, 't3-thread-a')).toMatchObject({ thread: 'held' })
+      expect(stand.t3.claimsAsked).toEqual([{ thread: 't3-thread-a', harness: 'claude-code', ids: [claude] }])
+      await until(() => existsSync(path.join(home, 't3-threads.json')))
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+      // Noted, the conversation's clicks go to that thread while T3 Code is closed: they wait for it, and its conversation is not reopened
+      stand.t3.running = false
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      offered({ ...click(1), session: { harness: 'claude-code', id: claude } })
+      await new Promise((r) => setTimeout(r, 3000))
+      expect(stand.calls.filter((c) => c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan')).toEqual([])
+      stand.t3.running = true
+      await until(() => stand.t3.sent.some((m) => m.text.includes('click-1')), 10_000)
+      expect(stand.t3.sent.every((m) => m.thread === 't3-thread-a')).toBe(true)
+    }, 30_000)
+
+    test('that runs another conversation is noted for neither, sends neither conversation’s clicks to it, and leaves a conversation no thread holds to be reopened', async () => {
+      stand.t3.running = true
+      // The thread named holds another conversation, and none holds this one
+      stand.t3.threads.set(other, 't3-thread-b')
+      await start('socket', claudeConnected)
+      expect(await asked('claude-code', claude, 't3-thread-b')).toMatchObject({ thread: 'none' })
+      expect(stand.t3.claimsAsked).toEqual([{ thread: 't3-thread-b', harness: 'claude-code', ids: [claude] }])
+      // The running threads are read as they are without a claim, and say what they say
+      expect(stand.t3.runsAsked).toEqual([[claude]])
+      expect(existsSync(path.join(home, 't3-threads.json'))).toBe(false)
+      expect(said.some((line) => line.includes('t3_claim_unborne'))).toBe(true)
+      // A click for this conversation is not put to the thread that was named, and once T3 Code is closed it is reopened, as without the claim
+      stand.watching.get('machines:me')!({ wanted: ['claude-code'], wakes: [{ harness: 'claude-code', since: Date.now() - 60_000 }] })
+      stand.t3.running = false
+      offered({ ...click(1), session: { harness: 'claude-code', id: claude } })
+      await until(
+        () => stand.calls.some((c) => (c.name === 'machines:wakeFailed' || c.name === 'machines:runBegan') && (c.args.for as { id?: string })?.id === claude),
+        15_000,
+      )
+      expect(stand.t3.sent).toEqual([])
+      // And the other conversation's click still goes where T3 Code says, to its own thread
+      stand.t3.running = true
+      offered({ ...click(2), session: { harness: 'claude-code', id: other } })
+      await until(() => stand.t3.sent.some((m) => m.text.includes('click-2')), 10_000)
+      expect(stand.t3.sent).toEqual([expect.objectContaining({ thread: 't3-thread-b' })])
+    }, 40_000)
+
+    test('that cannot be read, or that names nothing T3 Code has, counts for nothing, and the running threads say', async () => {
+      stand.t3.running = true
+      stand.t3.claimsUnread = true
+      stand.t3.threads.set(claude, 't3-thread-a')
+      await start('socket', claudeConnected)
+      // The thread named is the right one, but T3 Code cannot be asked about it: the running threads find it all the same
+      expect(await asked('claude-code', claude, 't3-thread-a')).toMatchObject({ thread: 'held' })
+      expect(stand.t3.runsAsked).toEqual([[claude]])
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+      // A thread T3 Code does not have, for a conversation the running threads cannot tell of, is said to be unknown, and nothing is noted
+      stand.t3.claimsUnread = false
+      stand.t3.runsUnknown = true
+      expect(await asked('claude-code', other, 'no-such-thread')).toMatchObject({ thread: 'unknown' })
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+    })
+
+    test('that T3 Code is slow to answer for takes none of the time the running threads are given', async () => {
+      stand.t3.running = true
+      stand.t3.threads.set(claude, 't3-thread-a')
+      let answer = () => {}
+      stand.t3.claimAfter = new Promise<void>((resolve) => {
+        answer = resolve
+      })
+      await start('socket', claudeConnected)
+      const asking = asked('claude-code', claude, 'a-stale-thread')
+      // The running threads are read while the thread named has still to be answered for
+      await until(() => stand.t3.runsAsked.length === 1)
+      answer()
+      expect(await asking).toMatchObject({ thread: 'held' })
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+    })
+
+    test('is not read where T3 Code is not running, and nothing is noted', async () => {
+      stand.t3.threads.set(claude, 't3-thread-a')
+      await start('socket', claudeConnected)
+      expect(await asked('claude-code', claude, 't3-thread-a')).toMatchObject({ thread: 'none' })
+      expect(stand.t3.claimsAsked).toEqual([])
+      expect(stand.t3.runsAsked).toEqual([])
+      expect(existsSync(path.join(home, 't3-threads.json'))).toBe(false)
+    })
+
+    test('changes nothing of a conversation already noted, and is not read for an app T3 Code is not asked of, or where it can be no thread’s id', async () => {
+      stand.t3.running = true
+      stand.t3.threads.set(claude, 't3-thread-b')
+      await start('socket', claudeConnected, (home) =>
+        writeFileSync(path.join(home, 't3-threads.json'), JSON.stringify({ [`claude-code:${claude}`]: 't3-thread-a' })),
+      )
+      // Already noted under another thread: held, as noted, and the thread named is not read
+      expect(await asked('claude-code', claude, 't3-thread-b')).toMatchObject({ thread: 'held' })
+      expect(await asked('pi', 'pi-1', 't3-thread-b')).toMatchObject({ thread: 'none' })
+      expect(stand.t3.claimsAsked).toEqual([])
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+      // A value with a space or a line in it, or one too long to be an id, is no claim: the running threads alone are read
+      for (const thread of ['two words', 'a\nline', 'x'.repeat(1001)]) expect(await asked('claude-code', other, thread)).toMatchObject({ thread: 'none' })
+      expect(stand.t3.claimsAsked).toEqual([])
+      expect(stand.t3.runsAsked).toEqual([[other], [other], [other]])
+    })
+  })
 
   test('where T3 Code is not running, a conversation is held in no thread and nothing is asked', async () => {
     await start('socket', { wanted: ['claude-code'], found: [...CONNECTED, { id: 'claude-code', version: '2.1.300', addon: 'connected' }] })
