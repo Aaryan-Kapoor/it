@@ -8488,7 +8488,7 @@ describe('how what is done on a conversation’s pages would reach it, as the co
       expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
     })
 
-    test('that T3 Code is slow to answer for takes none of the time the running threads are given', async () => {
+    test('that T3 Code is slow to answer for takes none of the time the running threads are given, nor holds up what they find', async () => {
       stand.t3.running = true
       stand.t3.threads.set(claude, 't3-thread-a')
       let answer = () => {}
@@ -8496,12 +8496,32 @@ describe('how what is done on a conversation’s pages would reach it, as the co
         answer = resolve
       })
       await start('socket', claudeConnected)
-      const asking = asked('claude-code', claude, 'a-stale-thread')
-      // The running threads are read while the thread named has still to be answered for
+      // The running threads are read while the thread named has still to be answered for, and their answer is not held up by it
+      expect(await asked('claude-code', claude, 'a-stale-thread')).toMatchObject({ thread: 'held' })
+      expect(stand.t3.runsAsked).toEqual([[claude]])
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+      answer()
+      // Answered at last, and not borne out, it changes nothing
+      await until(() => said.some((line) => line.includes('t3_claim_unborne')))
+      expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+    })
+
+    test('borne out after the running threads found none, is still the answer', async () => {
+      stand.t3.running = true
+      stand.t3.threads.set(claude, 't3-thread-a')
+      stand.t3.runsUnknown = true
+      let answer = () => {}
+      stand.t3.claimAfter = new Promise<void>((resolve) => {
+        answer = resolve
+      })
+      await start('socket', claudeConnected)
+      const asking = asked('claude-code', claude, 't3-thread-a')
       await until(() => stand.t3.runsAsked.length === 1)
+      await new Promise((r) => setTimeout(r, 300))
       answer()
       expect(await asking).toMatchObject({ thread: 'held' })
       expect(noted()).toEqual({ [`claude-code:${claude}`]: 't3-thread-a' })
+      expect(said.some((line) => line.includes('t3_claim_borne'))).toBe(true)
     })
 
     test('is not read where T3 Code is not running, and nothing is noted', async () => {

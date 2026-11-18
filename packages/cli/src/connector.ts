@@ -1715,17 +1715,42 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     const of = { harness, ids, cwd: conversationFolder({ harness, id }) }
     // The thread the command says it runs in is read beside the running threads, each in eight seconds of its own, so that a
     // claim that is slow to be answered, or is not borne out, leaves the running threads all the time they have without one.
-    // Borne out, it is the answer, and the reading of the running threads is let go
+    // Whichever finds the thread first is the answer: a claim borne out lets go of the reading of the running threads, and
+    // running threads that find it do not wait for the claim. Only where they find none is the claim waited for
     const enough = new AbortController()
     const running = t3RunsNow(server, of, AbortSignal.any([AbortSignal.timeout(ROUTE_T3_MS), enough.signal])).catch((): T3Now => ({ status: 'unknown' }))
-    const borne = claimed !== undefined && (await t3RunsIn(server, claimed, of, AbortSignal.timeout(ROUTE_T3_MS)).catch(() => false))
-    if (claimed !== undefined && !borne)
-      seldom(
-        't3-claim',
-        'a command named a thread of T3 Code that T3 Code does not show running its conversation, or could not be asked about, so the thread it named counts for nothing (t3_claim_unborne)',
-      )
-    if (borne) enough.abort()
-    const runs: T3Now = borne && claimed !== undefined ? { status: 'found', thread: claimed } : await running
+    const borne =
+      claimed === undefined
+        ? Promise.resolve(false)
+        : t3RunsIn(server, claimed, of, AbortSignal.timeout(ROUTE_T3_MS))
+            .catch(() => false)
+            .then((yes) => {
+              if (yes) say(`a command named the thread of T3 Code that runs its conversation, and T3 Code bore that out (t3_claim_borne)`)
+              else
+                seldom(
+                  't3-claim',
+                  'a command named a thread of T3 Code that T3 Code does not show running its conversation, or could not be asked about, so the thread it named counts for nothing (t3_claim_unborne)',
+                )
+              return yes
+            })
+    const runs = await new Promise<T3Now>((resolve) => {
+      let claim: boolean | undefined
+      let read: T3Now | undefined
+      const settle = () => {
+        if (claim === true && claimed !== undefined) {
+          enough.abort()
+          resolve({ status: 'found', thread: claimed })
+        } else if (read?.status === 'found' || (read !== undefined && claim !== undefined)) resolve(read)
+      }
+      void borne.then((yes) => {
+        claim = yes
+        settle()
+      })
+      void running.then((answer) => {
+        read = answer
+        settle()
+      })
+    })
     if (runs.status !== 'found') return { ...answer, thread: runs.status === 'none' ? 'none' : 'unknown' }
     if (notedThread(key) === undefined) say(`${a(harness)} conversation (${short(id)}) is held in a thread of T3 Code`)
     // A search for its thread that a click began is over, whether one is under way or only what
