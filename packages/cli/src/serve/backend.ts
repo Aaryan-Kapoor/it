@@ -832,9 +832,8 @@ export function listedByWindows(
 ): string[] {
   for (let tries = 1; ; tries++) {
     // The first asking has its minute whatever was lost before it, and one asked again has what is
-    // left: in whole milliseconds, which is all a child's limit may be given in, and never less
-    // than the least a try is begun with, should the pause have run on past its time
-    const limit = tries === 1 ? LIST_EACH_MS : Math.max(LIST_LEAST_MS, Math.min(LIST_EACH_MS, Math.floor(LIST_MS - budget.lost)))
+    // left, in whole milliseconds, which is all a child's limit may be given in
+    const limit = tries === 1 ? LIST_EACH_MS : Math.min(LIST_EACH_MS, Math.floor(LIST_MS - budget.lost))
     const began = clock()
     const ran = unlessCutShort(
       () => run(limit),
@@ -850,19 +849,22 @@ export function listedByWindows(
     }
     budget.lost += clock() - began
     const why = notListed(ran)
-    if (tries >= LIST_TRIES || LIST_MS - budget.lost - LIST_PAUSE_MS < LIST_LEAST_MS) {
+    const refused = () => {
       const made = `${tries} ${tries === 1 ? 'try' : 'tries'}`
       say?.(`backend: the list of what runs on this machine could not be had (${why}, ${made}), and no backend program is started`)
-      throw new Problem(
+      return new Problem(
         `It could not look through the programs running on this machine for a backend program left on its folder (${why}, after ${made}), so it starts none.`,
         'cannot_list_processes',
         'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run. Where Windows was only slow or busy for a moment, as it can be on a laptop that is on battery or has just woken, run the same command again.',
       )
     }
-    say?.(`backend: the list of what runs on this machine could not be had (${why}, try ${tries} of ${LIST_TRIES}), and is asked for again`)
+    if (tries >= LIST_TRIES || LIST_MS - budget.lost - LIST_PAUSE_MS < LIST_LEAST_MS) throw refused()
     const paused = clock()
     pause(LIST_PAUSE_MS)
     budget.lost += clock() - paused
+    // The pause may have run on past its time, as on a machine that slept through it, and left too little
+    if (LIST_MS - budget.lost < LIST_LEAST_MS) throw refused()
+    say?.(`backend: the list of what runs on this machine could not be had (${why}, try ${tries} of ${LIST_TRIES}), and is asked for again`)
   }
 }
 

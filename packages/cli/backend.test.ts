@@ -3841,10 +3841,11 @@ describe('how long Windows is given to list what runs', () => {
    * with code 5 in two, `missing` is not there to be started, `timeout` runs out its whole
    * limit, and `early` is ended by its limit a second before its time, as the runtime's fault on
    * Windows ends a child. With `odd`, every run and every pause takes that much longer, which
-   * is a part of a millisecond, as time by a real clock is never whole. What it gives back is
-   * what came of it, the limit each run was given, and how long it all took.
+   * is a part of a millisecond, as time by a real clock is never whole, and with `late` every
+   * pause runs on that much past its time. What it gives back is what came of it, the limit
+   * each run was given, and how long it all took.
    */
-  const asked = (outcomes: string[], budget = listingBudget(), odd = 0) => {
+  const asked = (outcomes: string[], budget = listingBudget(), odd = 0, late = 0) => {
     let now = 0
     const limits: number[] = []
     let next = 0
@@ -3875,7 +3876,7 @@ describe('how long Windows is given to list what runs', () => {
         run,
         () => now,
         (ms) => {
-          now += ms + odd
+          now += ms + odd + late
         },
       )
     } catch (err) {
@@ -3909,7 +3910,7 @@ describe('how long Windows is given to list what runs', () => {
     })
   })
 
-  test('the limit a try that is asked again is given is one a child is really started with: PowerShell is asked three times, by the program’s own asking and the clock’s own time, after a minute lost to an earlier list', () => {
+  test('the limit a try that is asked again is given is one a child is really started with: PowerShell is asked again, by the program’s own asking and the clock’s own time, after a minute lost to an earlier list', () => {
     const commands = mkdtempSync(path.join(os.tmpdir(), 'it-powershell-'))
     const before = process.env.PATH
     try {
@@ -3929,12 +3930,11 @@ describe('how long Windows is given to list what runs', () => {
           undefined,
           () => {},
         ),
-      ).toThrow('(exit_5, after 3 tries)')
-      expect(said).toEqual([
-        'backend: the list of what runs on this machine could not be had (exit_5, try 1 of 3), and is asked for again',
-        'backend: the list of what runs on this machine could not be had (exit_5, try 2 of 3), and is asked for again',
-        'backend: the list of what runs on this machine could not be had (exit_5, 3 tries), and no backend program is started',
-      ])
+      ).toThrow(/\(exit_5, after [23] tries\)/)
+      // Three tries where PowerShell starts as it does, and two on a machine so slow that the first two took most of the minute that was left
+      expect(said[0]).toBe('backend: the list of what runs on this machine could not be had (exit_5, try 1 of 3), and is asked for again')
+      expect(said.at(-1)).toMatch(/^backend: the list of what runs on this machine could not be had \(exit_5, [23] tries\), and no backend program is started$/)
+      expect(said.length).toBeLessThan(4)
       // What the three runs took is lost with the minute
       expect(budget.lost).toBeGreaterThan(61_000.3)
     } finally {
@@ -3949,6 +3949,13 @@ describe('how long Windows is given to list what runs', () => {
     expect(asked(['early', 'timeout'])).toEqual({ came: 'timed_out, after 1 try', limits: [60_000, 60_000], took: 119_000 })
     // Ended a second early where a second run of a whole minute would go past the two minutes: not run again, and the next try is given what is left
     expect(asked(['exit', 'early', 'timeout'])).toEqual({ came: 'timed_out, after 3 tries', limits: [60_000, 60_000, 56_000], took: 120_000 })
+  })
+
+  test('a pause that runs on past its time, and leaves less than ten seconds of the two minutes, is not followed by another try', () => {
+    // Ten and a half seconds are left after the try that failed, which is enough to ask again once the pause is over
+    expect(asked(['exit', 'whole'], { lost: 106_000 })).toEqual({ came: 'listed', limits: [60_000, 10_500], took: 6500 })
+    // The pause takes a second longer than it was to, and nine and a half are left: the list is not asked for again
+    expect(asked(['exit', 'whole'], { lost: 106_000 }, 0, 1000)).toEqual({ came: 'exit_5, after 1 try', limits: [60_000], took: 4500 })
   })
 
   test('lists that come cost nothing, however slowly and however many of them one start asks for', () => {
