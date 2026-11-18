@@ -2768,7 +2768,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           if (now === null || still.told !== SINCE_TOLD || now.get(still.pid) === still.since) continue
         }
         const told = (said: { stopped?: boolean } | null) => {
-          if (pendingEnds.get(key) === ended || pendingEnds.get(key)?.run === ended.run) pendingEnds.delete(key)
+          if (pendingEnds.get(key) === ended || (ended.run !== undefined && pendingEnds.get(key)?.run === ended.run)) pendingEnds.delete(key)
           // A person stopped it just before It was told it was over, and the word of that went
           // with it: its conversation is told it was stopped, as it would have been on hearing it
           if (said?.stopped && !reopenedNow.has(key)) {
