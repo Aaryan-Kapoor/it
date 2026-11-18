@@ -2845,8 +2845,8 @@ async function settingUp(a: Args, joined: boolean) {
     if (!a.flags.none || begun?.enrolled || joined) {
       const add = await pathLine()
       if (add) say(`\n\`it\` is not on your PATH yet, so an agent that runs it by name will not find it. ${add}`)
-      // Run from here only for as long as setup took, It stops with it
-      if (begun?.own)
+      // Run from here only for as long as setup took, It stops with it. An agent that led a setup macOS refused the service of has been told what to do in its place
+      if (begun?.own && !(refused && sessionAsked()))
         say(`\nIt is not running in the background. Run \`${itForAgent()} serve\`, in a terminal or under a supervisor of your own, to keep it going.`)
       // On a machine that has just joined, nothing of It runs until its service does, which here is what gets a click to an agent
       if (joined && !inBackground)

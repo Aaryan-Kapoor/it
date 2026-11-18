@@ -9,12 +9,14 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PORTS, TAKES } from '@it/protocol'
 import { ConvexHttpClient } from 'convex/browser'
 import { makeFunctionReference } from 'convex/server'
 import { build } from 'esbuild'
 import { zipSync } from 'fflate'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
+import { refusedForAgent, tellWordForWord } from './src/arrives'
 import { FUNCTIONS_HASH, functions } from './src/functions.generated'
 import { ask, backendAt, Problem, VERSION } from './src/lib'
 import { asAdmin, endOf, fetchProgram, type Running, startBackend } from './src/serve/backend'
@@ -1619,6 +1621,64 @@ describe.skipIf(!program || process.platform === 'win32')('the service, run as t
     expect(after.name).toBe(before.name)
     expect(after.key.d).not.toBe(before.key.d)
   }, 120_000)
+
+  // On a Mac the program is run as it is. On Linux it is told that it is on a Mac before anything of it runs, which Node can be told and Bun cannot
+  test.skipIf(process.platform !== 'darwin' && 'Bun' in globalThis)(
+    'a first `it setup` on a Mac whose launchd has the service switched off sets It up all the same, and never tells an agent that led it to run `it serve`',
+    async () => {
+      // What stands in for launchd holds no agent, has It's label switched off, and so refuses the definition, in the words macOS 15.7 and 26.7 use
+      const commands = mkdtempSync(path.join(scratch, 'launchd-'))
+      symlinkSync(process.execPath, path.join(commands, 'node'))
+      const uid = process.getuid?.() ?? 501
+      writeFileSync(
+        path.join(commands, 'launchctl'),
+        `#!/bin/sh
+case "$1" in
+  print) echo 'Bad request.'; echo 'Could not find service "dev.it" in domain for user gui: ${uid}'; exit 113 ;;
+  print-disabled) printf '\\n\\tdisabled services = {\\n\\t\\t"dev.it" => disabled\\n\\t}\\n' ;;
+  bootout) echo 'Boot-out failed: 3: No such process'; exit 3 ;;
+  bootstrap) echo 'Bootstrap failed: 5: Input/output error'; echo 'Try re-running the command as root for richer errors.'; exit 5 ;;
+esac
+`,
+        { mode: 0o755 },
+      )
+      const asMac: Record<string, string> = {}
+      if (process.platform !== 'darwin') {
+        const prelude = path.join(commands, 'as-a-mac.mjs')
+        writeFileSync(prelude, "Object.defineProperty(process, 'platform', { value: 'darwin' })\n")
+        asMac.NODE_OPTIONS = `--import=${pathToFileURL(prelude).href}`
+      }
+      const SWITCHED_OFF = `It could not be registered as a background service: macOS has It’s background service switched off for your account, so launchd would not load it. Turn it on again in System Settings, under General and then Login Items, or with \`launchctl enable gui/${uid}/dev.it\`, and run \`it setup\` again. If another tool manages what starts on this Mac, It has to be allowed there.`
+      const ran = run(['setup', '--yes'], { PATH: commands, IT_HARNESS: 'pi', IT_SESSION: 'a-conversation', ...asMac })
+      expect(await ran.ended).toBe(1)
+      // Everything but the service is done: the machine is enrolled, and the backend was run for as long as setup took
+      expect(ran.err()).toContain(`This machine is enrolled as "${os.hostname()}".`)
+      expect(ran.err().split('\n')).toEqual(
+        expect.arrayContaining([SWITCHED_OFF, 'Until It runs on this machine, nothing done on a page reaches an agent here.', refusedForAgent()]),
+      )
+      // Neither sentence that sends whoever led setup to `it serve` is said to an agent here
+      expect(ran.err()).not.toMatch(/Run `it serve`/)
+      expect(JSON.parse(ran.out())).toMatchObject({ service: { registered: false }, problem: SWITCHED_OFF, tell: tellWordForWord(SWITCHED_OFF) })
+      expect(await health()).toBe(false)
+      // The definition is kept for the person to turn on, and is no registration
+      const status = run(['service', 'status'], { PATH: commands, ...asMac })
+      expect(await well(status)).toBe(0)
+      expect(JSON.parse(status.out())).toMatchObject({ registered: false, state: 'disabled', where: path.join(folder, 'Library/LaunchAgents/dev.it.plist') })
+      expect(existsSync(path.join(folder, 'Library/LaunchAgents/dev.it.plist'))).toBe(true)
+      // A setup no agent led is told, as before, that `it serve` keeps It going meanwhile
+      const again = run(['setup', '--yes'], { PATH: commands, ...asMac })
+      expect(await again.ended).toBe(1)
+      expect(again.err().split('\n')).toEqual(
+        expect.arrayContaining([
+          SWITCHED_OFF,
+          'Until It runs on this machine, nothing done on a page reaches an agent here. Run `it serve` yourself to keep it going.',
+          'It is not running in the background. Run `it serve`, in a terminal or under a supervisor of your own, to keep it going.',
+        ]),
+      )
+      expect(again.err()).not.toContain('For the agent that ran this: only the person')
+    },
+    120_000,
+  )
 
   test('the first `it setup` registers It as a background service, waits for it, enrols this machine, and finds its connector answering', async () => {
     // What stands in for the system's own way to keep a program running: asked to start the
