@@ -3493,8 +3493,7 @@ describe('what a person is told about an app', () => {
       // The command stands on a line of its own, so that no terminal breaks it in the middle of a word
       expect(AFTER.hermes!.split('\n')).toContain('    hermes config set plugins.entries.it-bridge.allow_gateway_injection true')
       expect(AFTER.hermes).toContain('If this Hermes (0.22.0) does not take that setting, what you do waits on the page until the agent runs `it wait`')
-      // Before 0.23.1 Hermes says nothing when a saved conversation is opened again, in its terminal or its TUI
-      expect(AFTER.hermes!.split('\n')).toContain('A saved conversation you open again starts listening once you send a message in it.')
+      expect(AFTER.hermes!.split('\n')).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
     } finally {
       VERSIONS.hermes = 'Hermes Agent v0.21.5'
     }
@@ -3526,9 +3525,14 @@ describe('what a person is told about an app', () => {
         `If this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`,
       ])
     }
-    // An earlier one that takes the setting says nothing when a saved conversation is opened again, in its terminal or its TUI
-    for (const version of ['0.21.6', '0.22.6', '0.23.0'])
+    // From 0.22.3 to 0.23.0 Hermes's gateway holds the TUI's conversations and says nothing when one is opened again
+    for (const version of ['0.22.3', '0.22.7', '0.23.0'])
       expect(afterHermes(version).split('\n')).toContain('A saved conversation you open again starts listening once you send a message in it.')
+    // Before that the TUI says when a conversation is opened, and only the plain terminal does not
+    for (const version of ['0.21.6', '0.22.0', '0.22.2']) {
+      expect(afterHermes(version).split('\n')).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
+      expect(afterHermes(version)).not.toContain('you open again')
+    }
   })
 
   test('after connecting OpenCode says that a saved conversation listens once a message is sent in it', () => {
