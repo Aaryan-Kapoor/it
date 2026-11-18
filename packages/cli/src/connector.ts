@@ -609,19 +609,23 @@ const lockLost = () => new Problem('Another connector has taken this folder’s 
  * it so gives up and says that one is already running. And the lock is looked at again before
  * anything is done as the folder's connector that another could not undo: before it listens,
  * and before it writes down where it listens.
+ *
+ * It runs until it is asked to stop or stops by itself, and says whether it stopped because
+ * this machine is not one of It's machines any more: it was revoked on the site, or everything
+ * It held was erased. A service that is the connector alone has nothing left to run then.
  */
 export async function runConnector(
   say: (line: string) => void,
   /** How long after it begins to listen it reopens nothing: `ADDONS_HEARD_MS`, which only a test that is about something else shortens. */
   addonsHeardMs = ADDONS_HEARD_MS,
-): Promise<void> {
+): Promise<boolean> {
   const other = await alreadyRunning()
   if (other) throw alreadyThere(other)
   const left = lockHolder()
   let mine = false
   const discovery = new ClaudeDiscovery()
   try {
-    await alone(
+    return await alone(
       'connector',
       () => {
         mine = true
@@ -739,7 +743,7 @@ const FITS_EVERY_MS = 60_000
 const REFUSED_EVERY_MS = 5_000
 
 /** Everything the connector does once the folder's lock is its own. */
-async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery, addonsHeardMs: number): Promise<void> {
+async function connecting(say: (line: string) => void, discovery: ClaudeDiscovery, addonsHeardMs: number): Promise<boolean> {
   // Something that goes wrong again and again (the backend cannot be reached, say) is said once
   // every ten minutes for each thing it is about, however many other lines come in between
   const saidAt = new Map<string, number>()
@@ -5708,6 +5712,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
   await recovery.close()
   say('stopped')
   process.exitCode = code
+  return notOurs
 }
 
 /** The code that proves a message came from someone who knows the token, without the token being sent. */

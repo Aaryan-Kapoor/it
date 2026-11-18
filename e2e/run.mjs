@@ -7439,6 +7439,21 @@ addEventListener('message', (e) => { window.got = { data: e.data, origin: e.orig
       )),
     said.slice(-800),
   )
+  // The connector is all a joined machine's service runs, so with it stopped for that reason the
+  // service has nothing left to run: its program ends by itself, with nobody asking, and ends
+  // well, which is what leaves it stopped under whatever keeps the service running (#426)
+  check(
+    'and the service of the revoked machine, which was the connector alone, then ended by itself and ended well',
+    // What it said last may arrive a moment after it has ended
+    Boolean(
+      await until(
+        () => (connectorAtTheEnd.exitCode !== null || connectorAtTheEnd.signalCode !== null) && /Z service stopped\n/.test(connectorAtTheEnd.log),
+        20_000,
+        250,
+      ),
+    ) && connectorAtTheEnd.exitCode === 0,
+    `ended with ${connectorAtTheEnd.exitCode ?? connectorAtTheEnd.signalCode ?? 'nothing: it is still running'}; it last said: ${connectorAtTheEnd.log.slice(-200)}`,
+  )
   const journal = (existsSync(path.join(C, 'journal.jsonl')) ? readFileSync(path.join(C, 'journal.jsonl'), 'utf8') : '')
     .split('\n')
     .filter(Boolean)
