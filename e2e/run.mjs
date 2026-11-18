@@ -2427,10 +2427,19 @@ try {
   await pageIn(closing.page, { id: slug })
   const beforeClosing = new Set((await it(A, ['actions', '--id', slug])).map((x) => x.id))
   await closing.page.locator('.page-title').click()
+  const siteClickedAt = Date.now()
   await closing.page.frameLocator('.mount iframe').locator('#approve').click()
-  const heldThere = await until(() => closing.page.evaluate(() => Object.keys(localStorage).some((name) => name.startsWith('it.outbox.'))), 4000, 50)
-  // Closed well inside the hold, which ends five seconds after the click on the site
-  await closing.page.waitForTimeout(1500)
+  // Kept in the browser, still marked as the page's own because it is still being judged, and
+  // given the deadline it is to be sent under: then the tab is closed, inside the hold, which
+  // ends five seconds after the click on the site
+  const keptToGo = () =>
+    closing.page.evaluate(() =>
+      Object.keys(localStorage)
+        .filter((name) => name.startsWith('it.outbox.'))
+        .map((name) => JSON.parse(localStorage.getItem(name)))
+        .some((kept) => kept.envelope?.attended === false && typeof kept.replayUntil === 'number'),
+    )
+  const heldThere = Boolean(await until(keptToGo, 3500, 50)) && Date.now() - siteClickedAt < 4500
   const closedAt = Date.now()
   await closing.page.close()
   const sentAsItClosed = await until(
