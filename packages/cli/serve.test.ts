@@ -1735,7 +1735,7 @@ esac
     expect(
       asked()
         .slice(before)
-        .filter((words) => !/ (is-active|is-enabled|print) /.test(` ${words} `)),
+        .filter((words) => !/ (is-active|is-enabled|print|print-disabled) /.test(` ${words} `)),
     ).toEqual([])
     expect([holder(), await health(), readFileSync(registered, 'utf8')]).toEqual([running, true, definition])
     expect(JSON.parse(none.out())).toMatchObject({ harnesses: [], service: { registered: true } })

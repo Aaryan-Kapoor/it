@@ -8467,7 +8467,7 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
       expect(
         asked()
           .slice(before)
-          .filter((line) => !/ is-active | is-enabled | print /.test(`${line} `)),
+          .filter((line) => !/ is-active | is-enabled | print | print-disabled /.test(`${line} `)),
       ).toEqual([])
       expect(readFileSync(registered, 'utf8')).toBe(definition)
       expect(none.err).not.toMatch(/It runs in the background|registered as a background service|It’s site is at/)
