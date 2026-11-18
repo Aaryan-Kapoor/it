@@ -48,7 +48,6 @@ import {
   afterSetupForAgent,
   arrives,
   CODEX_RESTART,
-  claudeLedLine,
   claudeReloadLine,
   claudeRunning,
   type Facts,
@@ -2372,11 +2371,9 @@ async function settingUpLed(a: Args, begunAlready = false) {
       else if (h.addon === 'too_old' && h.detail) left.push(`${KNOWN[h.id].label}: ${h.detail}`)
     }
     // Claude Code, connected just now from inside one of its conversations that has not loaded the add-on: said last of all, to the person
-    // In a thread of T3 Code what they do reaches it already, so the connector is asked of the way to it where T3 Code is on this machine
-    const ranIn = sessionAsked()?.session
     const reload =
       wanted.includes('claude-code') && after.some((h) => h.id === 'claude-code' && h.addon === 'connected') && claudeReloadLine()
-        ? claudeLedLine({ route: t3Here() && ranIn?.harness === 'claude-code' ? await routeOf(ranIn) : null, t3: t3Here() })
+        ? 'Claude Code: the conversation this ran in was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in it, so that what you do on a page reaches it.'
         : undefined
 
     // Registered is not yet running. The connector itself is asked, and given a little while to answer
@@ -3828,8 +3825,10 @@ async function main(given: string[]): Promise<void> {
         started === 'by hand' && after.running ? 'It is still running as the old version: stop `it serve` where it is running, and start it again.' : undefined
       const reload = claude ? RELOAD_OPEN : undefined
       const hint = [byHand, reload].filter(Boolean).join(' ')
-      // The connector is asked of the way to the conversation this ran in: in a thread of T3 Code, what is so there is said instead
-      const here = claude && sessionAsked()?.session.harness === 'claude-code' ? await lineHere((harness) => harness === 'claude-code') : undefined
+      // Where T3 Code is on this machine the connector is asked of the way to the conversation this ran in, since in a thread
+      // of T3 Code what is so there is said instead. Where it is not, no thread can hold it, and nothing is waited for
+      const inClaude = claude && sessionAsked()?.session.harness === 'claude-code'
+      const here = !inClaude ? undefined : t3Here() ? await lineHere((harness) => harness === 'claude-code') : claudeReloadLine()
       const result = {
         upgraded: true,
         from: done.from,

@@ -375,24 +375,6 @@ export function setupLine(f: {
 }
 
 /**
- * What a person who leads setup themselves reads last of all, where they ran it from inside a
- * Claude Code conversation that has not loaded It's add-on (`claudeReloadLine`). It is said of
- * the conversation, to the person at the terminal, and not in an agent's voice. In a thread of
- * T3 Code what they do on a page reaches the conversation already, through T3 Code, and
- * `/reload-plugins` is what lets it reach a turn that is running; where T3 Code is on the
- * machine and It cannot tell whether a thread holds the conversation, both are said.
- */
-export function claudeLedLine(f: { route: Route | null; t3?: boolean }): string {
-  if (f.route?.thread === 'held')
-    return 'Claude Code: the conversation this ran in is held in a thread of T3 Code, so what you do on a page already reaches it, through T3 Code. Type /reload-plugins in it too, so that it also reaches the agent in the middle of a reply.'
-  const loads =
-    'Claude Code: the conversation this ran in was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in it, so that what you do on a page reaches it.'
-  return heldNowhere(f.route, f.t3)
-    ? loads
-    : `${loads} If it is a thread of T3 Code, what you do on a page reaches it already, through T3 Code, and typing that lets it reach the agent in the middle of a reply too.`
-}
-
-/**
  * What setup says last of all, in words, to whoever ran it from inside an agent's conversation.
  * It is addressed to the agent, which is the one that reads it: the person sees what the agent
  * says, and not what a command printed for it. So it tells the agent what to say, and gives the
