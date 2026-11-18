@@ -122,15 +122,13 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
   const takings = new Map<string, string>()
   // Asked at It's door, and not waited for long: a wait is to be listening at once, and where the
   // door is slow to say, what is taken is taken with no receipt, which It takes as it always did
-  let slow: ReturnType<typeof setTimeout> | undefined
-  const withReceipts =
-    (await Promise.race([
-      backendTakes(TAKES.receipts).catch(() => undefined),
-      new Promise<undefined>((resolve) => {
-        slow = setTimeout(resolve, 3000)
-      }),
-    ])) === true
-  clearTimeout(slow)
+  let waited = () => {}
+  const slow = new Promise<undefined>((resolve) => {
+    const timer = setTimeout(resolve, 3000)
+    waited = () => clearTimeout(timer)
+  })
+  const withReceipts = (await Promise.race([backendTakes(TAKES.receipts).catch(() => undefined), slow])) === true
+  waited()
   const byReceipt = (id: string) => (takings.has(id) ? { receipt: takings.get(id)! } : {})
   /** What the connector handed back, with the receipt each came with noted and taken off it: a receipt is no part of what is printed. */
   const noted = (clicks: (Listed & { receipt?: unknown })[] | undefined): Listed[] =>
