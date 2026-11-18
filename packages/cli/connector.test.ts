@@ -3082,6 +3082,47 @@ describe.skipIf(process.platform === 'win32')('a click on its way into Codex’s
     expect(said.at(-1)).toBe('stopped')
   })
 
+  test('a connector whose machine It no longer knows stops by itself, takes away what it wrote for the add-ons, and tells the service that ran it why it stopped (#426)', async () => {
+    // It refuses this machine a token, as it does one that was revoked on the site
+    stand.answer = async (name) => {
+      if (name === 'machines:report') throw Object.assign(new Error('refused'), { code: 'unauthenticated' })
+    }
+    home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+    made.push(home)
+    process.env.IT_HOME = home
+    const had = { SIGTERM: new Set(process.listeners('SIGTERM')), SIGINT: new Set(process.listeners('SIGINT')) }
+    try {
+      // Nobody asks it to stop: it ends by itself, and says that the machine is not one of It's machines any more
+      expect(await runConnector((line) => said.push(line), 0)).toBe(true)
+    } finally {
+      for (const sig of ['SIGTERM', 'SIGINT'] as const) for (const l of process.listeners(sig)) if (!had[sig].has(l)) process.removeListener(sig, l)
+    }
+    expect(said).toContain("this machine is not one of It's machines any more; stopping")
+    expect(said.at(-1)).toBe('stopped')
+    // It ended well, and left nothing by which an add-on would take it to be running
+    expect(process.exitCode).toBe(0)
+    expect(existsSync(infoFile())).toBe(false)
+    expect(existsSync(path.join(home, 'connector.lock'))).toBe(false)
+    expect(stand.calls.some((c) => c.name === 'machines:stopping')).toBe(false)
+  })
+
+  test('a connector that was asked to stop does not say that its machine is gone', async () => {
+    stand.found = CONNECTED
+    home = mkdtempSync(path.join(os.tmpdir(), 'it-connector-'))
+    made.push(home)
+    process.env.IT_HOME = home
+    const had = { SIGTERM: new Set(process.listeners('SIGTERM')), SIGINT: new Set(process.listeners('SIGINT')) }
+    const running = runConnector((line) => said.push(line), 0)
+    const stopper = () => process.listeners('SIGTERM').find((l) => !had.SIGTERM.has(l)) as ((signal: string) => void) | undefined
+    try {
+      await until(() => existsSync(infoFile()) && stopper() !== undefined)
+      stopper()!('SIGTERM')
+      expect(await running).toBe(false)
+    } finally {
+      for (const sig of ['SIGTERM', 'SIGINT'] as const) for (const l of process.listeners(sig)) if (!had[sig].has(l)) process.removeListener(sig, l)
+    }
+  })
+
   test('a click whose reopening failed is put in Codex’s queue at once when its conversation is opened, without waiting out the pause', async () => {
     await start()
     stand.closed.add('thread-1')

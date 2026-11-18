@@ -12,14 +12,16 @@ import { Problem } from './src/lib'
 import { alone } from './src/serve/backend'
 import { launcherAsWritten, launcherStartsAgain, RESTART_CODE, restartWay, windowsLauncher } from './src/service'
 
-const stand = vi.hoisted(() => ({ connectorEnds: 0, refused: undefined as Error | undefined, ran: 0 }))
-// The connector the service runs, as a stand-in that stops at once with the code a test gives it
+const stand = vi.hoisted(() => ({ connectorEnds: 0, refused: undefined as Error | undefined, ran: 0, notOurs: false }))
+// The connector the service runs, as a stand-in that stops at once with the code a test gives
+// it, and says as the real one does whether its machine is not one of It's machines any more
 vi.mock('./src/connector', async (original) => ({
   ...(await original<typeof import('./src/connector')>()),
   runConnector: async () => {
     if (stand.refused) throw stand.refused
     stand.ran++
     process.exitCode = stand.connectorEnds
+    return stand.notOurs
   },
 }))
 
@@ -421,6 +423,92 @@ describe('a service that is the connector alone and finds another connector hold
     await new Promise((r) => setTimeout(r, 200))
     expect(over).toBe(false)
     asked.abort()
+    expect(await ending).toBe(false)
+  })
+})
+
+describe('a connector that stops because its machine is not one of It’s machines any more', () => {
+  const before = process.env.IT_HOME
+  let folder = ''
+  const asked = new Set<AbortController>()
+  /** A service whose connector has just stopped by itself, for that reason unless a test says otherwise, in a folder of its own: whether it has ended, and how. */
+  const revoked = async (alone: boolean, notOurs = true) => {
+    folder = mkdtempSync(path.join(os.tmpdir(), 'it-restart-revoked-'))
+    process.env.IT_HOME = folder
+    writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'machine-1', name: 'the laptop', token: 'x' }))
+    stand.ran = 0
+    stand.notOurs = notOurs
+    const { connector } = await import('./src/serve')
+    const stop = new AbortController()
+    asked.add(stop)
+    const state: { over?: boolean } = {}
+    const ending = connector(
+      () => {},
+      stop.signal,
+      () => 'SIGTERM',
+      false,
+      alone,
+    ).then((failed) => {
+      state.over = failed
+      return failed
+    })
+    return { ending, state, stop }
+  }
+  afterEach(async () => {
+    for (const stop of asked) stop.abort()
+    asked.clear()
+    vi.useRealTimers()
+    stand.ran = 0
+    stand.notOurs = false
+    stand.connectorEnds = 0
+    process.exitCode = undefined
+    if (before === undefined) delete process.env.IT_HOME
+    else process.env.IT_HOME = before
+    if (folder) rmSync(folder, { recursive: true, force: true })
+  })
+
+  test('ends a service that is the connector alone, and ends it well, so that nothing starts it again (#426)', async () => {
+    vi.useFakeTimers()
+    const { ending, state } = await revoked(true)
+    // Long after the connector said it had stopped, the service is not still there with nothing to run
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(state.over).toBe(false)
+    expect(await ending).toBe(false)
+    // It ends with the code the connector stopped with, which is no failure: systemd, launchd and the Windows launcher each leave such a service stopped
+    expect(process.exitCode).toBe(0)
+    expect(stand.ran).toBe(1)
+  })
+
+  test('ends it as a failure all the same where the connector stopped to be started again as a newer It', async () => {
+    stand.connectorEnds = RESTART_CODE
+    const { ending } = await revoked(true)
+    expect(await ending).toBe(true)
+    expect(process.exitCode).toBe(RESTART_CODE)
+  })
+
+  test('leaves the service running on the machine It runs on, where the site goes on being served, and a connector starts once the machine is enrolled anew', async () => {
+    vi.useFakeTimers()
+    const { ending, state, stop } = await revoked(false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(state.over).toBeUndefined()
+    expect(stand.ran).toBe(1)
+    // `it setup` enrols the machine anew, and the connector starts as that machine
+    writeFileSync(path.join(folder, 'machine.json'), JSON.stringify({ id: 'machine-2', name: 'the laptop', token: 'x' }))
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(stand.ran).toBe(2)
+    expect(state.over).toBeUndefined()
+    stop.abort()
+    expect(await ending).toBe(false)
+  })
+
+  test('and one that is the connector alone goes on waiting where its connector stopped for another reason', async () => {
+    vi.useFakeTimers()
+    // Another connector took the folder's lock, say: the machine is still one of It's machines
+    const { ending, state, stop } = await revoked(true, false)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(state.over).toBeUndefined()
+    expect(stand.ran).toBe(1)
+    stop.abort()
     expect(await ending).toBe(false)
   })
 })

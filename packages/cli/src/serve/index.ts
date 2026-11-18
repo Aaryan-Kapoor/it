@@ -24,7 +24,8 @@ import { watchTask } from './task'
 /**
  * Runs the service until it is asked to stop. A backend that ends by itself, and a newer It
  * installed on the machine, end it too, as a failure, so that whatever keeps it running starts
- * it again. On a machine whose backend is elsewhere, the connector is all of It there is to run.
+ * it again. On a machine whose backend is elsewhere, the connector is all of It there is to run,
+ * and the service ends, and ends well, once that machine is not one of It's machines any more.
  */
 export async function serve(say: (line: string) => void = (line) => void process.stderr.write(`${line}\n`)): Promise<void> {
   const asked = new AbortController()
@@ -81,7 +82,8 @@ export async function serve(say: (line: string) => void = (line) => void process
           machine()
           ready()
           // On Windows, where a service the launcher started takes over from another connector only as the program installed now (#353)
-          return connector(say, asked.signal, told, process.platform === 'win32' && supervised())
+          // The connector is all this service runs, so it ends with a connector whose machine is not one of It's any more
+          return connector(say, asked.signal, told, process.platform === 'win32' && supervised(), true)
         }
         return here(config, say, asked, told, ready)
       },
@@ -791,8 +793,24 @@ const HELD_SAID_MS = 30 * 60_000
  * which after an update from the site is the one the update moved aside. It never ends well
  * for this, which would end its launcher too: a service that cannot tell whether the other is
  * an orphan or a person's would be left with nothing to start it again until the next logon.
+ *
+ * `alone` is for a service that is the connector alone, on a machine that joined an It on
+ * another. Its connector stops by itself once that It no longer knows the machine, which was
+ * revoked on the site or went when everything was erased, and nothing is left for the service
+ * to run: no site is served there, and the machine is enrolled anew only by leaving with `it
+ * logout` and joining again, which sets a service up of its own. So the service ends with its
+ * connector, and ends well, which every system that keeps it running takes for a service that
+ * was stopped on purpose, and does not start again until the person next signs in
+ * (`../service`). Ended as a failure, it would be started again every few seconds, to find
+ * the same each time, for as long as the machine was on.
  */
-export async function connector(say: (line: string) => void, asked: AbortSignal, heard: () => NodeJS.Signals, relaunchWhenFree = false): Promise<boolean> {
+export async function connector(
+  say: (line: string) => void,
+  asked: AbortSignal,
+  heard: () => NodeJS.Signals,
+  relaunchWhenFree = false,
+  alone = false,
+): Promise<boolean> {
   const pause = (ms: number) =>
     new Promise<void>((resolve) => {
       const done = () => {
@@ -840,12 +858,14 @@ export async function connector(say: (line: string) => void, asked: AbortSignal,
     // The connector listens for a signal only once it has started. One that came before then
     // is said to it again until it has heard.
     let running = true
+    /** Whether the connector stopped because this machine is not one of It's machines any more. */
+    let notOurs = false
     const again = setInterval(() => {
       if (asked.aborted && running) process.emit(heard())
     }, 250)
     try {
       try {
-        await runConnector(say)
+        notOurs = await runConnector(say)
       } finally {
         // A connector can write its old notes as it stops, whether it returns or throws.
         // Keep cleanup pending until every note is gone, before another connector starts.
@@ -868,6 +888,8 @@ export async function connector(say: (line: string) => void, asked: AbortSignal,
     }
     // Stopped to make way for a newer It, or to be started again as one, which its launcher does
     if (process.exitCode === 1 || process.exitCode === RESTART_CODE) return true
+    // Nothing is left for a service that is the connector alone to run: it ends, and ends well
+    if (alone && notOurs) return false
     ended = id
   }
   return false
