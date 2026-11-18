@@ -1466,7 +1466,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     // It could not be asked, having no console, and was then to be ended, which the system refused
     expect(first.lines().slice(-3)).toEqual([
       'READY',
-      `backend: did not stop when asked, and is ended (pid ${pid}, no_console)`,
+      `backend: could not be asked to stop, and is ended (pid ${pid}, no_console)`,
       `backend: could not be ended, and is left running (pid ${pid})`,
     ])
     // The program lives, so the lock is still there, and says which process the program is
@@ -1493,7 +1493,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     await comes(() => ended !== undefined, first.lines)
     expect([ended, first.lines().slice(-3)]).toEqual([
       0,
-      [`backend: did not stop when asked, and is ended (pid ${pid}, no_console)`, 'backend: stopped', expect.stringMatching(/^STAYED \d+$/)],
+      [`backend: could not be asked to stop, and is ended (pid ${pid}, no_console)`, 'backend: stopped', expect.stringMatching(/^STAYED \d+$/)],
     ])
     // By its own measure it stayed a moment once the backend had stopped, and nothing like the
     // ten seconds or the thirty that a stop on Windows may wait for
@@ -1501,6 +1501,133 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(startOf(pid)).toBeNull()
     expect(existsSync(inBackend('lock'))).toBe(false)
   }, 180_000)
+
+  test('a stop on Windows whose helper fails says how the helper ended, in a code and a number, and gives a program that may have been asked the while to go that one that was asked is given (#404)', async () => {
+    makeConfig()
+    // On this system the helper that asks a program on Windows to stop is what `HELPER` says:
+    // `exit`, it ends with a code of its own, having printed why; `cut`, its limit ends it at
+    // once, as the runtime's fault on Windows does; `limit`, its limit ends it when the thirty
+    // seconds are up, which the clock is put on by; `asked`, the same, having raised the event
+    // first; `missing`, it cannot be started. It writes down each time it is started. Whatever
+    // else PowerShell is asked there, it says nothing.
+    const helper: Plugin = {
+      name: 'helper',
+      setup(b) {
+        b.onResolve({ filter: /^node:child_process$/ }, (asked) => (asked.namespace === 'helper' ? undefined : { path: asked.path, namespace: 'helper' }))
+        b.onLoad({ filter: /.*/, namespace: 'helper' }, () => ({
+          loader: 'js',
+          contents: `
+            import * as real from 'node:child_process'
+            export * from 'node:child_process'
+            export { default } from 'node:child_process'
+            const none = { pid: 0, output: [], stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
+            const failed = (code) => ({ ...none, status: null, signal: code === 'ETIMEDOUT' ? 'SIGTERM' : null, error: Object.assign(new Error('spawnSync powershell.exe ' + code + ' at C:\\\\Users\\\\a person'), { code }) })
+            export const spawnSync = (file, args, ...rest) => {
+              if (file !== 'powershell.exe') return real.spawnSync(file, args, ...rest)
+              const [, pid] = /AttachConsole\\((\\d+)\\)/.exec(Buffer.from(args.at(-1), 'base64').toString('utf16le')) ?? []
+              if (!pid) return { ...none, status: 3, signal: null }
+              console.log('HELPER STARTED')
+              const how = process.env.HELPER
+              if (how === 'exit')
+                return { ...none, status: 1, signal: null, stdout: Buffer.from('Add-Type : Access is denied at C:\\\\Users\\\\a person\\\\it'), stderr: Buffer.from('Access is denied') }
+              if (how === 'missing') return failed('ENOENT')
+              if (how === 'cut') return failed('ETIMEDOUT')
+              const now = performance.now.bind(performance)
+              performance.now = () => now() + 30_000
+              if (how === 'asked') process.kill(Number(pid), 'SIGINT')
+              return failed('ETIMEDOUT')
+            }
+          `,
+        }))
+      },
+    }
+    // A service in little that stops the backend as a service on Windows does, and says how long the stopping took
+    await bundled(
+      'helped.mjs',
+      `
+        import { startBackend } from './src/serve/backend'
+        import { readConfig } from './src/serve/config'
+        const idle = setInterval(() => {}, 1000)
+        const backend = await startBackend(readConfig(), (line) => console.log(line))
+        process.on('SIGTERM', async () => {
+          Object.defineProperty(process, 'platform', { value: 'win32' })
+          const began = Date.now()
+          await backend.stop()
+          console.log('STOPPED IN ' + (Date.now() - began))
+          clearInterval(idle)
+          process.exit(0)
+        })
+        console.log('READY')
+      `,
+      [helper],
+    )
+    const stopped = async (how: string) => {
+      const service = serve(Number(process.env.IT_PORT), undefined, undefined, { HELPER: how }, path.join(scratch, 'helped.mjs'))
+      await comes(() => service.out().includes('READY'), service.lines)
+      const pid = lock()!.program!
+      service.child.kill('SIGTERM')
+      let ended: number | null | undefined
+      void service.ended.then((code) => (ended = code))
+      await comes(() => ended !== undefined, service.lines)
+      const lines = service.lines()
+      const after = lines.slice(lines.indexOf('READY') + 1)
+      expect([how, ended, startOf(pid), existsSync(inBackend('lock'))]).toEqual([how, 0, null, false])
+      // Nothing the helper printed is written down, nor the words of the error it failed with
+      expect(after.join('\n')).not.toMatch(/Access|denied|Users|person|spawnSync/)
+      return { pid, said: after.slice(0, -1), took: Number(after.at(-1)!.replace('STOPPED IN ', '')) }
+    }
+    // The moment for what was in flight and the while to go that a program that was asked is given, together
+    const HEARD = 4000
+
+    // It ended with a code of its own: nothing says whether the program had been asked, so it is given its while, and is then ended
+    const exit = await stopped('exit')
+    expect(exit.said).toEqual([
+      'HELPER STARTED',
+      `backend: may not have been asked to stop, and is ended (pid ${exit.pid}, no_helper, exit_1)`,
+      'backend: stopped',
+    ])
+    expect(exit.took).toBeGreaterThanOrEqual(HEARD)
+
+    // Its limit ended it before its time: it is not started a second time, and the log says how soon it was ended
+    const cut = await stopped('cut')
+    expect(cut.said).toEqual([
+      'HELPER STARTED',
+      expect.stringMatching(
+        new RegExp(`^backend: may not have been asked to stop, and is ended \\(pid ${cut.pid}, no_helper, cut_short after \\d{1,3} of 30000 ms\\)$`),
+      ),
+      'backend: stopped',
+    ])
+    expect(cut.took).toBeGreaterThanOrEqual(HEARD)
+
+    // Its limit ended it when its time was up
+    const limit = await stopped('limit')
+    expect(limit.said).toEqual([
+      'HELPER STARTED',
+      expect.stringMatching(
+        new RegExp(`^backend: may not have been asked to stop, and is ended \\(pid ${limit.pid}, no_helper, timed_out after 30\\d{3} ms\\)$`),
+      ),
+      'backend: stopped',
+    ])
+    expect(limit.took).toBeGreaterThanOrEqual(HEARD)
+
+    // The same, where it had raised the event before it was ended: the program goes in the while it is given, and is not ended
+    const asked = await stopped('asked')
+    expect(asked.said).toEqual([
+      'HELPER STARTED',
+      expect.stringMatching(
+        new RegExp(`^backend: has gone, though the helper that asks it to stop failed \\(pid ${asked.pid}, no_helper, timed_out after 30\\d{3} ms\\)$`),
+      ),
+      'backend: stopped',
+    ])
+
+    // It could not be started, so the program was not asked: it is ended at once, with the system's code for why
+    const missing = await stopped('missing')
+    expect(missing.said).toEqual([
+      'HELPER STARTED',
+      `backend: could not be asked to stop, and is ended (pid ${missing.pid}, no_helper, not_started ENOENT)`,
+      'backend: stopped',
+    ])
+  }, 300_000)
 
   /**
    * A later version of It, as a program of its own: the service in little under another number,
@@ -4048,9 +4175,13 @@ describe('the backend program, as it is started', () => {
       const made = (await asAdmin(backend, 'bridge:enroll', { subject: 'owner', name: 'written last', publicKey: KEY })) as { machineId: string }
       // Stopping has an end: a moment for what was in flight, the asking, a short while to go, and
       // the ending. What the service said is shown with the outcome, since it says whether the
-      // program was ended, and in a word why it could not be asked.
+      // program was ended, and in a word why it could not be asked, or may not have been.
       const stopped = await Promise.race([backend.stop().then(() => true), pause(120_000).then(() => false)])
-      const ended = said.filter((line) => /^backend: did not stop when asked, and is ended \(pid \d+(, no_console|, no_event|, no_helper)?\)$/.test(line))
+      const ended = said.filter((line) =>
+        /^backend: (did not stop when asked, and is ended \(pid \d+\)|could not be asked to stop, and is ended \(pid \d+, (no_console|no_event|no_helper, not_started (E[A-Z0-9_]+|error))\)|(may not have been asked to stop, and is ended|has gone, though the helper that asks it to stop failed) \(pid \d+, no_helper, [a-z_]+[A-Za-z0-9_ ]*\))$/.test(
+          line,
+        ),
+      )
       expect({ stopped, said }).toEqual({
         stopped: true,
         said: [expect.stringMatching(/^backend: started/), expect.stringMatching(/^backend: functions loaded/), ...ended, 'backend: stopped'],
