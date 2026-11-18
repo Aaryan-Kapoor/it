@@ -2225,6 +2225,98 @@ describe('what is open or asked for a page, when the page changes hands or is ta
     expect(tracks.map((t) => t.stopped)).toEqual([true])
   })
 
+  // A document that is busy as it finishes loading can miss the five seconds the site gives the
+  // frame to say which document it holds. What it had live is not lost to that, and the site gives
+  // up on the frame no later than before.
+  /** The five seconds pass with no answer from the frame, by the site's held clock. */
+  const noAnswer = () =>
+    act(async () => {
+      vi.advanceTimersByTime(WHO_MS)
+      await pause()
+    })
+
+  test('the live microphone a document opened before the site counted its load ends at that load, and the page is told why over its channel then, and not left untold when the asking runs out', async () => {
+    const { heard, ask, page } = await shownFor(FIRST, ['mic'])
+    // A page that asks over its channel before its load has reached the site, as It's script does only twenty seconds after it began
+    await ask(openMic)
+    expect(resultOf(heard, 'm1')).toMatchObject({ ok: true })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // Its own load, which the document is too busy to answer for
+    await page.loads(false)
+    expect(micStates(heard)).toEqual([{ type: 'it:microphone-state', microphone: 'mic-a', state: 'ended', why: 'replaced' }])
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+    await noAnswer()
+    expect(page.posted.at(-1)?.data).toEqual({ type: 'it:gone' })
+    // The asking's end found nothing more to end, and said nothing more
+    expect(micStates(heard)).toHaveLength(1)
+    expect(tracks.map((t) => t.stopped)).toEqual([true])
+  }, 15_000)
+
+  test('a document too busy at its own load to answer which document it is is given, when it says hello again, a channel that says its load is counted, and the microphone it asks for there opens without the person being asked and stays live however long after', async () => {
+    const { page } = await shownFor(FIRST, ['mic'])
+    const { currentQuestion, microphoneFor } = await import('./media')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // Its script holds the microphone it asked for until the site has counted its load. The load comes, and it does not answer in time
+    await page.loads(false)
+    const nonce = page.posted.filter((p) => p.data.type === 'it:who').at(-1)!.data.nonce
+    await noAnswer()
+    expect(page.posted.at(-1)?.data).toEqual({ type: 'it:gone' })
+    // Its answer comes late, and changes nothing
+    await page.fromFrame({ type: 'it:here', nonce, doc: 'doc-1' })
+    expect(page.posted.filter((p) => p.data.type === 'it:loaded')).toEqual([])
+    // It says hello again under a new name, as It's script does on any it:gone, and its new channel says its load is counted
+    // already, which is what the script waits for before it sends the microphone it held
+    await page.fromFrame({ type: 'it:hello', doc: 'doc-1-again' })
+    expect(page.posted.filter((p) => p.data.type === 'it:port').map((p) => p.data.loaded)).toEqual([false, true])
+    const port = page.ports()[1]!
+    const heard: any[] = []
+    port.onmessage = (m) => heard.push(m.data)
+    port.postMessage(openMic)
+    await act(() => pause(60))
+    expect(resultOf(heard, 'm1')).toMatchObject({ ok: true })
+    expect(currentQuestion()).toBeNull()
+    // A minute later it is still live, its sound still goes, and the frame was not asked again
+    const asked = page.posted.filter((p) => p.data.type === 'it:who').length
+    await act(async () => {
+      vi.advanceTimersByTime(60_000)
+      await pause()
+    })
+    gatherers.at(-1)?.port.onmessage?.({ data: new Float32Array(960) })
+    await act(() => pause(20))
+    expect(sound(heard)).toHaveLength(1)
+    expect(micStates(heard)).toEqual([])
+    expect(tracks.map((t) => t.stopped)).toEqual([false])
+    expect(microphoneFor('page1')).toBeDefined()
+    expect(page.posted.filter((p) => p.data.type === 'it:who').length).toBe(asked)
+  }, 15_000)
+
+  test('the microphone asked for while the site asks which document the frame holds is opened for no document that does not answer: it is refused before the channel closes, with word to ask again, and the browser is never asked', async () => {
+    const { heard, page } = await shownFor(FIRST, ['mic'])
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await page.loads(false)
+    page.ports()[0]!.postMessage(openMic)
+    await act(() => pause(60))
+    // It waits for the answer, which does not come
+    expect(resultOf(heard, 'm1')).toBeUndefined()
+    await noAnswer()
+    expect(resultOf(heard, 'm1')).toEqual({
+      type: 'it:result',
+      requestId: 'm1',
+      ok: false,
+      error:
+        'The page’s frame loaded a document after this was asked for, and It could not tell that this page was still the one in it, so It did not go on. Ask again.',
+      retryAfterMs: 0,
+    })
+    expect(wanted).toEqual([])
+    expect(tracks).toEqual([])
+    expect(page.posted.at(-1)?.data).toEqual({ type: 'it:gone' })
+    // Nothing more is taken over that channel
+    page.ports()[0]!.postMessage({ ...openMic, requestId: 'm2' })
+    await act(() => pause(60))
+    expect(resultOf(heard, 'm2')).toBeUndefined()
+    expect(wanted).toEqual([])
+  }, 15_000)
+
   test('a microphone whose sound is still being made ready when the frame loads more documents than it may see is stopped at once, and the page is told why', async () => {
     const { heard, ask, page } = await shownFor(FIRST, ['mic'])
     await page.loads()
