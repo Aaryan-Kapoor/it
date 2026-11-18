@@ -424,7 +424,7 @@ try {
   )
   check(
     'and after that what an agent that is installing It for someone does next: the two commands that ask nothing at a terminal, by the program’s whole path, and where the guide is',
-    /setup\n\nAn agent that is installing It for someone goes on with these two[^\n]*claude-code, codex, pi, opencode or hermes[^\n]*\n\n {2}.* setup --only <app>\n {2}.* site --no-open\n\nWhat to ask the person first is in https:\/\/itcan\.do\/install\.md\n?$/.test(
+    /setup\n\nAn agent that is installing It for someone goes on with these two[^\n]*claude-code, codex, pi, opencode or hermes[^\n]*\n\n {2}.* setup --only <app>\n {2}.* site\n\nWhat to ask the person first is in https:\/\/itcan\.do\/install\.md\n?$/.test(
       one.said.replace(/\r\n/g, '\n'),
     ),
     JSON.stringify(one.said.slice(-900)),

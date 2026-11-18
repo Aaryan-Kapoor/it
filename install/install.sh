@@ -738,10 +738,10 @@ if [ "${led}" = 0 ]; then
   # An agent that was told to install It reads this and nothing else, unless it found the
   # guide: so what it does next is here, in the two commands that ask nothing of a terminal
   say ""
-  say "An agent that is installing It for someone goes on with these two, which ask nothing at a terminal. The first sets It up on this computer and connects one agent app: claude-code, codex, pi, opencode or hermes. The second prints a link for the person to open in a browser on this computer."
+  say "An agent that is installing It for someone goes on with these two, which ask nothing at a terminal. The first sets It up on this computer and connects one agent app: claude-code, codex, pi, opencode or hermes. The second opens It in a browser on this computer where it can, and prints the link for the person to open there."
   say ""
   say "  ${it_quoted} setup --only <app>"
-  say "  ${it_quoted} site --no-open"
+  say "  ${it_quoted} site"
   say ""
   say "What to ask the person first is in https://itcan.do/install.md"
   exit 0

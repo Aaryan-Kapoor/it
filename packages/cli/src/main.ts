@@ -4,7 +4,6 @@
 // five that a person runs to look after It (`it setup`, `it status`, `it site`, `it network`
 // and `it service status`) print a few plain sentences where standard output is a terminal, and
 // the same JSON as ever where it is not, or when `--json` is given.
-import { spawn } from 'node:child_process'
 import {
   appendFileSync,
   chmodSync,
@@ -59,6 +58,7 @@ import {
   tellWordForWord,
   tooOldToReload,
 } from './arrives'
+import { openPairing } from './browser'
 import { runSync } from './child'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
 import { choices, conversationIds, local, type Route, refusedFor } from './connector'
@@ -92,6 +92,7 @@ import {
   hasLeft,
   home,
   inHome,
+  joinedAnother,
   joinLine,
   keptFromHome,
   keptFromIt,
@@ -591,7 +592,7 @@ async function onDisplay<T extends object>(
  * nor an agent would otherwise learn why nothing appeared anywhere.
  */
 const noDisplay = () =>
-  `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${siteAddress() ?? 'the site'} in a browser on this machine and pair that browser. Other displays are added from there.`
+  `No display is paired yet, so there is nowhere to show it. If you are an agent, run \`it site\` yourself: it opens ${siteAddress() ?? 'the site'} in a browser on this machine where it can and pairs that browser, and prints the link to give the user. Other displays are added from there.`
 /**
  * What It answers when asked to show a page: the displays it is now shown on, and each other one
  * with why it is not shown there. `chosen` says, where no display was named, whether the one
@@ -1076,10 +1077,11 @@ function tourForOneThatWaited(guide: string): string {
  * the summaries seen the guide's last step was gone, so the agent installed It, gave the
  * pairing link and stopped, with no tour. So the step that follows setup is said here, with
  * how to read the guide itself. The tour comes before the link: the agent puts its first page
- * up, and the browser the person pairs with the link goes to that page.
+ * up, and the browser that `it site` opens with the link, or that the person pairs with it, goes
+ * to that page.
  */
 export const afterSetup = (it = itForAgent()): string =>
-  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person and then give them the link that \`${it} site --no-open\` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, then run \`${it} site\`, which opens that page in a browser on this computer where it can, and give them the link it prints. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
 
 /**
  * The same, where something is left for the person to do and they have to be told it: in the
@@ -1094,8 +1096,8 @@ export const afterSetupTelling = (lines: readonly string[], restart = false, it 
     lines.length === 1 ? `this, word for word: “${lines[0]}”` : `each of these, word for word:\n\n${lines.map((line) => `“${line}”`).join('\n\n')}\n\n`
   const guide = ` If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.${onWindows()}`
   return restart
-    ? `If you are an agent installing It for someone, one step of the install guide comes after this one, and it waits until Codex has been started again. Write the person one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} Then end your turn, and do not run \`${it} tour\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour\` and do what it prints.${guide}`
-    : `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, and then write them one message that gives them the link that \`${it} site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait.${guide}`
+    ? `If you are an agent installing It for someone, one step of the install guide comes after this one, and it waits until Codex has been started again. Run \`${it} site\`, which opens It in a browser on this computer where it can, and write the person one message that gives them the link it prints and tells them ${words} Then end your turn, and do not run \`${it} tour\` yet: Codex has to be started again first, which ends this turn anyway. Once it is back and the person asks for the tour, run \`${it} tour\` and do what it prints.${guide}`
+    : `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`${it} tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, then run \`${it} site\`, which opens that page in a browser on this computer where it can, and write them one message that gives them the link it prints and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait.${guide}`
 }
 
 /** What a person in a Codex conversation is told after setup: to start Codex again, and to ask for the tour once it is back. */
@@ -1107,12 +1109,13 @@ const CODEX_RESTART_SETUP = `${CODEX_RESTART} Once Codex is back, say “Give me
  * link and go straight on to waiting for the tour, and the person was told nothing, the link
  * included, until the waiting was over. In a Claude Code or Pi conversation that has not loaded
  * the add-on, where that app's add-on is connected on this machine, the same message carries the
- * words the person is to type to load it.
+ * words the person is to type to load it. Where the url was opened in a browser here, the agent
+ * is told to say so, to give the url all the same, and that the tab spent the url's one code. An
+ * OpenCode that has not loaded It's add-on marks no command, and is told by the process above.
  */
-async function linkToTell(): Promise<{ tell?: string }> {
-  if (!sessionAsked()) return {}
-  const give =
-    'Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.'
+async function linkToTell(opened: boolean, byAgent: boolean): Promise<{ tell?: string }> {
+  if (!byAgent) return {}
+  const give = `Give the person this url now, in a message, before you run anything else: they open it in a browser on this computer, and it pairs that browser, once, within ten minutes.${opened ? ' A tab of the browser on this computer has just been opened at this url, so tell them in that message that it has opened, and that the url is for when no tab appeared. The tab and the url share one code that works once, so if they open the url somewhere else and it is refused, run `it site` again for a new one.' : ''}`
   const me = await call<{ harnesses?: { id: string; addon: string }[] } | null>('query', api.machines.me).catch(() => null)
   const line = await lineHere((harness) => me?.harnesses?.some((h) => h.id === harness && (h.addon === 'connected' || h.addon === 'needs_approval')) === true)
   return { tell: line ? `${give} In that same message, tell them this, word for word: “${line}”` : give }
@@ -1432,32 +1435,6 @@ function page(p: Record<string, unknown>): Record<string, unknown> {
 }
 
 // ---------- this machine ----------
-
-/** Asks the system to open an address in the person's browser. False where it is not asked: over SSH the browser would open on a screen nobody is at. */
-function openBrowser(url: string): boolean {
-  if (process.env.SSH_CONNECTION || process.env.SSH_TTY) return false
-  // Nor where there is no screen to open one on, or nothing to open one with: said to be
-  // opening there, the person waits for a browser that never comes
-  if (process.platform !== 'darwin' && process.platform !== 'win32') {
-    if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false
-    const found = (process.env.PATH ?? '').split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, 'xdg-open')))
-    if (!found) return false
-  }
-  // Never through a shell: the address came from a server. On Windows `start` is a shell
-  // command, so the system's own handler for addresses is called directly instead.
-  const [cmd, args] =
-    process.platform === 'darwin'
-      ? ['open', [url]]
-      : process.platform === 'win32'
-        ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
-        : ['xdg-open', [url]]
-  try {
-    spawn(cmd as string, args as string[], { stdio: 'ignore', detached: true, shell: false })
-      .on('error', () => {})
-      .unref()
-  } catch {}
-  return true
-}
 
 async function connectorHealth(): Promise<Record<string, unknown> | null> {
   return local<Record<string, unknown>>('/health')
@@ -2432,7 +2409,7 @@ async function settingUpLed(a: Args, begunAlready = false) {
         const { code } = await call<{ code: string }>('mutation', api.sessions.inviteOwner)
         if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(code)) throw new Problem('It answered with something that is no invite.', 'error')
         const here = `http://localhost:${config.port}/pair#${code}`
-        const opened = !fromAfar() && openBrowser(here)
+        const opened = await openPairing(here, { noOpen: false, terminal: true, agent: false, joined: false, displays: async () => displays })
         flow.line()
         if (opened) flow.line(`${flow.bold('Your browser is opening It.')} ${flow.dim('If it does not, open:')}`)
         else flow.line(flow.bold(addresses.length ? 'Open this on the screen you want to use:' : 'Open this in a browser on this computer:'))
@@ -4048,8 +4025,23 @@ async function main(given: string[]): Promise<void> {
       // As the network stands, and not only as the settings ask for it: an address the door could not listen at is no address to give
       const stands = await networkAsItStands(true)
       const elsewhereToo = stands.addresses.map((address) => `${address}/pair#${code}`)
-      const opening = !a.flags['no-open'] && openBrowser(url)
-      if (!forPerson(a)) return out({ url, ...(elsewhereToo.length ? { urls: elsewhereToo } : {}), ...(await linkToTell()) })
+      // An agent ran this: one whose app marked it, or an OpenCode that has not loaded It's add-on yet, as in the conversation that installs It
+      const asking = sessionAsked()
+      const byAgent = asking !== undefined || inUnloadedOpenCode(asking)
+      const opening = await openPairing(url, {
+        noOpen: a.flags['no-open'] === true,
+        terminal: process.stdout.isTTY === true,
+        agent: byAgent,
+        joined: joinedAnother(),
+        displays: () => call('query', api.displays.list),
+      })
+      if (!forPerson(a))
+        return out({
+          url,
+          ...(elsewhereToo.length ? { urls: elsewhereToo } : {}),
+          ...(opening ? { opened: true } : {}),
+          ...(await linkToTell(opening, byAgent)),
+        })
       if (opening) return tell(['It’s site is opening in your browser, and this link pairs it:', `  ${url}`])
       // No browser was opened here: nobody is at this machine's own screen, or it has none, or
       // it was asked not to. The address to open is then the one another device can reach,

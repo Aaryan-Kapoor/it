@@ -36,6 +36,7 @@ export const ROOT_FILES = [
   't3-asked.json',
   'opencode-unclaimed.json',
   'tour-pictures.json',
+  'browser-opened.json',
   'runs.json',
   'runs.json.unreadable',
   'cut-off.json',
@@ -56,10 +57,11 @@ export const ROOT_FOLDERS = ['backend', 'content', 'content-data', 'logs', 'publ
 const LOCK_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|unread-\d+-\d+))?(?:\.[0-9a-f]{16}\.tmp)?$/
 export const ROOT_LOCKS = ['connector.lock', 'setup.lock', 'enrol.lock']
 /**
- * The locks a command takes beside a note of conversations while it changes the note
- * (`claimLock`). A command that was killed leaves its lock, and the claims beside it, behind.
+ * The locks a command takes beside a note of conversations, or the note of when a browser was
+ * last opened, while it changes the note (`claimLock`). A command that was killed leaves its
+ * lock, and the claims beside it, behind.
  */
-export const NOTE_LOCKS = ['conversations.json.lock', 'opencode-unclaimed.json.lock', 'tour-pictures.json.lock']
+export const NOTE_LOCKS = ['conversations.json.lock', 'opencode-unclaimed.json.lock', 'tour-pictures.json.lock', 'browser-opened.json.lock']
 /** What follows such a lock's name in a claim made beside it, with a recovering command's mark or a left empty lock's, or in its record on its way to its name. */
 const NOTE_SUFFIX = /^(?:\.after\.(?:[0-9a-f]{16}|legacy-[0-9a-f]{64}))?(?:\.[0-9a-f]{16}\.tmp)?$/
 const LOCKS: Record<string, string[]> = {

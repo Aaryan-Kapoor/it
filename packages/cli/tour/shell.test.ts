@@ -592,7 +592,7 @@ describe('the guide for the first page', () => {
 
   test('shows the first page before anything else, and before the pairing link where no screen is paired', () => {
     expect([...GUIDE.matchAll(/^it tour show ([a-z]+)/gm)][0]![1]).toBe('start')
-    expect(part).toContain('give them the link that `it site --no-open` prints')
+    expect(part).toContain('run `it site`, which opens this page in a browser on this computer where it can, and give them the link it prints')
     expect(part).toContain('`"asleep": true`')
   })
 

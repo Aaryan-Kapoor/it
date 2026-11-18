@@ -22,11 +22,11 @@ The tour is one page, `tour-start`, with the whole first run of It on it: a room
 it tour show start
 ```
 
-Show it before anything else, even where the person has no screen paired yet, as when you have just installed It for them. What it prints says in `shownOn` which display was asked to bring it up. Where that is empty because no screen is paired, give them the link that `it site --no-open` prints, to open on this computer: the browser they pair with it opens on this page by itself.
+Show it before anything else, even where the person has no screen paired yet, as when you have just installed It for them. What it prints says in `shownOn` which display was asked to bring it up. Where that is empty because no screen is paired, run `it site`, which opens this page in a browser on this computer where it can, and give them the link it prints: the browser they pair with it opens on this page by itself.
 
 Where showing it printed `"asleep": true`, you are in a Claude Code conversation that has not loaded It's add-on. The page says so to the person in amber, with the line to type, and keeps what they do. Do what `arrives.next` says: give the link and that line in one message, and end your turn.
 
-**Then say:** "It's on your screen. Move the armchair, and I'll answer there." Where you gave them a link, say this in its place, with the link: "Open this to start, and move the armchair: <the link>".
+**Then say:** "It's on your screen. Move the armchair, and I'll answer there." Where you gave them a link, say this in its place, with the link: "Open this to start, and move the armchair: <the link>". Where `it site` also printed `"opened": true`, say this instead: "It's opening in your browser. Move the armchair, and I'll answer there. If no tab appeared, open this: <the link>".
 
 ### One command answers, on every part
 
@@ -204,7 +204,7 @@ The tour has more pages for a person who asks for more: a menu, the same things 
 it displays
 ```
 
-If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Tell them to run `it site`, which opens the site in a browser and pairs that browser, and wait for them. Each `it tour show` below brings its page up on the display the person is using, which It chooses by itself, so name none. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
+If the list is empty, or every display in it has `"paired": false`, the person has no screen paired. Run `it site` yourself, which opens the site in a browser on this computer where it can and pairs that browser, tell them that a tab has opened where it printed `"opened": true`, give them the link it prints, and wait for them. Each `it tour show` below brings its page up on the display the person is using, which It chooses by itself, so name none. What `it tour show` prints says which display was asked to bring the page up, in `shownOn`: if that is empty, nobody is looking at the page, so say that in place of the page's line.
 
 Each page of the tour has a fixed id, `tour-` and its name, so every command below can be run as it is written. Keep the `id` and `version` printed by each `it tour show`: together they identify the showing now on the screen. In PowerShell, write the words of every command below as the first page's section says for PowerShell.
 

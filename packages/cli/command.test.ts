@@ -29,19 +29,20 @@ import { behindMark, MARK, PORTS, TAKES, UPLOAD, WHEN } from '@it/protocol'
 
 // What setup says last to an agent, as the program has it: said here in the program's own words, so that a change of them is a change here
 const AFTER_SETUP =
-  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person and then give them the link that `it site --no-open` prints, to open on this computer, which opens on that page. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
+  'If you are an agent installing It for someone, one step of the install guide comes after this one: run `it tour` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, then run `it site`, which opens that page in a browser on this computer where it can, and give them the link it prints. If you read a summary of the guide and not the guide itself, read it whole now, with `curl -fsSL https://itcan.do/install.md`, and go on from its step 3.'
 
 /** What setup says Pi's user is to do once Pi is connected, as the program has it. */
 const PI_NOTE = 'Pi: If Pi is open, restart it or run /reload in it: it reads its extensions when it starts.'
 /** What setup says last to an agent where something is left for the person to do: the words, whole, in the step that gives the pairing link. */
 const AFTER_SETUP_TELLING = (words: string) =>
-  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, and then write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
+  `If you are an agent installing It for someone, one step of the install guide comes after this one: run \`it tour\` and do what it prints. The tour is part of the install the person asked you for, and how they see what It is for: do not leave it out unless they tell you to. It has you put a first page up for the person, then run \`it site\`, which opens that page in a browser on this computer where it can, and write them one message that gives them the link it prints and tells them ${words} What showing that page printed under \`arrives\` says whether to end your turn then or to wait. If you read a summary of the guide and not the guide itself, read it whole now, with \`curl -fsSL https://itcan.do/install.md\`, and go on from its step 3.`
 
 import { build } from 'esbuild'
 import { exportJWK, generateKeyPair } from 'jose'
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { BOOLEAN } from './src/args'
 import { CODEX_RESTART, itForAgent, PI_RELOAD, reloadLine, T3_CODEX, t3ClaudeLine } from './src/arrives'
+import { noScreen } from './src/browser'
 import { INSTALLATION, INSTALLATION_FILE } from './src/installation'
 import { VERSION } from './src/lib'
 import { aloneAt } from './src/serve/backend'
@@ -49,6 +50,14 @@ import { instanceName } from './src/serve/config'
 import { afterHermes } from './src/setup'
 import { bases, holdBase } from './test-ports'
 import { standInZsh, zsh } from './test-zsh'
+
+/**
+ * Whether the machine the tests run on is one where It never opens a browser, whatever a test
+ * names: a container or WSL, which It tells by files and the kernel that a test cannot stand in
+ * for. The tests that see a browser opened are left out there.
+ */
+const screenless =
+  noScreen({ platform: process.platform, env: { DISPLAY: ':0', IT_BROWSER_OPENER: '["stand-in"]' }, exists: existsSync, release: os.release() }) !== null
 
 // Every test here starts the program, and some start it a dozen times over. Each is given the
 // time that takes on a machine that is busy with other things as well.
@@ -5393,7 +5402,7 @@ describe.skipIf(process.platform === 'win32')(
 )
 
 describe.skipIf(process.platform === 'win32')('a page shown when no display is paired', () => {
-  const HINT = `No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${SITE} in a browser on this machine and pair that browser. Other displays are added from there.`
+  const HINT = `No display is paired yet, so there is nowhere to show it. If you are an agent, run \`it site\` yourself: it opens ${SITE} in a browser on this machine where it can and pairs that browser, and prints the link to give the user. Other displays are added from there.`
   const answers = (displays: string[]) => (asked: Asked) =>
     asked.path === 'publish:begin'
       ? { artifactId: 'artifact-1', slug: 'plan', version: 1, upload: { url: 'http://127.0.0.1:9/upload/', grant: 'a-grant' } }
@@ -6111,7 +6120,7 @@ describe.skipIf(process.platform === 'win32' || !python)('what a person at a ter
     }
   })
 
-  test('`it site` says that the site is opening, or how to open it, with the address on a line of its own', async () => {
+  test.skipIf(screenless)('`it site` says that the site is opening, or how to open it, with the address on a line of its own', async () => {
     const m = machine(true, true)
     const opened = path.join(m.home, 'opened')
     for (const name of ['xdg-open', 'open']) {
@@ -6828,45 +6837,143 @@ describe.skipIf(process.platform === 'win32')('`it site`', () => {
     return existsSync(file) ? readFileSync(file, 'utf8') : undefined
   }
 
-  test('asks, as this machine, for an invite that signs the person in, prints the address that carries it and opens it', async () => {
+  /** An agent's command, as Codex marks one. */
+  const AGENT = { CODEX_THREAD_ID: 'thread-1' }
+  /** What It answers for a machine that asks for the owner's invite, with no display paired. */
+  const inviting =
+    (codes: string[], displays: () => unknown = () => []) =>
+    (asked: Asked) =>
+      asked.path === 'sessions:inviteOwner' ? { code: codes.shift() } : asked.path === 'displays:list' ? displays() : null
+
+  test.skipIf(screenless)(
+    'asks, as this machine, for an invite that signs the person in, prints the address that carries it and, for an agent, opens it',
+    async () => {
+      const m = machine(true, true)
+      const opened = opener(m)
+      const b = await backend(m, inviting(['Ab3dEf6hIj9kLm2nOp5q']))
+      try {
+        // With a screen to open a browser on, which the test names whatever the machine it runs on has
+        const ran = await run(m, ['site'], { ...b.env, DISPLAY: ':0', ...AGENT })
+        const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
+        expect([ran.code, printed(ran).url, printed(ran).opened]).toEqual([0, url, true])
+        expect(printed(ran).tell).toContain(
+          'A tab of the browser on this computer has just been opened at this url, so tell them in that message that it has opened',
+        )
+        expect(b.asked.filter((x) => x.path === 'sessions:inviteOwner')).toEqual([{ path: 'sessions:inviteOwner', args: {} }])
+        expect(await waitFor(opened)).toBe(url)
+        // What is kept of it is when, and nothing of the address
+        const note = readFileSync(path.join(m.it, 'browser-opened.json'), 'utf8')
+        expect(Object.keys(JSON.parse(note))).toEqual(['at'])
+        expect(note).not.toContain('Ab3dEf6hIj9kLm2nOp5q')
+      } finally {
+        await b.close()
+      }
+    },
+  )
+
+  test.skipIf(screenless)('with `--no-open`, over SSH, and from a script that no agent runs, the address is printed and no browser is started', async () => {
     const m = machine(true, true)
-    const opened = opener(m)
-    const b = await backend(m, (asked) => (asked.path === 'sessions:inviteOwner' ? { code: 'Ab3dEf6hIj9kLm2nOp5q' } : null))
+    const opened = opener(m, true)
+    // Each asking is given an invite of its own, so that an address says which run it was printed by
+    const codes = ['Ab3dEf6hIj9kLm2nOp5q', 'Bc4eFg7iJk0lMn3oPq6r', 'Cd5fGh8jKl1mNo4pQr7s', 'De6gHi9kLm2nOp5qRs8t']
+    const b = await backend(m, inviting(codes))
     try {
-      // With a screen to open a browser on, which the test names whatever the machine it runs on has
-      const ran = await run(m, ['site'], { ...b.env, DISPLAY: ':0' })
-      expect([ran.code, printed(ran)]).toEqual([0, { url: `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q` }])
-      expect(b.asked).toEqual([{ path: 'sessions:inviteOwner', args: {} }])
-      expect(await waitFor(opened)).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`)
+      for (const [args, env, code] of [
+        [['site', '--no-open'], AGENT, 'Ab3dEf6hIj9kLm2nOp5q'],
+        [['site'], { ...AGENT, SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' }, 'Bc4eFg7iJk0lMn3oPq6r'],
+        [['site'], {}, 'Cd5fGh8jKl1mNo4pQr7s'],
+      ] as const) {
+        const ran = await run(m, [...args], { ...b.env, DISPLAY: ':0', ...env })
+        expect([ran.code, printed(ran).url, printed(ran).opened]).toEqual([0, `${SITE}/pair#${code}`, undefined])
+      }
+      expect(existsSync(path.join(m.it, 'browser-opened.json'))).toBe(false)
+      // A run that does start a browser comes after them. Once its address has been written
+      // down, one that any of the runs before it had started would have been written down too
+      expect((await run(m, ['site'], { ...b.env, DISPLAY: ':0', ...AGENT })).code).toBe(0)
+      const given = () => (existsSync(opened) ? readFileSync(opened, 'utf8') : '').split('\n').filter(Boolean)
+      for (let n = 0; n < 200 && !given().includes(`${SITE}/pair#De6gHi9kLm2nOp5qRs8t`); n++) await new Promise((r) => setTimeout(r, 50))
+      expect(given()).toEqual([`${SITE}/pair#De6gHi9kLm2nOp5qRs8t`])
     } finally {
       await b.close()
     }
   })
 
-  test('with `--no-open`, and over SSH, the address is printed and no browser is started', async () => {
-    const m = machine(true, true)
-    const opened = opener(m, true)
-    // Each asking is given an invite of its own, so that an address says which run it was printed by
-    const codes = ['Ab3dEf6hIj9kLm2nOp5q', 'Bc4eFg7iJk0lMn3oPq6r', 'Cd5fGh8jKl1mNo4pQr7s']
-    const b = await backend(m, () => ({ code: codes.shift() }))
-    try {
-      for (const [args, env, code] of [
-        [['site', '--no-open'], {}, 'Ab3dEf6hIj9kLm2nOp5q'],
-        [['site'], { SSH_CONNECTION: '10.0.0.1 50000 10.0.0.2 22' }, 'Bc4eFg7iJk0lMn3oPq6r'],
-      ] as const) {
-        const ran = await run(m, [...args], { ...b.env, DISPLAY: ':0', ...env })
-        expect([ran.code, printed(ran)]).toEqual([0, { url: `${SITE}/pair#${code}` }])
+  test.skipIf(screenless)(
+    'an agent that asks for the link again and again opens one tab in ten minutes, and none where a paired browser was seen lately',
+    async () => {
+      const m = machine(true, true)
+      const opened = path.join(m.home, 'opened')
+      // The stand-in the tests name for the system's opener, which writes down every address it is given, one to a line
+      const standIn = path.join(m.home, 'stand-in.mjs')
+      writeFileSync(standIn, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(opened)}, process.argv.slice(2).join(' ') + '\\n')\n`)
+      const env = { DISPLAY: ':0', ...AGENT, IT_BROWSER_OPENER: JSON.stringify([process.execPath, standIn]) }
+      const codes = ['Ab3dEf6hIj9kLm2nOp5q', 'Bc4eFg7iJk0lMn3oPq6r', 'Cd5fGh8jKl1mNo4pQr7s', 'De6gHi9kLm2nOp5qRs8t', 'Ef7hIj0lMn3oPq6rSt9u']
+      let displays: unknown = []
+      const b = await backend(
+        m,
+        inviting(codes, () => displays),
+      )
+      try {
+        const said: { opened?: boolean }[] = []
+        for (let n = 0; n < 3; n++) said.push(printed(await run(m, ['site'], { ...b.env, ...env })))
+        expect(said.map((one) => one.opened)).toEqual([true, undefined, undefined])
+        // The address is handed over as one word, and only the first run's
+        expect(await waitFor(opened)).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
+        // Ten minutes on, a paired browser seen a minute ago is open to It already, and none is opened
+        writeFileSync(path.join(m.it, 'browser-opened.json'), JSON.stringify({ at: Date.now() - 11 * 60_000 }))
+        displays = [{ id: 'd1', name: 'Firefox on Linux', paired: true, lastSeenAt: Date.now() - 60_000 }]
+        expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
+        // Nor where It could not say which displays there are
+        displays = null
+        expect(printed(await run(m, ['site'], { ...b.env, ...env })).opened).toBeUndefined()
+        expect(readFileSync(opened, 'utf8')).toBe(`${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q\n`)
+      } finally {
+        await b.close()
       }
-      // A run that does start a browser comes after them. Once its address has been written
-      // down, one that either of the runs before it had started would have been written down too
-      expect((await run(m, ['site'], { ...b.env, DISPLAY: ':0' })).code).toBe(0)
-      const given = () => (existsSync(opened) ? readFileSync(opened, 'utf8') : '').split('\n').filter(Boolean)
-      for (let n = 0; n < 200 && !given().includes(`${SITE}/pair#Cd5fGh8jKl1mNo4pQr7s`); n++) await new Promise((r) => setTimeout(r, 50))
-      expect(given()).toEqual([`${SITE}/pair#Cd5fGh8jKl1mNo4pQr7s`])
-    } finally {
-      await b.close()
-    }
-  })
+    },
+  )
+
+  test.skipIf(screenless)(
+    'an OpenCode that has not loaded It’s add-on, which marks no command, is known by the process above and opens a tab as any agent does',
+    async () => {
+      const m = machine(true, true)
+      const opened = path.join(m.home, 'opened')
+      const standIn = path.join(m.home, 'stand-in.mjs')
+      writeFileSync(standIn, `import { appendFileSync } from 'node:fs'\nappendFileSync(${JSON.stringify(opened)}, process.argv.slice(2).join(' ') + '\\n')\n`)
+      // OpenCode as an install leaves it, a script run by Node from a folder called bin, which runs the command its agent was given and nothing else
+      const launcher = path.join(m.home, 'opencode-ai', 'bin', 'opencode')
+      mkdirSync(path.dirname(launcher), { recursive: true })
+      writeFileSync(
+        launcher,
+        "const { spawnSync } = require('node:child_process')\nconst r = spawnSync(process.execPath, process.argv.slice(2), { stdio: 'inherit' })\nprocess.exit(r.status ?? 1)\n",
+      )
+      const b = await backend(m, inviting(['Ab3dEf6hIj9kLm2nOp5q']))
+      try {
+        const env = {
+          PATH: m.bin,
+          HOME: m.home,
+          IT_HOME: m.it,
+          IT_TELEMETRY_URL: 'http://127.0.0.1:9/usage',
+          ...b.env,
+          DISPLAY: ':0',
+          IT_BROWSER_OPENER: JSON.stringify([process.execPath, standIn]),
+        }
+        const out = await new Promise<string>((resolve, reject) =>
+          execFile(process.execPath, [launcher, program, 'site'], { cwd: m.home, env, timeout: 60_000 }, (err, stdout) =>
+            err ? reject(err) : resolve(String(stdout)),
+          ),
+        )
+        const said = JSON.parse(out)
+        const url = `${SITE}/pair#Ab3dEf6hIj9kLm2nOp5q`
+        expect([said.url, said.opened]).toEqual([url, true])
+        expect(said.tell).toContain('A tab of the browser on this computer has just been opened at this url')
+        expect(said.tell).toContain('run `it site` again for a new one')
+        expect(await waitFor(opened)).toBe(`${url}\n`)
+      } finally {
+        await b.close()
+      }
+    },
+  )
 
   test('an answer that is no invite is put in no address and opened nowhere', async () => {
     const m = machine(true, true)
@@ -7153,7 +7260,7 @@ describe.skipIf(process.platform === 'win32')('a second machine', () => {
     // An agent that set an app up is told what follows setup, and how to read the guide whole: it may have been given only a summary of it.
     // What is left for the person to do in the app it connected is in that step, word for word
     expect(printed(one.ran).next).toBe(AFTER_SETUP_TELLING(`this, word for word: “${PI_NOTE}”`))
-    expect(AFTER_SETUP).toContain('`it site --no-open`')
+    expect(AFTER_SETUP).toContain('run `it site`, which opens that page in a browser on this computer where it can')
     expect(AFTER_SETUP).toContain('run `it tour` and do what it prints')
     expect(AFTER_SETUP).toContain('`curl -fsSL https://itcan.do/install.md`')
     // Where nothing was set up, nothing follows
@@ -7304,7 +7411,7 @@ describe.skipIf(process.platform === 'win32')('a machine that joined an It on an
           url: `${b.url}/p/plan`,
           tell: TELL,
           shownOn: [],
-          hint: `The page is published and not shown on any display. No display is paired yet, so there is nowhere to show it. Run \`it site\` to open ${b.url} in a browser on this machine and pair that browser. Other displays are added from there. Then run \`it open plan\` to show it.`,
+          hint: `The page is published and not shown on any display. No display is paired yet, so there is nowhere to show it. If you are an agent, run \`it site\` yourself: it opens ${b.url} in a browser on this machine where it can and pairs that browser, and prints the link to give the user. Other displays are added from there. Then run \`it open plan\` to show it.`,
         },
       ])
       expect(b.uploads).toEqual([{ path: '/upload/u/index.html', bytes: 9 }])
@@ -7944,7 +8051,7 @@ else { console.error('the stand-in does not know ' + said); process.exit(2) }
         'Quit Codex and start it again now, then choose “Trust all and continue” when it asks to review hooks. Until then, Codex may ask you to approve every `it` command I run, and It’s hooks don’t run. In a terminal, `codex resume --last` brings this chat back. Once Codex is back, say “Give me the It tour.”'
       // Starting Codex again ends the agent's turn, so the tour is left until it is back
       expect(said.next).toContain(
-        `Write the person one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${note}” Then end your turn, and do not run \`it tour\` yet`,
+        `Run \`it site\`, which opens It in a browser on this computer where it can, and write the person one message that gives them the link it prints and tells them this, word for word: “${note}” Then end your turn, and do not run \`it tour\` yet`,
       )
       expect(said.tell).toBe(`Tell the person this in your next message, word for word: “${note}”`)
       expect(Object.keys(said).pop()).toBe('tell')
@@ -8801,7 +8908,7 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     const line = reloadLine('2.1.321')
     // The words are in the step that comes next, and not in a condition
     expect(said.next).toContain(
-      `write them one message that gives them the link that \`it site --no-open\` prints, to open on this computer, and tells them this, word for word: “${line}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`,
+      `write them one message that gives them the link it prints and tells them this, word for word: “${line}” What showing that page printed under \`arrives\` says whether to end your turn then or to wait.`,
     )
     expect(said.next).not.toContain('Where setup said')
     // And they are the last thing it prints, addressed to the agent
