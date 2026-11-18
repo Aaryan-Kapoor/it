@@ -2,13 +2,13 @@
 // it was asked (#404): to a person in words, with what the program printed, and to its log in a
 // code and a number. The questions put to Windows about the service's task are asked here through
 // the program's own functions, with a stand-in for PowerShell that fails in each way.
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { helped } from './src/serve/backend'
 import { endedAs, failure, notStarted } from './src/serve/ended'
-import { install, installedHere, installedHereOr, status } from './src/service'
+import { install, installedHere, installedHereOr, restartWay, status, windowsLauncher } from './src/service'
 
 /** What stands in for PowerShell: what `spawnSync` gives of it, for as long as a test says so, and how often it was started. */
 const stand = vi.hoisted(() => ({ powershell: undefined as (() => unknown) | undefined, started: 0 }))
@@ -72,7 +72,11 @@ describe('what became of the helper that asks a program on Windows to stop', () 
 })
 
 describe('a question to Windows about the service’s task that PowerShell does not answer', () => {
-  const before = { home: process.env.IT_HOME, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+  const before = {
+    home: process.env.IT_HOME,
+    argv: process.argv,
+    platform: Object.getOwnPropertyDescriptor(process, 'platform')!,
+  }
   let folder: string
   beforeEach(() => {
     folder = mkdtempSync(path.join(os.tmpdir(), 'it-asked-'))
@@ -83,6 +87,7 @@ describe('a question to Windows about the service’s task that PowerShell does 
   afterEach(() => {
     stand.powershell = undefined
     Object.defineProperty(process, 'platform', before.platform)
+    process.argv = before.argv
     if (before.home === undefined) delete process.env.IT_HOME
     else process.env.IT_HOME = before.home
     rmSync(folder, { recursive: true, force: true })
@@ -122,5 +127,23 @@ describe('a question to Windows about the service’s task that PowerShell does 
     expect(now.note).toMatch(/^Windows could not be asked about this account's scheduled tasks: PowerShell /)
     // Nothing was written for a task that could not be read
     expect(existsSync(path.join(process.env.IT_HOME!, 'bin', 'it-service.cmd'))).toBe(false)
+  })
+
+  test.each(ways)('a service its launcher started comes back by its launcher after an upgrade where PowerShell %s', (_how, powershell) => {
+    const launcher = path.join(process.env.IT_HOME!, 'bin', 'it-service.cmd')
+    mkdirSync(path.dirname(launcher), { recursive: true })
+    writeFileSync(launcher, windowsLauncher(['C:\\it\\bin\\it.exe', 'serve', '--supervised'], { IT_HOME: 'C:\\it' }))
+    stand.powershell = powershell
+    process.argv = [process.execPath, 'it.mjs', 'serve', '--supervised']
+    // The question failed, which does not say that a person started It by hand
+    expect(restartWay()).toBe('launcher')
+    // One a person did start by hand is theirs to start again, and Windows is not asked at all
+    stand.started = 0
+    process.argv = [process.execPath, 'it.mjs', 'serve']
+    expect([restartWay(), stand.started]).toEqual(['by hand', 0])
+    // And a launcher that does not start the program again is not counted on to
+    process.argv = [process.execPath, 'it.mjs', 'serve', '--supervised']
+    writeFileSync(launcher, '@echo off\r\n"C:\\it\\bin\\it.exe" serve --supervised\r\n')
+    expect(restartWay()).toBe('by hand')
   })
 })

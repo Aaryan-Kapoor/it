@@ -81,7 +81,9 @@ export const RESTART_CODE = 75
  * setup` writes it again.
  */
 export function restartWay(): 'setup' | 'launcher' | 'by hand' {
-  if (!supervised() || !installedHereOr(false)) return 'by hand'
+  // Where Windows cannot be asked whose the task is, the launcher this service was started by is
+  // what there is to go by: a question that failed does not say that a person started It by hand
+  if (!supervised() || !installedHereOr(true)) return 'by hand'
   if (process.platform !== 'win32') return 'setup'
   return launcherStartsAgain(readText(windowsLauncherFile())) ? 'launcher' : 'by hand'
 }
