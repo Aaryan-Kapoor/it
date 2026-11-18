@@ -13,9 +13,11 @@
 # shell reads when it starts, so that the program's folder is on your PATH. For zsh that is
 # the .zshrc that a new zsh reads, which the installed program asks zsh for. For bash it is
 # .bashrc and whichever of .bash_profile, .bash_login and .profile a login shell reads. For fish it is
-# $XDG_CONFIG_HOME/fish/conf.d/it.fish, or ~/.config/fish/conf.d/it.fish. For another shell
-# it is .profile. Each of those is given a blank line, a comment and one line, once, and is made if
-# it is not there.
+# $XDG_CONFIG_HOME/fish/conf.d/it.fish, or ~/.config/fish/conf.d/it.fish. For sh, dash, ash,
+# ksh, ksh93, mksh, oksh and posh it is .profile. Each of those is given a blank line, a comment
+# and one line, once, and is made if it is not there. For any other shell the line goes in
+# .profile too, which that shell may not read, and the script says that the folder is then
+# yours to add to the PATH in the file your shell does read.
 #
 # To join an It that runs on another computer, give it the command that It's site shows under
 # Machines, Add a machine:
@@ -616,6 +618,20 @@ if [ "$(basename -- "${SHELL:-sh}")" = zsh ] && [ -z "${IT_INSTALL_NO_PATH:-}" ]
     zsh_dir=""
   fi
 fi
+# sh and what stands for it, the Almquist shells and the Korn shells read .profile when they
+# start as a login shell, as the manual of each says. Any other shell but bash, zsh and fish is
+# one this script does not know: csh and tcsh read .login and .cshrc, yash reads .yash_profile,
+# and nushell, elvish and xonsh read files of their own, in words of their own. For such a shell
+# the line still goes in .profile, which the session of a desktop may read at login whatever the
+# shell is, and the person is told that their shell may not read it, with the folder to add
+# and no line: the line is written as sh reads it. The installed program has the same list.
+shell_name="$(basename -- "${SHELL:-sh}")"
+unknown=0
+case "${shell_name}" in
+  zsh | bash | fish) : ;;
+  sh | dash | ash | ksh | ksh93 | mksh | oksh | posh) : ;;
+  *) unknown=1 ;;
+esac
 # Calls $1 with each file this person's shell reads when it starts, and with what the file is
 # called when saying what was done
 each_profile() {
@@ -670,9 +686,21 @@ if [ -z "${IT_INSTALL_NO_PATH:-}" ] && { [ "${on_path}" = 0 ] || [ "${named}" = 
       *) line="export PATH=$(quoted "${DIR}"):\"\$PATH\"" ;;
     esac
     each_profile add_line
+    if [ "${unknown}" = 1 ]; then
+      # No new terminal is promised the folder, and no line is offered that the shell may not read
+      case "${shell_name}" in
+        *[!A-Za-z0-9._+-]*) maybe="Your shell" ;;
+        *) maybe="Your shell, ${shell_name}," ;;
+      esac
+      maybe="${maybe} is not one It knows, and it may not read that file. If a new terminal does not find \`it\`, add ${DIR} to the PATH in the file your shell reads when it starts."
+      if [ -n "${refused}" ]; then maybe="Your PATH could not be changed. Add ${DIR} to it yourself, in the file your shell reads when it starts."
+      elif [ -n "${changed}" ]; then maybe="~/.profile was given the line that puts ${DIR} on the PATH. ${maybe}"
+      else maybe="~/.profile has the line that puts ${DIR} on the PATH. ${maybe}"
+      fi
+      if [ "${led}" = 1 ]; then mind "${maybe}"; else say "${maybe}"; fi
     # Where one file was changed and another could not be, a new terminal has the folder on
     # its PATH only if it reads the one that was changed, and so none is promised
-    if [ "${led}" = 1 ]; then
+    elif [ "${led}" = 1 ]; then
       if [ -n "${changed}" ] && [ -n "${refused}" ]; then mind "On your PATH in${changed}, but${refused} could not be changed. Add this line there:  ${line}"
       elif [ -n "${changed}" ]; then did "On your PATH from the next terminal (${changed# })"
       elif [ -n "${refused}" ]; then mind "Your PATH could not be changed. Add ${DIR} to it yourself:  ${line}"
