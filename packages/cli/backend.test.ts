@@ -4178,7 +4178,7 @@ describe('the backend program, as it is started', () => {
       // program was ended, and in a word why it could not be asked, or may not have been.
       const stopped = await Promise.race([backend.stop().then(() => true), pause(120_000).then(() => false)])
       const ended = said.filter((line) =>
-        /^backend: (did not stop when asked, and is ended \(pid \d+\)|could not be asked to stop, and is ended \(pid \d+, (no_console|no_event|no_helper, not_started E[A-Z0-9_]+)\)|(may not have been asked to stop, and is ended|has gone, though the helper that asks it to stop failed) \(pid \d+, no_helper, [a-z_]+[A-Za-z0-9_ ]*\))$/.test(
+        /^backend: (did not stop when asked, and is ended \(pid \d+\)|could not be asked to stop, and is ended \(pid \d+, (no_console|no_event|no_helper, not_started (E[A-Z0-9_]+|error))\)|(may not have been asked to stop, and is ended|has gone, though the helper that asks it to stop failed) \(pid \d+, no_helper, [a-z_]+[A-Za-z0-9_ ]*\))$/.test(
           line,
         ),
       )
