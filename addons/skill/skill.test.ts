@@ -277,7 +277,12 @@ describe('the agent skill', () => {
     expect(more.page).toContain('write the JSON with no space outside its strings')
     expect(more.page).toContain('put every option before the JSON')
     expect(more.page).toContain('never as `--state=\'{"a":1}\'`')
+    expect(more.page).toContain(
+      'The only JSON that can be read as something else has a first key that is empty or begins with a space, `}` or `\\"`, or is given to `--state` and has `--state` inside it',
+    )
     expect(more.page).toContain('`\'"true"\'` is set as the boolean')
+    expect(more.page).toContain('text with a `"` in it arrives changed')
+    expect(more.page).toContain('text with no `"` in it and no `\\` at its end')
     expect(more.page).toContain('anything else with `it patch`')
     expect(more.page).toContain('`\\u2014`')
     expect(more.page).toContain('`it.exe patch board --file ')

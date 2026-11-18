@@ -259,6 +259,101 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
       value: { say: 'she said "hi"', who: { name: '', n: 1 } },
     })
   })
+  test('what the skill says can be changed without a word is changed, and nothing else is', () => {
+    // JSON whose first key is empty, or begins with a space, } or \", may be JSON as the runtime hands it on too, with nothing to show that it was spoilt
+    expect(outcome(['patch', 'board', String.raw`{"\"a\"":"\"b\""}`])).toEqual({ value: { a: 'b' } })
+    expect(outcome(['patch', 'board', String.raw`{" \"1\"":[]}`])).toEqual({ value: { 1: [] } })
+    expect(outcome(['tour', 'answer', 'k57abc', String.raw`{"": "\":1"}`])).toEqual({ value: { ': ': 1 } })
+    expect(outcome(['patch', 'board', '{"} --if-revision 3": 1}'])).toEqual({ value: {} })
+    // And JSON given to --state with --state inside one of its strings, which the runtime hands on as a --state of its own, the last one given
+    expect(outcome(['create', 'Plan', '--state', String.raw`{"note": "then --state {\"a\":1} --agent ", "n": 1}`])).toEqual({ value: { a: 1 } })
+    // The same JSON with a first key of plain letters, or given to `it patch`, is read as written or refused
+    expect(outcome(['patch', 'board', String.raw`{"k":"\"b\""}`])).toEqual({ value: { k: '"b"' } })
+    expect(outcome(['patch', 'board', String.raw`{"note": "then --state {\"a\":1} --agent ", "n": 1}`])).toHaveProperty('refused')
+    // `it set`: an object or array with \" in it is set as other JSON, text with a double quote in it arrives changed, and text that ends in a backslash takes the quote PowerShell closed it with
+    expect(outcome(['set', 'board', 'v', String.raw`["\"a\""]`])).toEqual({ value: ['a'] })
+    expect(outcome(['set', 'board', 'v', String.raw`{"\"a\"":1}`])).toEqual({ value: { a: 1 } })
+    expect(outcome(['set', 'board', 'note', 'she said "hi"'])).toEqual({ value: 'she said hi' })
+    expect(outcome(['set', 'board', 'note', 'x "" y'])).toEqual({ value: 'x " y' })
+    expect(outcome(['set', 'board', 'dir', 'C:\\Program Files\\'])).toEqual({ value: 'C:\\Program Files"' })
+    // Text with no double quote in it and no backslash at its end is set as it is written
+    expect(outcome(['set', 'board', 'dir', 'D:\\My Files\\work'])).toEqual({ value: 'D:\\My Files\\work' })
+    expect(outcome(['set', 'board', 'note', 'It’s done - 3 of 7, at D:/work'])).toEqual({ value: 'It’s done - 3 of 7, at D:/work' })
+  })
+  test('across JSON of every awkward kind, nothing is read as something else but the JSON the skill names', () => {
+    // The same JSON in every run, from a generator with a fixed seed: its strings are made of what a shell, the runtime or a command could take for its own
+    let seed = 20261118
+    const below = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) % n
+    }
+    const PIECES = [
+      'a',
+      'b c',
+      ' ',
+      '-',
+      ' - ',
+      '--x',
+      ' --replace ',
+      '"',
+      '\\',
+      '\\\\',
+      '{',
+      '}',
+      '[',
+      ']',
+      ',',
+      ':',
+      '1',
+      'true',
+      "'",
+      ' -1',
+      'C:\\dir\\',
+      '',
+    ]
+    // And what a command would take for an option of its own, where the runtime hands it on as a word
+    PIECES.push(' --state {"a":1}', ' --state {}', ' --state=', ' --if-revision 3', ' --agent x', ' --open', ' --no-wait', ' --file x')
+    const words = () => Array.from({ length: below(4) }, () => PIECES[below(PIECES.length)]).join('')
+    const key = (i: number) => [`k${i}`, `k${i}`, words(), `"${words()}"`][below(4)]!
+    const value = (depth: number): unknown => {
+      const kind = below(depth > 1 ? 5 : 7)
+      if (kind < 3) return words()
+      if (kind === 3) return below(100) - 50
+      if (kind === 4) return [true, false, null][below(3)]
+      if (kind === 5) return object(depth + 1)
+      return Array.from({ length: below(3) }, () => value(depth + 1))
+    }
+    const object = (depth: number) => Object.fromEntries(Array.from({ length: 1 + below(3) }, (_, i) => [key(i), value(depth)]))
+    let read = 0
+    let refused = 0
+    let changed = 0
+    for (let n = 0; n < 400; n++) {
+      const written = object(0)
+      const first = Object.keys(written)[0]!
+      const named = first === '' || first.startsWith(' ') || first.startsWith('}') || first.startsWith('"')
+      for (const json of [JSON.stringify(written), JSON.stringify(written).replaceAll('":', '": ').replaceAll(',"', ', "'), JSON.stringify(written, null, 2)])
+        for (const args of [
+          ['patch', 'board', json],
+          ['patch', 'board', '--if-revision', '7', json],
+          ['patch', 'board', json, '--replace'],
+          ['create', 'Plan', '--html', 'hi', '--state', json, '--open'],
+          ['create', 'Plan', `--state=${json}`],
+          ['tour', 'answer', 'k57abc', json, '--no-wait'],
+        ]) {
+          const done = outcome(args)
+          if ('refused' in done) refused++
+          else if (JSON.stringify(done.value) === JSON.stringify(JSON.parse(json))) read++
+          else {
+            changed++
+            expect([args, named || (args[0] === 'create' && json.includes('--state'))]).toEqual([args, true])
+          }
+        }
+    }
+    // Each of the three is met, so that the test holds what it says
+    expect([read > 1000, refused > 1000, changed > 0]).toEqual([true, true, true])
+  })
   test('a line with no spoilt word is never read', () => {
     expect(wholeJson(`${IT} patch board {"a":1}`, ['patch', 'board', '{"a":1}'])).toBeNull()
     expect(wholeJson(`${IT} status`, ['status'])).toBeNull()
