@@ -135,6 +135,7 @@ import { keepToOwner } from './owner'
 import { conversationFolder, gather, noteConversation, publish, unlinkedNote } from './publish'
 import { alone, asAdmin, nothingLeft, standing, startBackend } from './serve/backend'
 import { HTTPS_NAME, noteHttps, noteNetwork, readConfig } from './serve/config'
+import { failure as endedSaying } from './serve/ended'
 import { begin } from './serve/firstrun'
 import { serve } from './serve/index'
 import { onTheInternet, reachable } from './serve/network'
@@ -1612,8 +1613,9 @@ async function pathLine(): Promise<string | undefined> {
  * then its line in the shell's profile, and last its folder, with everything it kept. Asked
  * first, in words that say what goes: the pages go with the folder, and nothing brings them back.
  */
-/** PowerShell, given one thing to run, exactly as it is written. What it printed, or nothing where it could not be run or ended as a failure. */
-function inPowerShell(script: string): string | undefined {
+/** PowerShell, given one thing to run, exactly as it is written. What it printed, or why it printed nothing that can be gone by: that it could not be run, or how it ended. */
+function inPowerShell(script: string): { said: string } | { why: string } {
+  const began = Date.now()
   try {
     const ran = runSync(
       'powershell.exe',
@@ -1624,15 +1626,17 @@ function inPowerShell(script: string): string | undefined {
         timeout: 30_000,
       },
     )
-    return ran.status === 0 ? ran.stdout.trim() : undefined
-  } catch {
-    return undefined
+    if (ran.status === 0 && !ran.error) return { said: ran.stdout.trim() }
+    return { why: endedSaying('PowerShell', { ...ran, out: `${ran.stdout ?? ''}${ran.stderr ?? ''}`.trim() }, Date.now() - began, 30_000) }
+  } catch (err) {
+    return { why: `PowerShell could not be started (${(err as NodeJS.ErrnoException).code ?? 'error'})` }
   }
 }
-/** Takes a folder off the PATH Windows keeps for this account. Whether it was on it and is off now, was not on it, or could not be taken off. */
-function offWindowsPath(folder: string): 'off' | 'absent' | undefined {
-  const said = inPowerShell(windowsPathRemoval(folder))
-  return said === 'off' || said === 'absent' ? said : undefined
+/** Takes a folder off the PATH Windows keeps for this account. Whether it was on it and is off now, or was not on it, or else why it could not be taken off. */
+function offWindowsPath(folder: string): 'off' | 'absent' | { why: string } {
+  const asked = inPowerShell(windowsPathRemoval(folder))
+  if ('why' in asked) return asked
+  return asked.said === 'off' || asked.said === 'absent' ? asked.said : { why: 'PowerShell ended well without saying whether the folder was taken off' }
 }
 /** Whether this command has taken It off the machine. Nothing is counted after that: the folder a count is kept in is gone, or holds only what taking an add-on out later needs. */
 let takenOff = false
@@ -1748,7 +1752,10 @@ async function uninstall(a: Args) {
           if (process.platform === 'win32') {
             const taken = offWindowsPath(bin)
             if (taken === 'off') say(`${bin} is off your PATH.`)
-            else if (taken === undefined) left.push(`${bin} is still on your PATH. Take it off under “Edit environment variables for your account”.`)
+            else if (taken !== 'absent')
+              left.push(
+                `${bin} may still be on your PATH: Windows could not be asked to take it off (${taken.why}). Look under “Edit environment variables for your account”, and take it off there if it is.`,
+              )
           }
           // 4. What It's add-ons left in the apps' own folders that the apps do not clear away themselves
           crumbs(folder, say)
@@ -1853,7 +1860,10 @@ async function profileLines(bin: string, active = false, unresolved: () => void 
  * folder is on the PATH Windows keeps for the account.
  */
 async function onPathLater(bin: string): Promise<boolean> {
-  if (process.platform === 'win32') return inPowerShell(windowsPathHas(bin))?.trim() === 'on'
+  if (process.platform === 'win32') {
+    const asked = inPowerShell(windowsPathHas(bin))
+    return 'said' in asked && asked.said === 'on'
+  }
   for (const [file, line] of await profileLines(bin, true)) {
     try {
       if (readFileSync(file, 'utf8').split('\n').includes(line)) return true
