@@ -167,7 +167,7 @@ import {
   whyHeldBack,
 } from './setup'
 import { printEnv } from './shell-env'
-import { zshDirectory } from './shell-profile'
+import { shellKind, shellName, zshDirectory } from './shell-profile'
 import { GUIDE, NAMES, END as TOUR_END, TOUR_PREFIX, START as TOUR_START, STEPS as TOUR_STEPS, tourPage } from './tour'
 import { answerAction, dropPicture, dropPictures, keepPicture, pictureLeft, picturesFile, START_SLUG } from './tour-answer'
 import { inUnloadedOpenCode } from './unclaimed'
@@ -1570,12 +1570,26 @@ async function pathLine(): Promise<string | undefined> {
   const bin = inHome('bin')
   const same = (dir: string) =>
     process.platform === 'win32' ? path.resolve(dir).toLowerCase() === path.resolve(bin).toLowerCase() : path.resolve(dir) === path.resolve(bin)
-  if ((process.env.PATH ?? '').split(path.delimiter).some((dir) => dir !== '' && same(dir))) return undefined
+  // A shell It does not know: which file it reads when it starts, and how a PATH is written there
+  const unknown = process.platform !== 'win32' && shellKind() === 'unknown'
+  // The install script puts the folder on the PATH of the setup it starts, and says in
+  // IT_INSTALL_ON_PATH whether the terminal it was run in had it. Where that terminal had not,
+  // and the shell is one It does not know, the script could put it on the PATH of no new
+  // terminal either, and the PATH this program was started with says nothing of one.
+  const lent = unknown && process.env.IT_INSTALL_ON_PATH === '0'
+  if (!lent && (process.env.PATH ?? '').split(path.delimiter).some((dir) => dir !== '' && same(dir))) return undefined
   // Put there by the install script for every terminal opened from now on, it is only not on
   // the PATH this program was started with, as when an agent installs It and sets it up in
   // one conversation. Nothing is left for the person to do, and nothing is said.
   if (await onPathLater(bin)) return undefined
   if (process.platform === 'win32') return `Run this in PowerShell, then open a new terminal:\n\n  ${windowsPathCommand(bin)}`
+  // No line is offered for a shell It does not know: the one It has is written as sh reads it,
+  // and csh, nushell, elvish and xonsh each write a PATH in words of their own
+  if (unknown) {
+    const name = shellName()
+    const shell = /^[\w.+-]+$/.test(name) ? `your shell, ${name},` : 'your shell'
+    return `Add this folder to the PATH in the file ${shell} reads when it starts, then open a new terminal:\n\n  ${bin}`
+  }
   return `Add this line to the file your shell reads when it starts, then open a new terminal:\n\n  export PATH='${bin.replace(/'/g, `'\\''`)}':"$PATH"`
 }
 
@@ -1822,9 +1836,15 @@ function profileLine(bin: string, fish: boolean): string {
   return fish ? fishLine : posix
 }
 
-/** The files a shell reads when it starts, each with the line the install script writes into it to put a folder on the PATH. */
+/**
+ * The files a shell reads when it starts, each with the line the install script writes into it
+ * to put a folder on the PATH. With `active` they are the files the person's own shell reads,
+ * which is none for a shell It does not know: `.profile` is read by sh and the shells like it,
+ * and a line there says nothing of a terminal whose shell is csh or nushell. Without it they
+ * are every file the script may have written to, whatever the shell is now.
+ */
 async function profileLines(bin: string, active = false, unresolved: () => void = () => {}): Promise<Map<string, string>> {
-  const shell = path.basename(process.env.SHELL || 'sh')
+  const shell = shellKind()
   const zdot = shell === 'zsh' ? await zshDirectory() : undefined
   if (shell === 'zsh' && !zdot) unresolved()
   const home = os.homedir()
@@ -1837,9 +1857,9 @@ async function profileLines(bin: string, active = false, unresolved: () => void 
       ? zshFiles
       : shell === 'bash'
         ? ['.bashrc', login].map((name) => path.join(home, name))
-        : shell === 'fish'
-          ? []
-          : [path.join(home, '.profile')]
+        : shell === 'profile'
+          ? [path.join(home, '.profile')]
+          : []
     : [...zshFiles, ...['.bashrc', '.bash_profile', '.bash_login', '.profile'].map((name) => path.join(home, name))]
   const files = new Map(posixFiles.map((file) => [file, profileLine(bin, false)]))
   if (!active || shell === 'fish')
@@ -2492,8 +2512,9 @@ async function settingUpLed(a: Args, begunAlready = false) {
     } else flow.line(`${flow.bold('It is ready.')} No agent app is connected: \`it skill\` prints what to give any agent, and \`it setup\` connects one later.`)
     flow.line()
     // The terminal the install script ran in was open before `it` was on its PATH, and a person
-    // who types `it` there next is told that there is no such command
-    if (stays && process.env.IT_INSTALL_FLOW && process.env.IT_INSTALL_ON_PATH === '0') {
+    // who types `it` there next is told that there is no such command. One who was told above
+    // that the folder is theirs to add is promised no new terminal that has it.
+    if (stays && process.env.IT_INSTALL_FLOW && process.env.IT_INSTALL_ON_PATH === '0' && !add) {
       flow.line(flow.dim('To type `it` yourself, open a new terminal: this one was open before `it` was on your PATH.'))
       flow.line()
     }
