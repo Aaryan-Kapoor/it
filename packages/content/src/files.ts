@@ -182,7 +182,11 @@ const VOUCHED_MOST = 20_000
 /** A file that is arriving in parts: where what has arrived of it is written, and its checksum so far. */
 interface Arriving {
   temp: string
-  handle: FileHandle
+  /**
+   * The file that what has arrived is written to, once it is open. A file has its place among
+   * those arriving before its file is opened, so that no other is begun under its name meanwhile.
+   */
+  handle?: FileHandle
   hash: Hash
   received: number
   declared: Declared
@@ -509,12 +513,19 @@ export function createFiles(folder: string): Files {
   // The files arriving in parts, by version and path
   const arrivingParts = new Map<string, Arriving>()
   const partOf = (prefix: string, file: string) => `${prefix}\u0000${file}`
-  async function letGoOfPart(key: string): Promise<void> {
-    const p = arrivingParts.get(key)
-    if (!p) return
-    arrivingParts.delete(key)
-    await p.handle.close().catch(() => {})
+  /** Closes and removes what had arrived of a file that is out of the list of those arriving. */
+  async function discard(p: Arriving): Promise<void> {
+    await p.handle?.close().catch(() => {})
     await unlink(p.temp).catch(() => {})
+  }
+  /**
+   * Lets go of a file that was arriving in parts. It leaves the list at once, before anything is
+   * awaited, and only where the list still has that very file under the name: another may have
+   * been begun there since, and is not this one's to remove. Then what had arrived of it goes.
+   */
+  async function letGoOfPart(key: string, p: Arriving): Promise<void> {
+    if (arrivingParts.get(key) === p) arrivingParts.delete(key)
+    await discard(p)
   }
 
   return {
@@ -573,59 +584,89 @@ export function createFiles(folder: string): Files {
     async writePart(prefix, file, body, declared, part, allowed) {
       const key = partOf(prefix, file)
       const now = Date.now()
-      for (const [k, p] of arrivingParts) if (!p.busy && now - p.touched >= PART_IDLE_MS) await letGoOfPart(k)
-      let p = arrivingParts.get(key)
+      // Whether this part is taken, and the place its file has among those arriving, are settled
+      // here before anything is awaited. Two parts that come at the same moment are so told
+      // apart by which came first, and the second finds the first there already. Whatever makes
+      // room leaves the list in the same breath, and is closed and removed afterwards.
+      const going: Arriving[] = []
+      const leaves = (k: string, q: Arriving) => {
+        arrivingParts.delete(k)
+        going.push(q)
+      }
+      for (const [k, q] of arrivingParts) if (!q.busy && now - q.touched >= PART_IDLE_MS) leaves(k, q)
+      const p = arrivingParts.get(key)
+      let taking: Arriving | undefined
       // One part of a file at a time, in order: another is arriving at this moment, or this one
       // is not the one that comes next. Whoever sends it is told where the next begins
-      if (p?.busy) return 'out_of_order'
-      if (part.offset === 0) {
+      if (p?.busy) {
+        // Nothing is taken
+      } else if (part.offset === 0) {
         // A file that is begun again is begun afresh, and what had arrived of it goes
-        if (p) await letGoOfPart(key)
+        if (p) leaves(key, p)
         // So many files may be arriving in parts at once. Past that, the one that has waited
         // longest for its next part makes room, and is begun again when it comes
         if (arrivingParts.size >= PARTS_AT_ONCE) {
           const idlest = [...arrivingParts].filter(([, q]) => !q.busy).sort((a, b) => a[1].touched - b[1].touched)[0]
-          if (!idlest) return 'out_of_order'
-          await letGoOfPart(idlest[0])
+          if (idlest) leaves(...idlest)
         }
-        const temp = path.join(arriving, randomUUID())
-        p = { temp, handle: await open(temp, 'wx', 0o600), hash: createHash('sha256'), received: 0, declared, busy: false, touched: now }
-        arrivingParts.set(key, p)
-      } else if (!p || p.received !== part.offset || p.declared.size !== declared.size || p.declared.sha256 !== declared.sha256) return 'out_of_order'
-      const taking = p
-      taking.busy = true
+        if (arrivingParts.size < PARTS_AT_ONCE) {
+          taking = { temp: path.join(arriving, randomUUID()), hash: createHash('sha256'), received: 0, declared, busy: false, touched: now }
+          arrivingParts.set(key, taking)
+        }
+      } else if (p && p.received === part.offset && p.declared.size === declared.size && p.declared.sha256 === declared.sha256) taking = p
+      if (!taking) {
+        for (const q of going) await discard(q)
+        return 'out_of_order'
+      }
+      const mine = taking
+      mine.busy = true
+      /** Whether the list still has this file. Everything of a person's being deleted, or the service closing, lets go of one that is arriving. */
+      const held = () => arrivingParts.get(key) === mine
       try {
+        for (const q of going) await discard(q)
+        if (!mine.handle) {
+          if (!held()) return 'out_of_order'
+          mine.handle = await open(mine.temp, 'wx', 0o600)
+          // Let go of while its file was being opened: nothing else knows of the file that was
+          // made just now, so it is removed here
+          if (!held()) {
+            await discard(mine)
+            return 'out_of_order'
+          }
+        }
+        const handle = mine.handle
         // A part is taken whole or not at all: one that is cut off leaves the file as it was
         // before it, and may be sent again
         const bytes = await allOf(body, part.length)
         if (typeof bytes === 'string') return bytes
-        await writeAll(taking.handle, bytes, taking.received)
-        taking.hash.update(bytes)
-        taking.received += bytes.byteLength
-        taking.touched = Date.now()
-        if (taking.received < declared.size) return 'more'
+        await writeAll(handle, bytes, mine.received)
+        mine.hash.update(bytes)
+        mine.received += bytes.byteLength
+        mine.touched = Date.now()
+        if (mine.received < declared.size) return 'more'
         // The last part: the file is whole, and is put in place as one sent in one piece is
-        arrivingParts.delete(key)
-        await taking.handle.sync()
-        await taking.handle.close()
-        if (taking.hash.digest('hex') !== declared.sha256) {
-          await unlink(taking.temp).catch(() => {})
+        if (held()) arrivingParts.delete(key)
+        await handle.sync()
+        await handle.close()
+        if (mine.hash.digest('hex') !== declared.sha256) {
+          await unlink(mine.temp).catch(() => {})
           return 'bytes_differ'
         }
         const to = await folderFor(prefix, file)
         if (!to) {
-          await unlink(taking.temp).catch(() => {})
+          await unlink(mine.temp).catch(() => {})
           return 'no_folder'
         }
-        const placed = await settle(taking.temp, to, stillDeclared(prefix, file, declared, allowed))
+        const placed = await settle(mine.temp, to, stillDeclared(prefix, file, declared, allowed))
         if (placed === 'placed') await vouch(to, declared.sha256)
         return placed === 'placed' ? 'ok' : 'no_folder'
       } catch (err) {
-        // The disk's trouble: what had arrived of the file goes, and it is begun again
-        await letGoOfPart(key)
+        // The disk's trouble: what had arrived of the file goes, its name is free, and it is
+        // begun again
+        await letGoOfPart(key, mine)
         throw err
       } finally {
-        taking.busy = false
+        mine.busy = false
       }
     },
 
@@ -748,7 +789,9 @@ export function createFiles(folder: string): Files {
 
     async clear(prefix, most) {
       // What was arriving in parts under it goes first, and is not put in place
-      for (const key of [...arrivingParts.keys()]) if (key.startsWith(prefix)) await letGoOfPart(key)
+      const going = [...arrivingParts].filter(([key]) => key.startsWith(prefix))
+      for (const [key] of going) arrivingParts.delete(key)
+      for (const [, p] of going) await discard(p)
       const left = { files: most }
       // What was declared goes first: from that moment no upload under the prefix is accepted,
       // and one that is arriving now removes what it wrote
@@ -757,7 +800,7 @@ export function createFiles(folder: string): Files {
     },
 
     close() {
-      for (const p of arrivingParts.values()) void p.handle.close().catch(() => {})
+      for (const p of arrivingParts.values()) void p.handle?.close().catch(() => {})
       arrivingParts.clear()
       OPEN_HERE.delete(own)
       rmSync(arriving, { recursive: true, force: true })

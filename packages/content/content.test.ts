@@ -2573,6 +2573,102 @@ describe('large files', () => {
     expect((await control('verify', { prefix, files: [entry('film.webm', small)] })).json()).toEqual({ ok: true, missing: [] })
   })
 
+  /**
+   * Holds the service up at the next file it opens to write where parts arrive, and gives a
+   * promise that it has got that far and what lets it go on, or makes that one opening fail as a
+   * full disk does. Opened again afterwards, a file is opened as usual.
+   */
+  async function atTheNextArrival(on: { settings: ContentSettings }, fails = false) {
+    const real = (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).open
+    const tmp = path.join(on.settings.dir, 'tmp') + path.sep
+    let arrive!: () => void
+    let goOn!: () => void
+    const reached = new Promise<void>((resolve) => {
+      arrive = resolve
+    })
+    const waiting = new Promise<void>((resolve) => {
+      goOn = resolve
+    })
+    let met = false
+    vi.mocked(fsp.open).mockImplementation((async (...given: Parameters<typeof real>) => {
+      if (met || given[1] !== 'wx' || !String(given[0]).startsWith(tmp)) return real(...given)
+      met = true
+      arrive()
+      if (fails) throw Object.assign(new Error('a private word about the disk'), { code: 'ENOSPC' })
+      await waiting
+      return real(...given)
+    }) as typeof real)
+    return { reached, goOn, usual: () => vi.mocked(fsp.open).mockImplementation(real) }
+  }
+
+  test('two first parts of one file that come at the same moment begin one file between them, and nothing of the other is left where parts arrive', async () => {
+    const own = make()
+    const on = own.content
+    const tmp = path.join(own.settings.dir, 'tmp')
+    const prefix = filmPrefix('twice')
+    const small = randomBytes(30)
+    const files = [entry('index.html', 'x'), entry('film.webm', small)]
+    await control('stage', { prefix, files }, undefined, { on })
+    const held = await atTheNextArrival(own)
+    try {
+      // The first has its place and is opening its file when the second comes
+      const first = part(prefix, small, 0, 10, { on })
+      await held.reached
+      const second = await part(prefix, small, 0, 10, { on })
+      expect([second.status, second.json()]).toEqual([409, { error: 'out_of_order', next: 0 }])
+      held.goOn()
+      const begun = await first
+      expect([begun.status, begun.json()]).toEqual([200, { ok: true, next: 10 }])
+      // One file is arriving, and it is the one the rest is added to
+      expect(arrivingUnder(tmp)).toHaveLength(1)
+      expect((await part(prefix, small, 10, 20, { on })).json()).toEqual({ ok: true })
+      expect(arrivingUnder(tmp)).toEqual([])
+      expect((await control('verify', { prefix, files: files.slice(1) }, undefined, { on })).json()).toEqual({ ok: true, missing: [] })
+    } finally {
+      held.usual()
+      await on.close()
+    }
+  })
+
+  test('a first part whose file cannot be opened leaves the file free to be begun again, and one let go of while its file is opened leaves nothing behind', async () => {
+    const own = make()
+    const on = own.content
+    const tmp = path.join(own.settings.dir, 'tmp')
+    const prefix = filmPrefix('unopened')
+    const small = randomBytes(30)
+    const files = [entry('index.html', 'x'), entry('film.webm', small)]
+    await control('stage', { prefix, files }, undefined, { on })
+    const failing = await atTheNextArrival(own, true)
+    try {
+      expect((await part(prefix, small, 0, 10, { on })).status).toBe(503)
+      expect(arrivingUnder(tmp)).toEqual([])
+      // Sent again, it is taken: the place it had is not held by the part that failed
+      expect((await part(prefix, small, 0, 10, { on })).json()).toEqual({ ok: true, next: 10 })
+      expect((await part(prefix, small, 10, 20, { on })).json()).toEqual({ ok: true })
+      expect(arrivingUnder(tmp)).toEqual([])
+    } finally {
+      failing.usual()
+    }
+    // The version is deleted while the first part of another file of it is opening its file
+    const again = filmPrefix('unopened-deleted')
+    await control('stage', { prefix: again, files }, undefined, { on })
+    const held = await atTheNextArrival(own)
+    try {
+      const first = part(again, small, 0, 10, { on })
+      await held.reached
+      expect((await control('delete', { prefix: again }, undefined, { on })).status).toBe(200)
+      held.goOn()
+      const answered = await first
+      expect([answered.status, answered.json()]).toEqual([409, { error: 'out_of_order', next: 0 }])
+      // The file that was made after the deletion had looked is removed by the part that made it
+      expect(arrivingUnder(tmp)).toEqual([])
+      expect((await part(again, small, 0, 10, { on })).status).toBe(403)
+    } finally {
+      held.usual()
+      await on.close()
+    }
+  })
+
   test('a file sent in parts whose bytes are not the ones declared is not kept, and parts are held to the file and to what a request carries', async () => {
     const prefix = filmPrefix('wrong')
     const right = randomBytes(40)
