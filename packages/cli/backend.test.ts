@@ -478,6 +478,120 @@ describe.skipIf(!program || windows)('the database of a folder', () => {
     expect(copies()).toEqual([`before-${RELEASE}-functions-${FUNCTIONS_HASH.slice(0, 12)}`])
   }, 180_000)
 
+  test('a field of what is noted that is there, and is not of the kind It writes there, is not passed over as one that is absent: no program is started on the database, and nothing is written over the note', async () => {
+    await peopled()
+    const config = readConfig()!
+    const whole = note()
+    const malformed: Record<string, unknown>[] = [
+      // Read as it was meant, this names a newer It, which this one is not started after. With one of its functions written as no hash is, it is not known what it names
+      { unsettled: { it: '9.9.9', functions: [123] } },
+      { unsettled: { it: '9.9.9', functions: 'abc' } },
+      { unsettled: { it: '9.9.9' } },
+      { unsettled: { it: 999, functions: ['abc'] } },
+      { unsettled: { functions: ['abc'] } },
+      { unsettled: ['9.9.9', 'abc'] },
+      { unsettled: 'abc' },
+      { unsettled: null },
+      { behind: { functions: 'abc', why: 'refused' } },
+      { behind: { functions: 'abc', why: 'tired', at: 1 } },
+      { behind: { functions: 5, why: 'refused', at: 1 } },
+      { behind: { functions: 'abc', why: 'no_copy', at: '1' } },
+      { behind: ['abc', 'refused', 1] },
+      { behind: true },
+      { made: '1794996084321' },
+      { release: 20260928 },
+      { it: null },
+      { it: ['9.9.9'] },
+      { functions: 0 },
+      { functionsOf: { version: '9.9.9' } },
+      { load: false },
+      { port: '4700' },
+      { loading: 7 },
+    ]
+    for (const change of malformed) {
+      writeFileSync(inBackend('data.json'), JSON.stringify({ ...whole, ...change }))
+      const before = everything()
+      said = []
+      const refused = await startBackend(config, say).then(
+        async (backend) => {
+          await backend.stop()
+          return undefined
+        },
+        (err) => err as Problem,
+      )
+      expect([change, refused?.code, refused?.message]).toEqual([
+        change,
+        'record_unread',
+        `What It notes of its database, in ${inBackend('data.json')}, is not as It wrote it.`,
+      ])
+      expect(refused?.hint).toMatch(/^It says there which It and which backend program the database is at, .* Put the file back as it was\./)
+      expect(said).toEqual([])
+      expect(everything()).toEqual(before)
+      expect(copies()).toEqual([])
+      expect(existsSync(inBackend('lock'))).toBe(false)
+      expect(programsOn(folder)).toEqual([])
+      expect(standing()).toBeNull()
+    }
+    // What a newer It notes beside these, under a name this one does not know, is left unread, and the rest is gone by
+    writeFileSync(inBackend('data.json'), JSON.stringify({ ...whole, 'what a newer It notes': { of: ['something', 1] } }))
+    expect(standing()).toEqual({ release: RELEASE, it: VERSION, functions: FUNCTIONS_HASH, functionsOf: VERSION })
+  }, 180_000)
+
+  test('what a release noted of the database is read as that release wrote it: the oldest that noted anything, and 0.1.45', async () => {
+    const { id } = await peopled()
+    const config = readConfig()!
+    // The file as each left it beside a database it had just made and loaded its functions into, byte for byte
+    const asWritten = {
+      '0.1.0': `{
+ "made": 1794996084321,
+ "release": "precompiled-2026-09-28-5c7cb5b",
+ "it": "0.1.0",
+ "functions": "7ad8c9d5836b463ed04c1dca45173f65b94c10b989bb56dc29a8007522f025c9",
+ "functionsOf": "0.1.0",
+ "load": "7c3d021e325ca0a528425c6c832270180d2b9354428cfd7c77c26d0eff5064e0",
+ "port": 5540
+}`,
+      '0.1.45': `{
+ "made": 1794996121257,
+ "release": "precompiled-2026-09-28-5c7cb5b",
+ "it": "0.1.45",
+ "functions": "0d3158748d7368ea4dddfd4e179f3b7abfb884db63aa539234ffe3478ac15156",
+ "functionsOf": "0.1.45",
+ "load": "40b7f581156161d7733ee26529519697877bd0c8661a9f8a4204147946b50938",
+ "port": 5540
+}`,
+    }
+    for (const [it, written] of Object.entries(asWritten)) {
+      const loaded = JSON.parse(written) as { made: number; release: string; it: string; functions: string; functionsOf: string }
+      const { made, release, functions } = loaded
+      const behind = { functions, why: 'refused', at: made + 1 }
+      // What the same release leaves there at other moments: before any function is in, while its
+      // functions are going in, and with a loading whose end it never learned and functions that were refused
+      const begun = { made, release, it }
+      const loading = { ...begun, loading: functions }
+      const unlearned = { ...loaded, loading: functions, unsettled: { it, functions: [functions] }, behind }
+      // Each is read whole: whoever tells a person how the database stands says what the note says
+      const stands = (text: string) => {
+        writeFileSync(inBackend('data.json'), text)
+        return standing()
+      }
+      expect([it, stands(written)]).toEqual([it, { release, it, functions, functionsOf: it }])
+      expect([it, stands(JSON.stringify(begun, null, 1))]).toEqual([it, { release, it }])
+      expect([it, stands(JSON.stringify(loading, null, 1))]).toEqual([it, { release, it }])
+      expect([it, stands(JSON.stringify(unlearned, null, 1))]).toEqual([it, { release, it, functions, functionsOf: it, behind }])
+      // And this It is started on the database by it. The note is gone on from and not begun
+      // again, which when the database was made says: only a note that was read still has it
+      for (const text of [written, JSON.stringify(unlearned, null, 1)]) {
+        writeFileSync(inBackend('data.json'), text)
+        await stillThere(config, id)
+        expect([it, note()]).toEqual([
+          it,
+          { made, release: RELEASE, it: VERSION, functions: FUNCTIONS_HASH, functionsOf: VERSION, load: expect.any(String), port: config.port },
+        ])
+      }
+    }
+  }, 300_000)
+
   test('whose first making was cut short is left where it is with nothing of it moved or removed, a copy of it as it was found is kept, and the person is told what was found and what they can do about it', async () => {
     const config = makeConfig()
     let refused = false
