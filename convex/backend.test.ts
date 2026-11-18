@@ -2507,6 +2507,8 @@ describe('clicks and their delivery', () => {
     expect(Date.now() - seen.settledAt!).toBeLessThan(60_000)
     expect(seen.settledAt!).toBeGreaterThanOrEqual(first.at)
     expect(seen).not.toHaveProperty('payload')
+    // The site's account of the page's activity names the click by its number and by the conversation it was for
+    expect(seen).toMatchObject({ seq: expect.any(Number), harness: SESSION.harness, conversation: SESSION.id })
     expect((await m.as.query(api.actions.forArtifact, { slug: 'plan' }))[0]).toHaveProperty('payload')
     // An agent told only the action's id can read it, whatever has become of it
     expect(await m.as.query(api.delivery.get, { id: actionId })).toMatchObject({ artifact: 'plan', payload: '{"n":1}', delivery: 'handed_off' })

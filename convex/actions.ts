@@ -445,6 +445,12 @@ export const forArtifact = query({
       id: x._id,
       name: x.name,
       at: x.createdAt,
+      // Its number on its page, and the app and conversation it is for now: what the site's
+      // account of a page's activity names each click by. Ids only, as the page's own record
+      // already gives its conversation's
+      seq: x.seq ?? null,
+      harness: x.harness ?? null,
+      conversation: x.sessionId ?? null,
       // When the person made it, which for a click that waited in a browser is before It got it.
       // What Auto-wake would reopen a conversation for is judged by this (see `madeOf`)
       madeAt: madeOf(x),
