@@ -29,6 +29,15 @@
 // newest user message begins `[It]` and ends `[action <id>]` for that click. The stand-in answers
 // by running `it patch`, and the page's state and the page in the browser show the change. A
 // second click must then arrive the same way.
+//
+// Last, the terminal and Hermes's gateway are closed, and the button is pressed once with nothing
+// chosen for Hermes, which is YOLO, its starting value, and once with Approvals chosen on the
+// Machines page. Auto-wake reopens the
+// conversation each time, and its turn runs `rm -r` on a folder, which Hermes flags as dangerous:
+// in YOLO the folder goes, and in Approvals Hermes refuses the command. A conversation that
+// Hermes's gateway holds, as from Hermes 0.22.7, keeps its own approvals: in YOLO it is reopened
+// with them, which refuse the command here, and in Approvals it is not reopened at all.
+// Hermes before 0.20.5 takes no `--query-file`, and that part is not run there.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
@@ -38,6 +47,7 @@ import { chromium } from 'playwright'
 import { root, sleep, stopped } from '../lib.mjs'
 import { printCleanly, verdict } from '../logs.mjs'
 import { newestFromUser, standInModel, textOf } from './hermes/model.mjs'
+import { chooseWakeMode } from './wake-mode.mjs'
 
 printCleanly()
 const given = process.argv[2]
@@ -171,6 +181,39 @@ const screen = () =>
 
 let service
 let terminal
+/**
+ * Stops Hermes's background gateway, which outlives the terminal, by the process id Hermes notes
+ * for it, and only where Hermes says it is its gateway.
+ */
+async function stopGateway() {
+  try {
+    const noted = JSON.parse(readFileSync(path.join(HERMES_HOME, 'gateway.pid'), 'utf8'))
+    if (noted?.kind === 'hermes-gateway' && Number.isInteger(noted.pid) && noted.pid > 1) {
+      process.kill(noted.pid, 'SIGTERM')
+      const end = Date.now() + 20_000
+      while (Date.now() < end) {
+        try {
+          process.kill(noted.pid, 0)
+        } catch {
+          break
+        }
+        await sleep(250)
+      }
+      try {
+        process.kill(noted.pid, 'SIGKILL')
+      } catch {}
+    }
+  } catch {}
+}
+/** Closes the terminal as a person closes it, and waits for it. terminal.py closes Hermes itself once its input ends. */
+async function closeTerminal() {
+  if (terminal && terminal.exitCode === null && terminal.signalCode === null) {
+    const closed = new Promise((resolve) => terminal.once('close', resolve))
+    terminal.stdin.end()
+    await Promise.race([closed, sleep(40_000)])
+  }
+  await stopped(terminal, 20_000)
+}
 let browser
 let model
 const serviceLog = path.join(scratch, 'service.log')
@@ -179,12 +222,29 @@ const serviceLog = path.join(scratch, 'service.log')
 // ends that turn; a click, as a turn of its own, is answered by changing the page's state; and
 // that result ends the turn.
 const clickTurns = []
+/** The folder a turn that Auto-wake reopened is to delete with a command Hermes flags as dangerous, the mode it is in, and what the command gave back. */
+let wakeDelete = null
+const deletedFor = new Set()
 const script = (request) => {
   const last = request.messages.at(-1)
-  if (last?.role === 'tool') return { text: 'Done.' }
+  if (last?.role === 'tool') {
+    // After the reopened turn's command, whatever became of it, the page is changed as for any click
+    const calls = request.messages.filter((m) => m.role === 'assistant' && m.tool_calls?.length)
+    if (wakeDelete && JSON.stringify(calls.at(-1)?.tool_calls ?? []).includes('rm -r')) {
+      wakeDelete.said = textOf(last)
+      return { run: `it patch ${PAGE} '{"pressed":"woken-${wakeDelete.mode}"}'` }
+    }
+    return { text: 'Done.' }
+  }
   const said = newestFromUser(request) ?? ''
   if (said.startsWith('[It]')) {
     clickTurns.push(request)
+    // A turn Auto-wake reopened deletes its folder first, with a command Hermes flags as dangerous
+    const action = /\[action ([^\]\s]+)\]/.exec(said)?.[1]
+    if (wakeDelete && action && !deletedFor.has(action)) {
+      deletedFor.add(action)
+      return { run: `rm -r '${wakeDelete.folder}'` }
+    }
     return { run: `it patch ${PAGE} '{"pressed":"${clickTurns.length === 1 ? 'yes' : 'again'}"}'` }
   }
   if (said.startsWith('Make a page with one button')) {
@@ -490,6 +550,79 @@ try {
     30_000,
   )
   check('and its `it patch` changed the page again', pressedAgain.json?.state?.pressed === 'again', pressedAgain.out + pressedAgain.err)
+
+  // ---------- a conversation that is closed, reopened in each mode chosen for Hermes ----------
+  // The terminal is closed, and Hermes's gateway with it, so that nothing of Hermes is listening.
+  // Auto-wake then reopens the conversation with `hermes chat --resume`, first with nothing chosen,
+  // which is YOLO, Hermes's starting value, and then with Approvals chosen on the Machines page, and
+  // the reopened turn runs `rm -r` on a folder, which Hermes flags as dangerous.
+  // In YOLO Hermes runs it, and in Approvals it refuses it, since nobody is there to approve it.
+  // Either way the turn goes on to change the page. A conversation that Hermes's gateway holds, as
+  // from Hermes 0.22.7, keeps the approvals it was started with, Hermes's own for this one: It
+  // reopens it only in YOLO, where the command is refused, and in Approvals not at all, since it
+  // could not hold it to Approvals, and says why. Hermes before 0.20.5 has
+  // no `--query-file`, by which It gives a reopened conversation its message, and It cannot reopen
+  // a conversation of it.
+  if (!later(version, '0.20.4')) note(`Hermes ${version} takes no --query-file, so It cannot reopen a conversation of it: that part is not run`)
+  else {
+    await closeTerminal()
+    await stopGateway()
+    const inGateway = session.startsWith('local-')
+    note(`the conversation is ${inGateway ? 'held by Hermes’s gateway, and keeps its own approvals' : 'Hermes’s own, and takes the mode chosen'}`)
+    const stopButton = tab.locator('.page-nav button[aria-label="Stop the agent"]')
+    for (const [mode, label, choose] of [
+      ['yolo', 'YOLO, the starting value, with nothing chosen', false],
+      ['approvals', 'Approvals', true],
+    ]) {
+      const deletes = mode === 'yolo' && !inGateway
+      const reopens = mode === 'yolo' || !inGateway
+      const end = Date.now() + 90_000
+      while ((await stopButton.count()) > 0 && Date.now() < end) await sleep(250)
+      await stopGateway()
+      if (choose) check(`the Machines page takes ${label} for Hermes`, await chooseWakeMode(tab.context(), pairing, 'hermes', mode))
+      const folder = path.join(folders.work, `woken-${mode}`)
+      mkdirSync(folder, { recursive: true })
+      wakeDelete = { folder, mode, said: null }
+      await frame.locator('#go').click()
+      if (!reopens) {
+        const said = await until(
+          async () => (existsSync(serviceLog) ? readFileSync(serviceLog, 'utf8') : ''),
+          (log) => log.includes('Hermes keeps this conversation’s own approvals'),
+          60_000,
+        )
+        check(
+          'in Approvals, a conversation Hermes’s gateway holds is not reopened, since It could not hold it to Approvals, and It says why',
+          said.includes('Hermes keeps this conversation’s own approvals') &&
+            existsSync(folder) &&
+            wakeDelete.said === null &&
+            (await it('state', PAGE)).json?.state?.pressed !== `woken-${mode}`,
+          said.split('\n').slice(-6).join('\n'),
+        )
+        continue
+      }
+      const changed = await until(
+        () => it('state', PAGE),
+        (r) => r.json?.state?.pressed === `woken-${mode}`,
+        180_000,
+      )
+      const latest = (await it('read', PAGE)).json?.recentActions?.[0]
+      check(
+        `in ${label}, Auto-wake reopens the closed conversation, and the reopened turn changes the page`,
+        changed.json?.state?.pressed === `woken-${mode}`,
+        JSON.stringify({ state: changed.json?.state, action: latest, said: wakeDelete.said }),
+      )
+      if (deletes) check('in YOLO, Hermes ran the command it flags as dangerous: the folder is gone', !existsSync(folder), wakeDelete.said)
+      else
+        check(
+          mode === 'yolo'
+            ? 'in YOLO, a conversation Hermes’s gateway holds is reopened with its own approvals, which here refuse the command it flags as dangerous: the folder is still there'
+            : 'in Approvals, Hermes refused the command it flags as dangerous, as nobody was there to approve it: the folder is still there',
+          existsSync(folder) && /BLOCKED/.test(wakeDelete.said ?? ''),
+          wakeDelete.said,
+        )
+    }
+    wakeDelete = null
+  }
   if (model.faults.length) check('the stand-in for the model answered every request', false, model.faults.join('; '))
 } catch (err) {
   if (!(err instanceof Stop)) check(`the run finished (${err.message})`, false, err.stack)
@@ -499,30 +632,8 @@ try {
   // terminal.py closes Hermes itself once its input ends (Ctrl-D, a hang-up, then a kill, ten
   // seconds apart), and is waited for before it is asked to stop: stopped at once, it would
   // leave a Hermes that is slow to close running
-  if (terminal && terminal.exitCode === null && terminal.signalCode === null) {
-    const closed = new Promise((resolve) => terminal.once('close', resolve))
-    terminal.stdin.end()
-    await Promise.race([closed, sleep(40_000)])
-  }
-  await stopped(terminal, 20_000)
-  try {
-    const noted = JSON.parse(readFileSync(path.join(HERMES_HOME, 'gateway.pid'), 'utf8'))
-    if (noted?.kind === 'hermes-gateway' && Number.isInteger(noted.pid) && noted.pid > 1) {
-      process.kill(noted.pid, 'SIGTERM')
-      const end = Date.now() + 20_000
-      while (Date.now() < end) {
-        try {
-          process.kill(noted.pid, 0)
-        } catch {
-          break
-        }
-        await sleep(250)
-      }
-      try {
-        process.kill(noted.pid, 'SIGKILL')
-      } catch {}
-    }
-  } catch {}
+  await closeTerminal()
+  await stopGateway()
   await stopped(service, 60_000)
   await browser?.close().catch(() => {})
   await model?.close()

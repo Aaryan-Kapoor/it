@@ -514,20 +514,79 @@ export const WAKE_MODES: Partial<Record<Harness, WakeModeList>> = {
       },
     ],
   },
+  // Pi has no permission modes: it asks before nothing, and runs every tool it has as you. One way
+  // to run is no choice, and the Machines page shows it as plain text with its line
+  pi: {
+    default: 'full-access',
+    choices: [
+      {
+        id: 'full-access',
+        label: 'Full access',
+        recommended: true,
+        says: 'Pi has no permission modes: a reopened conversation can do all you can on this machine.',
+      },
+    ],
+  },
+  // OpenCode's `opencode run --auto`, which its terminal calls auto-approving permissions, or not.
+  // Without it, `opencode run` refuses every permission your settings would ask about, as nobody
+  // is there to answer, which is how It always reopened OpenCode
+  opencode: {
+    default: 'ask',
+    choices: [
+      {
+        id: 'auto',
+        label: 'Auto-approve',
+        recommended: true,
+        says: 'Whatever your OpenCode settings would ask about is approved; only what they deny is refused.',
+      },
+      {
+        id: 'ask',
+        label: 'Ask',
+        says: 'Only what your OpenCode settings allow runs; whatever they would ask about is refused.',
+      },
+    ],
+  },
+  // Hermes's `--yolo`, which is the starting value as the owner chose, or its approvals, under which
+  // a one-shot run refuses a command Hermes flags as dangerous unless the person's settings approve
+  // it there, which is how It reopened Hermes before there was a choice. From Hermes 0.22.7 its
+  // gateway holds a conversation, which keeps the approvals it was started with, and a run's
+  // `--yolo` does not reach it: such a conversation is reopened in YOLO, with those approvals, and
+  // not at all where Approvals is chosen
+  hermes: {
+    default: 'yolo',
+    choices: [
+      {
+        id: 'yolo',
+        label: 'YOLO',
+        recommended: true,
+        says: 'Approves all but Hermes’s hardline blocklist and your deny rules; 0.22.7+ keeps its approvals.',
+      },
+      {
+        id: 'approvals',
+        label: 'Approvals',
+        says: 'Flagged commands are refused unless your settings allow them; Hermes 0.22.7+ is not reopened.',
+      },
+    ],
+  },
 }
 /**
  * The most an It from before there was a choice may run each app's reopened conversations in.
  * Such an It, on a machine that joined this one, ignores the choice. For Codex it gives the
  * workspace sandbox and nothing about who approves, so a reviewer the person chose in their own
- * Codex settings may approve there: at most Approve for me. Where what is chosen allows less than
- * this, the backend does not let it start a run, and where it allows more, the page says that the
- * machine runs less (see `runBegan`).
+ * Codex settings may approve there: at most Approve for me. Pi, OpenCode and Hermes it runs as they
+ * are, with nothing on the command line about permissions: Pi in its one way, OpenCode in Ask, which
+ * are their modes where nothing is chosen, and Hermes in Approvals, which allows less than its YOLO
+ * where nothing is chosen. Where what is chosen allows less than this, the backend does not let it
+ * start a run, and where it allows more, the page says that the machine runs less (see `runBegan`).
  */
 export const WAKE_MODE_LEGACY: Partial<Record<Harness, string>> = {
   codex: 'approve-for-me',
   // A Claude Code conversation is reopened by such an It in the mode it was last in where that
   // asks nobody, which can be Bypass Permissions, and with no mode otherwise
   'claude-code': 'bypassPermissions',
+  pi: 'full-access',
+  opencode: 'ask',
+  hermes: 'approvals',
 }
 /** Where a mode stands in its app's order, from 0 for the one that allows most; -1 for none. */
 export function wakeModeRank(harness: string, mode: string): number {
@@ -555,6 +614,20 @@ export function wakeModeOf(kept: readonly { harness: string; mode: string }[] | 
   if (list.choices.some((c) => c.id === mode)) return mode
   const ordered = list.choices.filter((c) => c.id !== CONVERSATIONS_OWN)
   return ordered[ordered.length - 1]?.id ?? list.default
+}
+/**
+ * The mode an app's conversations are reopened in on a machine whose It names none as a run begins
+ * (`runBegan`): an It from before that app had a choice, whose Machines page offers none for it and
+ * whose documents say the app is reopened as it always was. That is `mode`, what the machine would
+ * run by itself, unless what an It from before the choice ran the app in (`WAKE_MODE_LEGACY`)
+ * allows less: then it is that, so that no machine runs an app in more than the It it joined says.
+ * For Hermes that is Approvals in place of YOLO. A mode with no place in the order, as the
+ * conversation's own, is left as it is.
+ */
+export function wakeModeUntold(harness: string, mode: string): string {
+  const legacy = WAKE_MODE_LEGACY[harness as Harness]
+  const at = wakeModeRank(harness, mode)
+  return legacy !== undefined && at >= 0 && wakeModeRank(harness, legacy) > at ? legacy : mode
 }
 /**
  * Why a reopened run is not in the mode chosen, as its machine says it with `runNoted` and the

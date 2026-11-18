@@ -409,6 +409,7 @@ body = (async () => {
       '<script>It.onState(function(s){document.getElementById("said").textContent=s.answer||""})</script>'
     const answer = 'approved through Pi'
     const reopened = 'answered by a Pi that It reopened'
+    const wokenFile = path.join(work, 'woken.txt')
     let actionId = null
     model = await kept(
       await standInModel({
@@ -423,10 +424,17 @@ body = (async () => {
           // The click: answer it on the page
           if (n === 2) return { call: { name: tool.name, arguments: { [tool.param]: `it patch ${slug} '${JSON.stringify({ answer })}'` } } }
           if (n === 3) return { text: 'Done.' }
-          // The click on a page whose conversation is closed, in the conversation Auto-wake reopened
-          if (n === 4) return { call: { name: tool.name, arguments: { [tool.param]: `it patch ${slug} '${JSON.stringify({ answer: reopened })}'` } } }
-          if (n === 5) return { text: 'Done again.' }
-          throw new Error(`no answer is scripted for a request after the sixth, and Pi sent one: ${newestFromUser(request)?.slice(0, 200)}`)
+          // The click on a page whose conversation is closed, in the conversation Auto-wake reopened,
+          // which writes a file with Pi's own tool, as Pi lets it do anything, and answers on the page
+          if (n === 4) {
+            const write = (request.tools ?? []).map((t) => t?.function).find((f) => f?.name === 'write')
+            const where = Object.keys(write?.parameters?.properties ?? {}).find((k) => /path/i.test(k))
+            if (!write || !where) throw new Error('Pi offered no tool that writes a file')
+            return { call: { name: write.name, arguments: { [where]: wokenFile, content: 'written by a Pi that It reopened\n' } } }
+          }
+          if (n === 5) return { call: { name: tool.name, arguments: { [tool.param]: `it patch ${slug} '${JSON.stringify({ answer: reopened })}'` } } }
+          if (n === 6) return { text: 'Done again.' }
+          throw new Error(`no answer is scripted for a request after the seventh, and Pi sent one: ${newestFromUser(request)?.slice(0, 200)}`)
         },
       }),
       (m) => m.close(),
@@ -545,6 +553,17 @@ body = (async () => {
     check('Pi shuts the conversation down when its input is closed, and ends well', !closed.forced && closed.code === 0, closed)
 
     // ---------- A click on a page whose conversation is closed ----------
+    // Pi has one way to run, which the Machines page shows beside its Auto-wake switch with its line
+    const machinesTab = await opened.page.context().newPage()
+    await machinesTab.goto(new URL('/machines', opened.page.url()).href)
+    const shownMode = await machinesTab
+      .getByText('Pi has no permission modes')
+      .first()
+      .waitFor({ timeout: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    check('the Machines page shows the one way Pi runs a reopened conversation, with its line', shownMode)
+    await machinesTab.close()
     // Auto-wake, which is on for an app from the moment it is connected, reopens the conversation
     // with Pi's own command, `pi --print --session <id>`, and hands it the click
     const quiet = model.requests.length
@@ -571,6 +590,11 @@ body = (async () => {
       .then(() => true)
       .catch(() => false)
     check('and the reopened Pi answers on the page', reopenedOnPage, (await it(['read', slug])).state)
+    check(
+      'having written a file with its own tool first, which Pi, with no permission modes, lets it do',
+      existsSync(wokenFile) && readFileSync(wokenFile, 'utf8') === 'written by a Pi that It reopened\n',
+      wokenFile,
+    )
     const wokeWith = (await it(['read', slug])).recentActions?.find((a) => a.id === againId)
     check('It records that it reopened the conversation for that click', wokeWith?.delivery === 'handed_off' && wokeWith?.route === 'queue', wokeWith)
     const over = await untilTrue(async () => ((await it(['status'])).machine?.runs?.length === 0 ? true : null), patience(60_000))

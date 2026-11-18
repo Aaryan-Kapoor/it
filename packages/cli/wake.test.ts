@@ -20,7 +20,7 @@ import fs, {
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { describeClick, modesKnown, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeNoteFits, wakeNoteText } from '@it/protocol'
+import { describeClick, modesKnown, WAKE_MODE_LEGACY, WAKE_MODES, wakeModeBelow, wakeModeOf, wakeModeUntold, wakeNoteFits, wakeNoteText } from '@it/protocol'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import shims from './fixtures/windows-shims.json'
 import { claimLock } from './src/legacy-lock'
@@ -53,6 +53,7 @@ import {
   codexWroteAt,
   endJob,
   endTree,
+  HERMES_KEEPS_ITS_OWN,
   IN_JOB,
   identity,
   jobName,
@@ -341,6 +342,96 @@ describe('the command each agent app is carried on with', () => {
     // It's folder is let be written only in the workspace modes, and never on Windows
     expect(pairs(argvOf('ask').argv)).toContain('sandbox_workspace_write.writable_roots=["/home/someone/.it"]')
     expect(argvOf('ask', 'win32').argv.join(' ')).not.toContain('writable_roots')
+  })
+
+  test('Pi, OpenCode and Hermes are reopened in each mode they offer by that run’s own flag, Pi and OpenCode as they always were where nothing is chosen, and Hermes then in YOLO', () => {
+    const argvOf = (harness: string, session: string, wakeMode?: string) => {
+      const how = carrying(harness, session, 'a click', { ...has, ...(wakeMode === undefined ? {} : { wakeMode }) })
+      if (typeof how === 'string') throw new Error(how)
+      expect(how.input).toBe('a click')
+      return how.argv
+    }
+    const before = { pi: ['pi', '--print', '--session', UUID] }
+    // Pi has one way to run, whatever is chosen or kept
+    for (const mode of [undefined, 'full-access', 'made-up']) expect(argvOf('pi', UUID, mode)).toEqual(before.pi)
+    // OpenCode: --auto for Auto-approve and nothing else; nothing for Ask, for nothing chosen, and for a name it has no mode for
+    const oc = 'ses_6f2a9c01ffe4'
+    expect(argvOf('opencode', oc, 'auto')).toEqual(['opencode', 'run', '--auto', '--session', oc])
+    for (const mode of [undefined, 'ask', 'made-up', 'yolo', 'full-access']) expect(argvOf('opencode', oc, mode)).toEqual(['opencode', 'run', '--session', oc])
+    // Hermes: --yolo for YOLO and nothing else, before the query is read from the input
+    const hs = '20261006_005959_a9a014'
+    expect(argvOf('hermes', hs, 'yolo')).toEqual(['hermes', 'chat', '--resume', hs, '--yolo', '--query-file', '-'])
+    for (const mode of [undefined, 'approvals', 'made-up', 'auto', 'full-access'])
+      expect(argvOf('hermes', hs, mode)).toEqual(['hermes', 'chat', '--resume', hs, '--query-file', '-'])
+    // A conversation Hermes's gateway holds, from Hermes 0.22.7, keeps the approvals it was started
+    // with, which may be YOLO and which a run's --yolo does not reach: it is reopened by its id, with
+    // nothing more, only in YOLO, which is what the connector gives where nothing is chosen, and in
+    // Approvals, or a name It does not know, which reads as Approvals, not at all
+    const gw = `local-${'0f'.repeat(32)}`
+    const nothingChosen = wakeModeOf([], 'hermes')!
+    expect(nothingChosen).toBe('yolo')
+    for (const mode of ['yolo', nothingChosen]) expect(argvOf('hermes', gw, mode)).toEqual(['hermes', 'chat', '--resume', gw, '--query-file', '-'])
+    for (const mode of [undefined, 'approvals', 'made-up', wakeModeOf([{ harness: 'hermes', mode: 'from-a-newer-it' }], 'hermes')!])
+      expect(carrying('hermes', gw, 'x', { ...has, ...(mode ? { wakeMode: mode } : {}) })).toBe(HERMES_KEEPS_ITS_OWN)
+    // And a conversation Hermes holds itself is given --yolo where nothing is chosen
+    expect(argvOf('hermes', hs, nothingChosen)).toEqual(['hermes', 'chat', '--resume', hs, '--yolo', '--query-file', '-'])
+    for (const odd of [`local-${'0f'.repeat(31)}`, `local-${'0F'.repeat(32)}`, `local-${'0f'.repeat(33)}`, 'local-', '--local-x'])
+      expect(carrying('hermes', odd, 'x', has)).toBe('its conversation id is not one Hermes would have made')
+    // On Windows, from where the program is, the same words after it
+    const start = ['C:\\Program Files\\nodejs\\node.exe', 'C:\\npm\\node_modules\\opencode-ai\\bin\\opencode']
+    expect((carrying('opencode', oc, 'x', { ...has, start, wakeMode: 'auto' }) as { argv: string[] }).argv).toEqual([
+      ...start,
+      'run',
+      '--auto',
+      '--session',
+      oc,
+    ])
+  })
+
+  test('the modes of Pi, OpenCode and Hermes are listed from most to least, the one that allows everything recommended, and where nothing is chosen Pi and OpenCode are what It always ran and Hermes is YOLO', () => {
+    expect(WAKE_MODES.pi?.choices.map((c) => c.id)).toEqual(['full-access'])
+    expect(WAKE_MODES.opencode?.choices.map((c) => c.id)).toEqual(['auto', 'ask'])
+    expect(WAKE_MODES.hermes?.choices.map((c) => c.id)).toEqual(['yolo', 'approvals'])
+    for (const harness of ['pi', 'opencode', 'hermes'] as const) {
+      const list = WAKE_MODES[harness]!
+      expect(list.choices[0]?.recommended).toBe(true)
+      expect(list.choices.filter((c) => c.recommended)).toHaveLength(1)
+      // One short line each, under the choice
+      for (const c of list.choices) expect(c.says.length).toBeLessThanOrEqual(95)
+      expect(wakeModeOf([], harness)).toBe(list.default)
+      // A name this It does not know is the mode that allows least
+      expect(wakeModeOf([{ harness, mode: 'from-a-newer-it' }], harness)).toBe(list.choices.at(-1)!.id)
+    }
+    // Pi and OpenCode where nothing is chosen are what an It from before the choice runs, so that an
+    // update changes nothing for them; Hermes's starting value is YOLO, as the owner chose, which
+    // allows more than the Approvals such an It runs, the least of Hermes's modes
+    expect(WAKE_MODE_LEGACY.pi).toBe(WAKE_MODES.pi?.default)
+    expect(WAKE_MODE_LEGACY.opencode).toBe(WAKE_MODES.opencode?.default)
+    expect(WAKE_MODES.hermes?.default).toBe('yolo')
+    expect(WAKE_MODE_LEGACY.hermes).toBe('approvals')
+  })
+
+  test('where the It a machine joined names no mode for an app, the app is run in no more than an It from before the choice ran it in: Hermes in Approvals, and every other app as the machine would run it', () => {
+    // Hermes's starting value allows more than an It from before the choice ran it in, whose page offers no choice
+    expect(wakeModeUntold('hermes', wakeModeOf([], 'hermes')!)).toBe('approvals')
+    expect(wakeModeUntold('hermes', 'approvals')).toBe('approvals')
+    // OpenCode and Pi start on what such an It ran, and a choice kept from a newer It is not run beyond it
+    expect(wakeModeUntold('opencode', wakeModeOf([], 'opencode')!)).toBe('ask')
+    expect(wakeModeUntold('opencode', 'auto')).toBe('ask')
+    expect(wakeModeUntold('pi', 'full-access')).toBe('full-access')
+    // Codex and Claude Code where nothing is chosen are as they were, and so is every mode of Claude
+    // Code's, the conversation's own among them: an It from before the choice could run it in any
+    expect(wakeModeUntold('codex', wakeModeOf([], 'codex')!)).toBe('approve-for-me')
+    expect(wakeModeUntold('codex', 'read-only')).toBe('read-only')
+    for (const c of WAKE_MODES['claude-code']!.choices) expect(wakeModeUntold('claude-code', c.id)).toBe(c.id)
+    // An app with no modes has nothing to step down to
+    expect(wakeModeUntold('openclaw', 'anything')).toBe('anything')
+  })
+
+  test('the line beside YOLO names both things Hermes still refuses in it, its hardline blocklist and the person’s deny rules', () => {
+    const says = WAKE_MODES.hermes!.choices.find((c) => c.id === 'yolo')!.says
+    expect(says).toContain('hardline blocklist')
+    expect(says).toContain('deny rules')
   })
 
   test('Ask for approval is exactly what It ran before there was a choice, but that the person’s own reviewer cannot approve anything there', () => {

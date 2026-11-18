@@ -36,6 +36,7 @@ import {
   WAKES,
   wakeModeBelow,
   wakeModeOf,
+  wakeModeUntold,
   wakesOn,
 } from '@it/protocol'
 import { ADDON_API, type AddonRuntime, AddonRuntimes } from './addon-runtime'
@@ -121,6 +122,8 @@ import {
   codexMode,
   endTree,
   fromAnotherStart,
+  HERMES_KEEPS_ITS_OWN,
+  HERMES_KEEPS_ITS_OWN_UNTOLD,
   LEFT_ENDED,
   LEFT_MAY_RUN,
   listsProcesses,
@@ -3027,6 +3030,21 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           return ended
         }
         how = again
+      } else if (saidMode === undefined && chosen !== null) {
+        // It named no mode for an app this machine has modes for: the It it joined is from before that
+        // app had a choice, and its Machines page offers none. The app is run as that It says it is,
+        // as before there was a choice, where that allows less than this machine would run it in
+        const untold = wakeModeUntold(now.harness, chosen)
+        if (untold !== chosen) {
+          chosen = untold
+          runMode = runIn(chosen)
+          const again = carryingWith(runMode.mode)
+          if (typeof again === 'string') {
+            ended = again === HERMES_KEEPS_ITS_OWN ? HERMES_KEEPS_ITS_OWN_UNTOLD : again
+            return ended
+          }
+          how = again
+        }
       }
       // Said on the page beside the run, where it is not run in the mode the person chose, by a code
       // and the modes' names: the page says it in It's words (`wakeNoteText`)

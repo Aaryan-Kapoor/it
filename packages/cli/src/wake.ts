@@ -324,6 +324,22 @@ export const CLAUDE_AUTO_UNCHECKED = 'Claude Code ended the turn itself, because
 /** Whether what a reopened Claude Code printed ends as Claude Code ends a turn whose actions auto mode could not check. */
 export const autoCouldNotCheck = (printed: string): boolean => /auto mode could not check some actions/i.test(printed.split(/\r?\n/).slice(-6).join('\n'))
 
+/**
+ * Why a Hermes conversation that Hermes's gateway holds, as from Hermes 0.22.7, is not reopened in
+ * Approvals: it keeps the approvals it was started with, which may be YOLO, and nothing given to one
+ * run changes them. It is reopened in YOLO, the starting value, which allows all that it can have.
+ */
+export const HERMES_KEEPS_ITS_OWN =
+  'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals; to reopen it with them, choose YOLO, the starting value, beside Hermes’s Auto-wake under Machines'
+
+/**
+ * The same, where the It this machine joined is from before there was a choice of how Hermes is
+ * reopened, and so runs it in Approvals: its Machines page has nothing to choose, and it is that It
+ * that is to be updated.
+ */
+export const HERMES_KEEPS_ITS_OWN_UNTOLD =
+  'Hermes keeps this conversation’s own approvals, which It cannot hold to Approvals, and the It this machine joined is from before the choice of how Hermes is reopened; update It on the machine it runs on, and this conversation is reopened'
+
 /** A command that carries a conversation on: the words it is started with, and what it is given on its input. */
 export interface Carrying {
   argv: string[]
@@ -376,8 +392,22 @@ export interface Carrying {
  *   that allows lets its command through first. Without it, `approvals_reviewer` is said to be
  *   `user` (`CODEX_NOT_REVIEWED`), so that a reviewer the person chose in their own settings
  *   does not approve anything either. Given on the command line, these win over the person's own.
- * - Pi, OpenCode and Hermes are run as they are in a window, with whatever their own settings
- *   allow there. Nothing can ask the person for more, since they are not there.
+ * - Pi has no permission modes, and runs every tool it has as the person, as it does in a window.
+ * - OpenCode is run as `opencode run`, which refuses whatever the person's OpenCode settings would
+ *   ask about, since nobody is there to answer, unless the mode chosen is Auto-approve, given as
+ *   `--auto`, under which it approves all that and refuses only what those settings deny.
+ * - Hermes is run in YOLO, its starting value, given as `--yolo`, under which Hermes approves every
+ *   command but its own hardline blocklist and the person's `approvals.deny` rules, unless Approvals
+ *   is chosen: its approvals as the person's Hermes settings have them for a one-shot run, which
+ *   refuse a command Hermes flags as dangerous unless those settings approve it there. From Hermes 0.22.7 a
+ *   conversation is held by Hermes's gateway, and keeps the approvals it was started with: a run's
+ *   `--yolo` does not reach it, and nothing else does short of changing the conversation itself or
+ *   the person's settings, which It does not do. Such a conversation is reopened, with its own
+ *   approvals, in YOLO, which is also where nothing is chosen, and not in Approvals
+ *   (`HERMES_KEEPS_ITS_OWN`).
+ *
+ * Each mode is given on the command line of that one run, and nothing is written to the app's own
+ * settings. A mode's name that this It does not know is the one that allows least.
  */
 export function carrying(
   harness: string,
@@ -455,21 +485,33 @@ export function carrying(
     if (!/^[0-9a-f][0-9a-f-]{7,63}$/i.test(session)) return odd
     const pi = starting('pi')
     if (!pi) return `${app} was not found`
+    // Pi has one way to run, whatever mode is chosen
     return { argv: [...pi, '--print', '--session', session], input: text, app }
   }
   if (harness === 'opencode') {
     if (!/^ses_[A-Za-z0-9]{1,120}$/.test(session)) return odd
     const opencode = starting('opencode')
     if (!opencode) return `${app} was not found`
-    return { argv: [...opencode, 'run', '--session', session], input: text, app }
+    // Auto-approve where it is chosen, and otherwise none, which refuses what would ask
+    const auto = has.wakeMode === 'auto' ? ['--auto'] : []
+    return { argv: [...opencode, 'run', ...auto, '--session', session], input: text, app }
   }
   if (harness === 'hermes') {
-    // Hermes names a conversation by when it began and a few hex digits. Any other word is not
-    // put there: it would be read as a title to look for, or as `latest`.
-    if (!/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
+    // Hermes names a conversation by when it began and a few hex digits, and from 0.22.7, where its
+    // gateway holds the conversation, `local-` and 64 hex digits. Any other word is not put there:
+    // it would be read as a title to look for, or as `latest`.
+    const inGateway = /^local-[0-9a-f]{64}$/.test(session)
+    if (!inGateway && !/^[0-9]{8}_[0-9]{6}_[0-9a-f]{4,32}$/.test(session)) return odd
     const hermes = starting('hermes')
     if (!hermes) return `${app} was not found`
-    return { argv: [...hermes, 'chat', '--resume', session, '--query-file', '-'], input: text, app }
+    // A conversation Hermes's gateway holds keeps the approvals it was started with, which `--yolo`
+    // does not reach (Hermes 0.22.7 to 0.23.1), and which may be YOLO. It is reopened only in YOLO,
+    // which allows all it can have; in Approvals, which It could not hold it to, it is not, and nor
+    // where no mode is given at all, as no connector gives none for Hermes
+    if (inGateway && has.wakeMode !== 'yolo') return HERMES_KEEPS_ITS_OWN
+    // YOLO where it is the mode, and otherwise Hermes's approvals as the person's settings have them
+    const yolo = has.wakeMode === 'yolo' && !inGateway ? ['--yolo'] : []
+    return { argv: [...hermes, 'chat', '--resume', session, ...yolo, '--query-file', '-'], input: text, app }
   }
   return `It has no way to reopen a conversation of ${app}`
 }

@@ -2920,7 +2920,7 @@ describe('clicks and their delivery', () => {
     expect((await listed()).wakeModes).toEqual([{ harness: 'codex', mode: 'ask' }])
     // Nor a mode the app does not offer, or an app that has no choice
     expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'yolo' }))).toBe('invalid')
-    expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'pi', mode: 'ask' }))).toBe('invalid')
+    expect(await code(alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'openclaw', mode: 'ask' }))).toBe('invalid')
     // A name this It does not know, as a newer one may have written, reads as the mode that allows least
     await t.run((ctx) => ctx.db.patch(m.id as never, { wakeModes: [{ harness: 'codex', mode: 'something-newer' }] }))
     expect(await begin()).toEqual({ stopped: false, mode: 'read-only' })
@@ -2939,7 +2939,9 @@ describe('clicks and their delivery', () => {
     expect(await m.as.mutation(api.machines.runNoted, note)).toEqual({ noted: true })
     expect((await alice.browser.query(api.artifacts.get, { slug: 'reviewed' })).run).toMatchObject({ note: 'refused:full-access:approve-for-me' })
     // Another app, which has no choice, is told nothing of one
-    expect(await m.as.mutation(api.machines.runBegan, { for: { harness: 'pi', id: 'pi-1' }, modes: ['codex', 'claude-code'] })).toEqual({ stopped: false })
+    expect(await m.as.mutation(api.machines.runBegan, { for: { harness: 'openclaw', id: 'openclaw-1' }, modes: ['codex', 'claude-code'] })).toEqual({
+      stopped: false,
+    })
   })
 
   test('the backend does not let a machine whose It is from before the choice of mode run Codex where it may run more than the owner chose, and the page says where it runs less', async () => {
@@ -2973,6 +2975,50 @@ describe('clicks and their delivery', () => {
     await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness: 'codex', mode: 'full-access' })
     expect(await olderBegins()).toEqual({ stopped: false, mode: 'full-access' })
     expect((await alice.browser.query(api.artifacts.get, { slug: 'older' })).run).toMatchObject({ note: 'older:full-access:approve-for-me' })
+  })
+
+  test('for Pi, OpenCode and Hermes, a machine whose It is from before the choice runs as it always ran, and is let through where that allows less than what is in force', async () => {
+    const { t, alice, m } = await setup()
+    const apps = ['pi', 'opencode', 'hermes']
+    await t.run((ctx) => ctx.db.patch(m.id as never, { wanted: apps, harnesses: apps.map((id) => ({ id, addon: 'connected' })) }))
+    const fails = async () => ((await t.run((ctx) => ctx.db.get(m.id as never))) as { fails?: { why: string }[] }).fails ?? []
+    // Each app's starting value, what an It from before the choice runs it in, and the mode that allows everything
+    for (const [harness, starting, before, most] of [
+      ['pi', 'full-access', 'full-access', 'full-access'],
+      ['opencode', 'ask', 'ask', 'auto'],
+      ['hermes', 'yolo', 'approvals', 'yolo'],
+    ] as const) {
+      const thread = { harness, id: `${harness}-older` }
+      const slug = `older-${harness}`
+      await publish(m, slug, { session: thread })
+      await alice.browser.mutation(api.machines.wake, { machineId: m.id, harness, on: true })
+      const note = async () => (await alice.browser.query(api.artifacts.get, { slug })).run?.note ?? null
+      // A connector of this It, which names the apps whose modes it knows, is told the mode, which is the starting value where nothing is chosen
+      expect(await m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: ['codex', 'claude-code', ...apps], run: 'new-run' })).toEqual({
+        stopped: false,
+        mode: starting,
+      })
+      await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'new-run' })
+      // An older one is one that names none of the three, as It 0.1.45 does, which knows Codex's and
+      // Claude Code's modes alone. With nothing chosen it is let through and runs as it always ran,
+      // and nothing is said, for Hermes too, whose starting value allows more than that It runs
+      const olderBegins = () => m.as.mutation(api.machines.runBegan, { for: thread, ids: [], modes: ['codex', 'claude-code'], run: 'old-run' })
+      expect(await olderBegins()).toEqual({ stopped: false, mode: starting })
+      expect(await fails()).toEqual([])
+      expect(await note()).toBeNull()
+      await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'old-run' })
+      // Chosen as it always ran, it runs so, with nothing to say
+      await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness, mode: before })
+      expect(await olderBegins()).toEqual({ stopped: false, mode: before })
+      expect(await note()).toBeNull()
+      await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'old-run' })
+      // The mode that allows everything, where it is another: the older It runs as it always did, which allows less, and the page says so
+      await alice.browser.mutation(api.machines.wakeMode, { machineId: m.id, harness, mode: most })
+      expect(await olderBegins()).toEqual({ stopped: false, mode: most })
+      expect(await note()).toBe(most === before ? null : `older:${most}:${before}`)
+      await m.as.mutation(api.machines.runEnded, { for: thread, ok: true, run: 'old-run' })
+      expect(await fails()).toEqual([])
+    }
   })
 
   test('a computer that takes the place of another takes the mode chosen there for its reopened conversations, as it stands when the place is given up', async () => {

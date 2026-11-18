@@ -9,8 +9,10 @@ name: OpenCode
 # and not called connected, and then drives one conversation through a stand-in for the model
 # on the runner, which a real browser's click on a page has to reach as a turn. Last, with
 # OpenCode stopped, a click has to reopen the closed conversation through It's Auto-wake and the
-# real `opencode run --session`. No account, no key and no real model are used: the model's key
-# is made up.
+# real `opencode run --session`, and then once with Auto-approve chosen for OpenCode on the
+# Machines page and once with Ask: the reopened turn writes a file, which the run's settings have
+# ask about, and only Auto-approve lets it. No account, no key and no real model are used: the
+# model's key is made up.
 #
 # When it runs: on every pull request, on every push to master, once a night, and by hand. It
 # is a workflow of its own, apart from it.yml, so that it never blocks a merge. When OpenCode
