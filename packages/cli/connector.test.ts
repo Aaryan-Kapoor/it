@@ -117,6 +117,7 @@ vi.mock('./src/t3', async (original) => ({
   T3_HELD_MOST: (await original<typeof import('./src/t3')>()).T3_HELD_MOST,
   t3Server: () => (stand.t3.running ? { origin: 'http://127.0.0.1:1', home: '/no-t3-code', command: ['t3'] } : undefined),
   t3Refusal: () => stand.t3.refusal ?? undefined,
+  t3Tells: () => {},
   t3Search: () => ({}),
   t3Held: (search: { held?: number }) => search.held ?? 0,
   t3Counted: (search: { held?: number }) => ({ read: search.held ?? 0, listed: 2 * (search.held ?? 0) }),

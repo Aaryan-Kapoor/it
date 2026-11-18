@@ -29,6 +29,7 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readlinkSync, realpathSync } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { direct, directWebSocket, readJson } from './lib'
@@ -160,12 +161,171 @@ export function t3Command(
   return found ? { command: found } : null
 }
 
+/** How soon after the address a note names was last asked for a connection, and took one, it is asked for one again. */
+const LISTENS_AGAIN_MS = 5_000
+/** How soon after an address refused a connection it is asked for one again. */
+const REFUSED_AGAIN_MS = 2_000
+/**
+ * How long an address has to have refused every connection it was asked for before the note that
+ * names it is taken to be left over. A server that is running can refuse one too, as Windows has
+ * one do whose queue of connections is full, so a refusal or two say little. One that refuses
+ * for this long could not have been asked anything in that time either.
+ */
+const REFUSED_FOR_MS = 10_000
+/** How long an address is given to take a connection. One that has not by then has not refused one. */
+const LISTENS_MS = 5_000
+/** As many of T3 Code's folders as this is kept for, which is one where It runs, and more only where it is tried. */
+const LISTENING_MOST = 64
+
+/**
+ * What is known of whether anything listens at the address a note names, for each of T3 Code's
+ * folders: the process and the address the note named, since when that address has refused
+ * every connection it was asked for, whether it has done so for long enough that the note is
+ * taken to be left over, when it was last asked by a clock that only goes forward, and whether
+ * it is being asked now.
+ */
+interface Listening {
+  noted: string
+  refusedSince: number | undefined
+  gone: boolean
+  askedAt: number
+  asking: boolean
+}
+const listening = new Map<string, Listening>()
+/** Where what the looking for T3 Code's server has to say is said: the connector's log, once the connector has named it. */
+let tell: ((line: string, home: string) => void) | undefined
+/**
+ * Names where the looking for T3 Code's server says what it finds. The lines hold nothing of the
+ * person's: no folder, no address. Which of T3 Code's folders a line is about is given beside
+ * it, for whoever looks in more than one, and is not for the log.
+ */
+export function t3Tells(say: ((line: string, home: string) => void) | undefined): void {
+  tell = say
+}
+
+/**
+ * The machine's own address and the port that an origin in T3 Code's note names, as the origin
+ * itself writes them: a port that plain http would leave unsaid is still the one written.
+ * Nothing for a port no server can listen at.
+ */
+export function addressOf(origin: string): { host: string; port: number } | undefined {
+  const named = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})$/.exec(origin)
+  const port = Number(named?.[2])
+  return named && port >= 1 && port <= 65535 ? { host: named[1]!.replace(/^\[|\]$/g, ''), port } : undefined
+}
+
+/** Whether an error is an address refusing a connection, at every address its name stands for. */
+const refusedBy = (err: unknown): boolean => {
+  const e = err as { code?: unknown; errors?: unknown } | null
+  return Array.isArray(e?.errors) && e.errors.length > 0 ? e.errors.every(refusedBy) : e?.code === 'ECONNREFUSED'
+}
+
+/**
+ * Asks an address on this machine for a connection, and sends nothing over it: `taken` where
+ * something listens there and took it, `refused` where it was refused, and `unsure` where
+ * neither was said in time, as where what listens is too busy to take one. The connection is
+ * this program's own, to the address itself, as every one to T3 Code is, whatever proxy the
+ * environment names.
+ */
+function knock(host: string, port: number): Promise<'taken' | 'refused' | 'unsure'> {
+  return new Promise((resolve) => {
+    let socket: net.Socket | undefined
+    const end = (how: 'taken' | 'refused' | 'unsure') => {
+      clearTimeout(timer)
+      socket?.destroy()
+      resolve(how)
+    }
+    const timer = setTimeout(() => end('unsure'), LISTENS_MS)
+    // A program that has nothing else to do does not go on running for this
+    timer.unref?.()
+    try {
+      socket = net.connect({ host, port })
+      socket.unref()
+      socket.once('connect', () => end('taken'))
+      socket.once('error', (err) => end(refusedBy(err) ? 'refused' : 'unsure'))
+    } catch {
+      end('unsure')
+    }
+  })
+}
+
+/**
+ * Whether the process a note names can be T3 Code's server, as far as is known at this moment.
+ *
+ * A note outlasts a T3 Code that ended without taking it away, as one that was killed or a
+ * machine that lost its power leaves it, and the number of its process is later given to some
+ * other program. That program is running, so the number alone would say that T3 Code is, and
+ * every click for a closed conversation would wait for T3 Code's word on it, which never comes.
+ * A server that is running listens at the address it noted, so that address is asked for a
+ * connection, away from whoever asks here, and what it said is what the next look goes by.
+ *
+ * Only an address that has refused every connection for `forMs` says that T3 Code is gone. A
+ * server that takes a connection, or is too busy to take or refuse one in time, is running,
+ * however slowly it answers, and so is one that has not been asked yet, or has refused for a
+ * shorter while: taken for gone, a conversation one of its threads holds could be reopened
+ * beside the thread. A T3 Code that refuses for that long while it is running is taken for gone
+ * until it takes a connection: it could not have been asked which thread holds a conversation
+ * in that time either, and a click waits no longer than that for its word as it is.
+ *
+ * The address is asked again every few seconds for as long as it is looked for, and oftener
+ * while it refuses, so that a T3 Code that ends later is noticed, and one that listens again at
+ * the address it noted is found.
+ */
+function mayRun(home: string, pid: number, origin: string, forMs: number): boolean {
+  const at = addressOf(origin)
+  // Nothing can be asked of an address that is none: the note is taken at its word, as it was
+  if (!at) return true
+  const noted = `${pid} ${origin}`
+  let known = listening.get(home)
+  if (known?.noted !== noted) {
+    // Another process or another address is another server, of which nothing is known yet
+    if (listening.size >= LISTENING_MOST) listening.clear()
+    known = { noted, refusedSince: undefined, gone: false, askedAt: Number.NEGATIVE_INFINITY, asking: false }
+    listening.set(home, known)
+  }
+  if (!known.asking && performance.now() - known.askedAt >= (known.gone ? REFUSED_AGAIN_MS : LISTENS_AGAIN_MS)) knockFor(home, known, at, forMs)
+  return !known.gone
+}
+
+/** Asks the address a note names for a connection, and keeps what it said for the next look. */
+function knockFor(home: string, known: Listening, at: { host: string; port: number }, forMs: number): void {
+  known.asking = true
+  known.askedAt = performance.now()
+  void knock(at.host, at.port).then((how) => {
+    known.asking = false
+    // The note names another server by now: what this one said is nobody's
+    if (listening.get(home) !== known) return
+    if (how !== 'refused') {
+      known.refusedSince = undefined
+      known.gone = false
+      return
+    }
+    const now = performance.now()
+    known.refusedSince ??= now
+    if (now - known.refusedSince >= forMs) {
+      known.gone = true
+      tell?.(
+        `T3 Code’s note of its server names a process that is running and an address that has refused every connection for ${Math.round(forMs / 1000)} seconds, so the note is taken to be left over from a T3 Code that has ended, and T3 Code as not running here (t3_note_stale)`,
+        home,
+      )
+      return
+    }
+    // Not yet for long enough: asked again in a moment, whether or not anything looks for T3 Code meanwhile
+    const again = setTimeout(() => {
+      if (listening.get(home) === known && !known.asking) knockFor(home, known, at, forMs)
+    }, REFUSED_AGAIN_MS)
+    again.unref?.()
+  })
+}
+
 /**
  * The T3 Code server running for this person on this machine, or nothing. T3 Code notes where
  * its server is in the folder it keeps its things in, which is `~/.t3` unless `T3CODE_HOME`
- * names another. Only a server that answers on this machine itself is ever asked anything.
+ * names another. Only a server that answers on this machine itself is ever asked anything, and
+ * a note whose address has refused every connection for `refusedForMs` is of no server
+ * (`mayRun`): `REFUSED_FOR_MS`, which only a test shortens.
  */
-export function t3Server(home = process.env.T3CODE_HOME || path.join(os.homedir(), '.t3')): T3 | undefined {
+export function t3Server(home = process.env.T3CODE_HOME || path.join(os.homedir(), '.t3'), refusedForMs = REFUSED_FOR_MS): T3 | undefined {
   const noted = readJson<{ pid?: unknown; origin?: unknown; serverVersion?: unknown }>(path.join(home, 'userdata', 'server-runtime.json'))
   if (!noted || typeof noted.pid !== 'number' || typeof noted.origin !== 'string') return undefined
   if (!/^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{1,5}$/.test(noted.origin)) return undefined
@@ -174,6 +334,8 @@ export function t3Server(home = process.env.T3CODE_HOME || path.join(os.homedir(
   } catch {
     return undefined
   }
+  // The number may be another program's by now
+  if (!mayRun(home, noted.pid, noted.origin, refusedForMs)) return undefined
   // Its own program where the system names it and it is T3 Code's, and otherwise the one T3 Code keeps in its folder
   const program = programOf(noted.pid)
   if (program && /^t3(\.exe)?$/i.test(path.basename(program))) return { origin: noted.origin, home, command: [program] }

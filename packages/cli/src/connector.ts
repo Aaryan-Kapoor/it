@@ -94,6 +94,7 @@ import {
   t3Search,
   t3Send,
   t3Server,
+  t3Tells,
   t3ThreadOf,
   wentUnanswered,
 } from './t3'
@@ -749,6 +750,8 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     saidAt.set(about, Date.now())
     say(line)
   }
+  // A note of T3 Code's server that is left over from a T3 Code that has ended is said here, now and then
+  t3Tells((line) => seldom('t3-note', line))
   /** A conversation's id as it is written down: a short hash of it, enough to tell two apart in this log and to say nothing else, since some harnesses put a chat's own name in the id. */
   const short = (id: string) => createHash('sha256').update(id).digest('hex').slice(0, 8)
 
