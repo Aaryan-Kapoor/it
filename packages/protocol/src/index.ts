@@ -84,6 +84,14 @@ export const TAKES = {
   turnReports: 'turns.say',
   /** Machine reports of open conversations missing the add-on. */
   notLoadedReports: 'machines.notLoaded',
+  /**
+   * A receipt for each taking of a click (`receipt` on `delivery.claim`, `release`, `park` and
+   * `handedOff`, and `receipts` on `renew` and `lost`), by which a machine's word about one
+   * hand-over of a click is told from its word about another. A machine sends them only where
+   * the backend names this, since an older one refuses a call that carries one, and takes the
+   * answer `again` from `delivery.park` only where it sent one.
+   */
+  receipts: 'delivery.receipts',
 } as const
 
 /**

@@ -356,3 +356,59 @@ test('a recovered click that changes conversation replaces its earlier waiter co
   await store.keepWaiters([moved], 'codex:new-thread')
   expect(open().waiters.get('action')).toEqual({ click: moved, key: 'codex:new-thread' })
 })
+
+test('the receipt of a taking is kept with its claim across a restart, until It has been told of the hand-over, and a record from before receipts is read as it is', async () => {
+  const first = 'receipt-of-the-first-taking-0001'
+  const second = 'receipt-of-the-second-taking-002'
+  const store = open()
+  await store.claim(['handed', 'given-back'], 'codex:thread', first)
+  await store.claim(['plain'], 'codex:thread')
+  expect([...store.receipts]).toEqual([
+    ['handed', first],
+    ['given-back', first],
+  ])
+  // Given back: the claim and its receipt go together. Handed over and not yet confirmed: the receipt stays, though the claim is retired
+  await store.retire(['given-back'])
+  await store.accept(['handed'], { id: 'handed' })
+  await store.retire(['handed'])
+  expect([...store.receipts]).toEqual([['handed', first]])
+  await store.close()
+  stores = []
+  const again = open()
+  expect([...again.receipts]).toEqual([['handed', first]])
+  expect([...again.accepted]).toEqual(['handed'])
+  // A later taking of the same click takes the place of the earlier one's receipt, and one made with none leaves none
+  await again.claim(['handed'], 'codex:thread', second)
+  expect(again.receipts.get('handed')).toBe(second)
+  // A late word that the earlier taking was confirmed leaves the later one's receipt, and the word of the later one takes it away
+  await again.confirm('handed', () => false)
+  expect(again.receipts.get('handed')).toBe(second)
+  await again.confirm('handed', () => true)
+  expect([...again.receipts]).toEqual([])
+  await again.claim(['handed'], 'codex:thread', second)
+  await again.claim(['handed'], 'codex:thread')
+  expect([...again.receipts]).toEqual([])
+  await again.close()
+  stores = []
+  // What 0.1.45 wrote names no receipts, and is read whole
+  writeFileSync(
+    path.join(folder, 'delivery-recovery.json'),
+    JSON.stringify({ version: 1, waiters: [], marks: [], accepted: ['old'], returning: ['old', 'older'], targets: [['old', 'codex:thread']] }),
+  )
+  const said = vi.fn()
+  const old = open(said)
+  expect(said).not.toHaveBeenCalled()
+  expect([[...old.accepted], [...old.returning], [...old.receipts]]).toEqual([['old'], ['old', 'older'], []])
+  await old.close()
+  stores = []
+  // And what is no receipt is not taken for one: the record is set aside as unreadable, and nothing of it is believed
+  writeFileSync(
+    path.join(folder, 'delivery-recovery.json'),
+    JSON.stringify({ version: 1, waiters: [], marks: [], accepted: [], returning: ['x'], receipts: [['x', 'short']] }),
+  )
+  const refused = vi.fn()
+  const none = open(refused)
+  expect(refused).toHaveBeenCalledTimes(1)
+  expect([...none.returning]).toEqual([])
+  expect(existsSync(path.join(folder, 'delivery-recovery.json.unreadable'))).toBe(true)
+})

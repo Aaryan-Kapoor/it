@@ -130,6 +130,7 @@ async function fakeConnector(listenOn: string | number) {
         path: url.pathname,
         harness: url.searchParams.get('harness'),
         session: url.searchParams.get('session'),
+        receipts: url.searchParams.get('receipts'),
         token: req.headers['x-it-token'] as string | undefined,
         body,
       })
@@ -497,6 +498,25 @@ describe('the OpenCode add-on', () => {
     expect(prompts[0]!.path).toEqual({ id: 'ses_one' })
     expect(prompts[0]!.body).toEqual({ agent: 'build', parts: [{ type: 'text', text: click('k1').text }] })
     expect(c.state.asked.find((a) => a.path === '/ack')).toMatchObject({ method: 'POST', token: TOKEN, body: { ids: ['k1'] } })
+  })
+
+  it('asks for clicks with their receipts, and says the agent has a click by the receipt it was offered with, also when it is offered again under a later taking', async () => {
+    const c = await connector()
+    c.state.deaf = true // the connector never hears that the agent has it, and goes on offering it
+    c.state.offered = [{ ...click('k1'), receipt: 'receipt-of-the-first-taking' } as ReturnType<typeof click>]
+    const { hooks, prompts } = await load()
+    await begin(hooks, 'ses_one')
+    const told = () => c.state.asked.filter((a) => a.path === '/ack').map((a) => a.body)
+    await vi.waitFor(() => expect(told()[0]).toEqual({ ids: ['k1'], receipts: ['receipt-of-the-first-taking'] }), within)
+    expect(c.polls().every((a) => a.receipts === '1')).toBe(true)
+    // It has taken the click anew since, and offers it under the receipt of that taking: the agent
+    // has it already, so it is not given again, and is said to be with the agent by the receipt it is offered with now
+    c.state.offered = [{ ...click('k1'), receipt: 'receipt-of-the-second-taking' } as ReturnType<typeof click>]
+    await vi.waitFor(() => expect(told().at(-1)).toEqual({ ids: ['k1'], receipts: ['receipt-of-the-second-taking'] }), within)
+    // A connector from before receipts offers none, and is told by the click's id alone
+    c.state.offered = [click('k1')]
+    await vi.waitFor(() => expect(told().at(-1)).toEqual({ ids: ['k1'], receipts: [null] }), within)
+    expect(prompts).toHaveLength(1)
   })
 
   it('hands several clicks over in one message, each with its own text', async () => {

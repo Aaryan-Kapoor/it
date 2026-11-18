@@ -197,7 +197,7 @@ async function tick(seconds = 1) {
   }
 }
 const acks = () => asked.filter((a) => a.path === '/ack').flatMap((a) => a.body.ids as string[])
-const clicksPath = (session: string) => `/clicks?harness=openclaw&session=${encodeURIComponent(session)}`
+const clicksPath = (session: string) => `/clicks?harness=openclaw&session=${encodeURIComponent(session)}&receipts=1`
 
 beforeEach(async () => {
   // Only the plugin's once-a-second clock and the time of day are stand-ins. The connector is asked for real.
@@ -449,6 +449,31 @@ describe('the OpenClaw add-on', () => {
     await tick()
     expect(host.turns.length).toBe(2)
     expect(host.turns[1]!.plan.ctxPayload.Body).toBe('two')
+  })
+
+  test('clicks are asked for with their receipts, and the agent is said to have a click by the receipt it was offered with, also when it is offered again under a later taking', async () => {
+    const host = await start()
+    host.runsCommand(MAIN)
+    const told = () => asked.filter((a) => a.path === '/ack').map((a) => a.body)
+    offered[MAIN] = [{ id: 'click-1', text: 'one', receipt: 'receipt-of-the-first-taking' }]
+    await tick()
+    expect(asked.map((a) => a.path)).toEqual([clicksPath(MAIN)])
+    expect(clicksPath(MAIN).endsWith('&receipts=1')).toBe(true)
+    host.turns[0]!.begin()
+    await settle()
+    expect(told()).toEqual([{ ids: ['click-1'], receipts: ['receipt-of-the-first-taking'] }])
+    // The connector did not hear that. It has taken the click anew since, and offers it under the receipt of that taking:
+    // the agent has it already, so no turn starts for it, and it is said to be with the agent by the receipt it is offered with now
+    offered[MAIN] = [{ id: 'click-1', text: 'one', receipt: 'receipt-of-the-second-taking' }]
+    await tick()
+    await settle()
+    expect(told().at(-1)).toEqual({ ids: ['click-1'], receipts: ['receipt-of-the-second-taking'] })
+    // A connector from before receipts offers none, and is told by the click's id alone
+    offered[MAIN] = [{ id: 'click-1', text: 'one' }]
+    await tick()
+    await settle()
+    expect(told().at(-1)).toEqual({ ids: ['click-1'], receipts: [null] })
+    expect(host.turns.length).toBe(1)
   })
 
   test('a click OpenClaw says it put into the turn that is running is the agent’s from then, though no turn starts for it', async () => {

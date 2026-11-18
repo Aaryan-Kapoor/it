@@ -130,6 +130,8 @@ class Connector:
         self.refused = 0  # requests it did not believe
         self.token_shown = 0  # requests that carried the token itself
         self.offers = {}  # session -> clicks, offered on every asking until the add-on reports them
+        self.receipts = []  # the receipts each report named, beside its ids
+        self.paths = []  # every path clicks were asked for by
         self.seals_with = None  # set to another token, it stands for some other program that took the port
         self.padding = 0  # above zero, each click offered is padded by this many characters, past what any real answer holds
         self.asking = None  # set to a function, it is called with the conversation each time clicks are asked for, before the answer is given
@@ -171,6 +173,7 @@ class Connector:
                 if url.path != "/clicks":
                     return self.answer(404, {"error": "no such thing"})
                 harness, session = query.get("harness", [""])[0], query.get("session", [""])[0]
+                outer.paths.append(self.path)
                 outer.log.append(("clicks", harness, session))
                 if outer.asking:
                     outer.asking(session)
@@ -187,6 +190,7 @@ class Connector:
                     url = urlsplit(self.path)
                     query = parse_qs(url.query)
                     harness, session = query.get("harness", [""])[0], query.get("session", [""])[0]
+                    outer.paths.append(self.path)
                     outer.log.append(("clicks", harness, session))
                     if outer.asking:
                         outer.asking(session)
@@ -197,6 +201,7 @@ class Connector:
                     return self.answer(200, {"ok": True})
                 if self.path == "/ack":
                     outer.log.append(("ack", tuple(body["ids"])))
+                    outer.receipts.append(body.get("receipts"))
                     for session in outer.offers:
                         outer.offers[session] = [c for c in outer.offers[session] if c["id"] not in body["ids"]]
                     return self.answer(200, {"ok": True, "acked": len(body["ids"])})
@@ -507,6 +512,25 @@ class InTheTerminal(Case):
         self.a_while()
         self.assertEqual(len(hermes.messages), 1, "and not handed over again")
         self.assertEqual(self.connector.acks()[:2], [("k1",), ("k1",)])
+
+    def test_it_asks_with_receipts_and_reports_a_click_by_the_receipt_it_was_offered_with(self):
+        hermes = self.terminal()
+        hermes.turn(A, running=False)
+        self.connector.offer(A, {**click("k1"), "receipt": "receipt-of-the-first-taking"})
+        self.assertTrue(until(lambda: len(self.connector.acks()) == 1))
+        self.assertEqual(self.connector.receipts, [["receipt-of-the-first-taking"]])
+        self.assertTrue(all(path.endswith("&receipts=1") for path in self.connector.paths), self.connector.paths)
+        # The connector did not get the report. It has taken the click anew since, and offers it
+        # under the receipt of that taking: it is reported by the receipt it is offered with now
+        self.connector.offer(A, {**click("k1"), "receipt": "receipt-of-the-second-taking"})
+        self.assertTrue(until(lambda: len(self.connector.acks()) == 2))
+        self.assertEqual(self.connector.receipts[1], ["receipt-of-the-second-taking"])
+        # A connector from before receipts offers none, and is told by the click's id alone
+        self.connector.offer(A, click("k1"))
+        self.assertTrue(until(lambda: len(self.connector.acks()) == 3))
+        self.assertEqual(self.connector.receipts[2], [None])
+        self.a_while()
+        self.assertEqual(len(hermes.messages), 1, "and it is handed over once")
 
     def test_a_click_hermes_would_not_take_is_not_reported(self):
         hermes = self.terminal(takes=False)

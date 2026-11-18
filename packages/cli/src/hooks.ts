@@ -88,7 +88,8 @@ async function codex(): Promise<void> {
     if (await handed(process.stdout, said)) await behind.taken()
     return
   }
-  const got = await local<{ clicks: Delivered[] }>(`/clicks?harness=codex&session=${encodeURIComponent(session)}`, {
+  // Asked with receipts: each click comes with the receipt of the taking the connector holds it by, and is said to be handed over by that receipt
+  const got = await local<{ clicks: (Delivered & { receipt?: string })[] }>(`/clicks?harness=codex&session=${encodeURIComponent(session)}&receipts=1`, {
     method: 'POST',
     body: { ...from, busy: true },
   })
@@ -117,7 +118,8 @@ async function codex(): Promise<void> {
   )
   if (!out) return
   await behind.taken()
-  if (clicks.length) await local('/ack', { method: 'POST', body: { ids: clicks.map((c) => c.id), woke: false } })
+  if (clicks.length)
+    await local('/ack', { method: 'POST', body: { ids: clicks.map((c) => c.id), receipts: clicks.map((c) => c.receipt ?? null), woke: false } })
 }
 
 export async function hook(harness: string): Promise<void> {

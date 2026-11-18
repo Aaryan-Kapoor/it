@@ -12,6 +12,10 @@ const stand = vi.hoisted(() => ({
   announce: null as null | (() => Promise<any>),
   output: null as null | (() => Promise<boolean>),
   calls: [] as string[],
+  /** What It was told with each call, by the call's name. */
+  args: [] as { name: string; args: any }[],
+  /** Whether It says at its door that it takes receipts: undefined where the door cannot be asked. */
+  takes: true as boolean | undefined,
 }))
 vi.mock('./src/connector', () => ({
   local: async (_path: string, { body }: any) => {
@@ -25,6 +29,7 @@ vi.mock('./src/lib', async (original) => ({
   call: async (_kind: string, fn: any, args: any) => {
     const name = getFunctionName(fn)
     stand.calls.push(name)
+    stand.args.push({ name, args })
     return name === 'delivery:claim' ? args.ids : name === 'delivery:handedOff' ? { already: false } : []
   },
   live: () => ({
@@ -35,6 +40,7 @@ vi.mock('./src/lib', async (original) => ({
     close: async () => {},
   }),
   sessionAsked: () => undefined,
+  backendTakes: async () => stand.takes,
   handed: async (_stream: unknown, text: string) => {
     const ok = stand.output ? await stand.output() : true
     if (ok) stand.lines.push(JSON.parse(text))
@@ -72,6 +78,8 @@ afterEach(() => {
   vi.useRealTimers()
   stand.counted.length = stand.requests.length = stand.lines.length = stand.errors.length = stand.exits.length = stand.calls.length = 0
   stand.announce = stand.output = stand.updates = stand.fail = null
+  stand.args.length = 0
+  stand.takes = true
 })
 async function begin(timeout = '3') {
   void wait({ _: [], flags: { id: 'board', timeout }, many: {} }, (code) => stand.counted.push(code))
@@ -176,4 +184,41 @@ test('what the command that waits says of an action is printed beside it, as the
   await flush()
   expect(stand.lines.map((c) => [c.id, c.picture])).toEqual([['bare', undefined]])
   expect(seen).toEqual(['drawn', 'bare'])
+})
+
+test('a click this takes is taken under a receipt it makes, and It is told of the hand-over by that receipt', async () => {
+  await begin()
+  stand.updates!([click('mine')])
+  await flush()
+  await vi.advanceTimersByTimeAsync(20)
+  const taken = stand.args.find((c) => c.name === 'delivery:claim')!.args
+  expect(taken.ids).toEqual(['mine'])
+  expect(taken.receipt).toMatch(/^[A-Za-z0-9_-]{16,64}$/)
+  expect(stand.args.filter((c) => c.name === 'delivery:handedOff').map((c) => c.args)).toEqual([{ id: 'mine', route: 'waiter', receipt: taken.receipt }])
+  // The receipt is no part of what is printed
+  expect(stand.lines.map((c) => c.id)).toEqual(['mine'])
+  expect(JSON.stringify(stand.lines)).not.toContain(taken.receipt)
+})
+
+test('a click the connector handed back with the receipt it holds it by is told to It by that receipt, which is not printed, and the connector is told that this takes receipts', async () => {
+  const receipt = 'receipt-the-connector-holds-it-by'
+  stand.announce = async () => ({ clicks: [{ ...click('handback'), receipt }] })
+  await begin()
+  await vi.advanceTimersByTimeAsync(20)
+  expect(stand.requests[0]).toMatchObject({ receipts: true })
+  expect(stand.lines.map((c) => c.id)).toEqual(['handback'])
+  expect(JSON.stringify(stand.lines)).not.toContain(receipt)
+  expect(stand.args.filter((c) => c.name === 'delivery:handedOff').map((c) => c.args)).toEqual([{ id: 'handback', route: 'waiter', receipt }])
+  expect(stand.calls).not.toContain('delivery:claim')
+})
+
+test('an It from before receipts is asked and told with none, as it always was', async () => {
+  stand.takes = false
+  await begin()
+  stand.updates!([click('mine')])
+  await flush()
+  await vi.advanceTimersByTimeAsync(20)
+  expect(stand.args.find((c) => c.name === 'delivery:claim')!.args).toEqual({ ids: ['mine'] })
+  expect(stand.args.filter((c) => c.name === 'delivery:handedOff').map((c) => c.args)).toEqual([{ id: 'mine', route: 'waiter' }])
+  expect(stand.lines.map((c) => c.id)).toEqual(['mine'])
 })

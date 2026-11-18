@@ -131,7 +131,7 @@ async function purge(ctx: MutationCtx, userId: Id<'users'>): Promise<boolean> {
   // With each record goes what was kept under its id to hold it to a pace, and, for a machine,
   // the proofs it has used: none of it is left for the hourly cleaning to come to. A showing's
   // record is among what goes here, though its display and its page are gone already.
-  for (const table of ['recipients', 'presence', 'displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions'] as const) {
+  for (const table of ['recipients', 'presence', 'displays', 'machines', 'sessions', 'invites', 'mounts', 'deletions', 'deliveryReturns'] as const) {
     const rows = await ctx.db
       .query(table)
       .withIndex('by_user', (q: any) => q.eq('userId', userId))
@@ -343,6 +343,15 @@ export const sweepRecords = internalMutation({
       await ctx.db
         .query('forgotten')
         .withIndex('by_at', (q) => q.lt('at', now - 90 * DAY))
+        .take(LIGHT),
+    )
+    // When a conversation was last heard from again on a machine, once that is a month ago:
+    // what was set aside for it before then has been given back, and a delivery that was ending
+    // then has long been told what became of its click
+    await drop(
+      await ctx.db
+        .query('deliveryReturns')
+        .withIndex('by_at', (q) => q.lt('at', now - 30 * DAY))
         .take(LIGHT),
     )
     // A turn that ended is kept for as long as what was handed to its conversation can be: the page says by it that the agent finished

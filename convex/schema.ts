@@ -115,6 +115,25 @@ export default defineSchema({
     .index('by_user', ['userId'])
     .index('by_ended', ['endedAt']),
 
+  // When a conversation was last heard from again on a machine, as that machine numbers such
+  // times (`returns` on the machine). What the machine set aside for the conversation before then
+  // is given back, and a setting aside that was decided before then sets nothing aside: a
+  // delivery that gives up just as its conversation comes back is told apart from one that
+  // gives up after, by the number each taking of a click is made under. One record for each
+  // conversation a machine has heard from again, kept for a month after the last time. Kept
+  // apart from the machine's record for what `turns` is kept apart for.
+  deliveryReturns: defineTable({
+    userId: v.id('users'),
+    machineId: v.id('machines'),
+    harness: v.string(),
+    sessionId: v.string(),
+    generation: v.number(),
+    at: v.number(),
+  })
+    .index('by_user', ['userId'])
+    .index('by_machine_session', ['machineId', 'harness', 'sessionId'])
+    .index('by_at', ['at']),
+
   // A browser that was paired, for as long as it stays paired. What its cookie holds is a
   // secret that is never kept here: only the hash of it, which is what it is found by.
   sessions: defineTable({
@@ -330,6 +349,12 @@ export default defineSchema({
     replaces: v.optional(v.id('machines')),
     /** And the later identity that took this one's place, so that what was on its way here finds where to go. */
     replacedBy: v.optional(v.id('machines')),
+    /**
+     * How many times a conversation has been heard from again on this machine. Each such time
+     * takes the next number as its own (`deliveryReturns`), so that one is always told from the
+     * one before it, also once the record of the one before has been let go of.
+     */
+    returns: v.optional(v.number()),
     ...invitedBy,
   })
     .index('by_user', ['userId', 'revoked'])
@@ -530,6 +555,12 @@ export default defineSchema({
     leaseMachineId: v.optional(v.id('machines')),
     /** The machine that gave up delivering it by itself. Until its page changes hands it is left out of what connectors are offered, and still waits for `it wait` and the site. */
     parkedBy: v.optional(v.id('machines')),
+    /**
+     * Which time of its conversation being heard from again on that machine was the last when it
+     * was set aside, as `deliveryReturns` numbers them: the next time gives it back. None where
+     * it was set aside before these were numbered, which is before the first.
+     */
+    parkedGeneration: v.optional(v.number()),
     /** When the person last asked, from the page, for it to be tried again after it was set aside. A machine that gave up on it before then forgets that it did. */
     retriedAt: v.optional(v.number()),
     /**
@@ -542,6 +573,23 @@ export default defineSchema({
      */
     heldBack: v.optional(v.object({ by: v.id('machines'), why: v.string() })),
     leaseExpiresAt: v.optional(v.number()),
+    /**
+     * The last taking of it to be handed over: the receipt that taking is known by, which the
+     * machine that took it made, the conversation it was taken for, where it was taken for one,
+     * the machine, and which time of that conversation being heard from again on that machine
+     * was the last by then. Kept when the hold ends, so that a hand-over that was made can still
+     * be confirmed by its receipt until the click is taken again. A taking with no receipt was
+     * made by an It from before receipts, and a click with none of this was last taken by
+     * functions from before it was kept.
+     */
+    claim: v.optional(
+      v.object({
+        receipt: v.optional(v.string()),
+        session: v.union(session, v.null()),
+        machineId: v.id('machines'),
+        generation: v.optional(v.number()),
+      }),
+    ),
     route: v.optional(v.string()),
     /** The machine that said it was handed over, where a machine did: a machine that was at work on it and did not hand it over itself has lost it to that one. */
     handedBy: v.optional(v.id('machines')),
@@ -583,6 +631,9 @@ export default defineSchema({
     // The same by when each was made: a conversation held in a thread of T3 Code is asked for
     // only what was made after a moment, and what was made before it is outside what is read
     .index('by_user_route_made', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'madeAt'])
+    // What a machine set aside for a conversation, by which time of its being heard from again
+    // was the last by then: a later time gives back what was set aside before it, and no more
+    .index('by_user_parked', ['userId', 'delivery', 'harness', 'sessionId', 'machineId', 'parkedBy', 'parkedGeneration'])
     .index('by_delivery_created', ['delivery', 'createdAt'])
     .index('by_delivery_handed', ['delivery', 'handedAt'])
     .index('by_delivery_lease', ['delivery', 'leaseExpiresAt'])

@@ -23,6 +23,8 @@ export interface Offered {
   /** Why this machine said it holds it back from reopening its conversation, as It keeps that with the click. Older backends never say. */
   heldBack?: string
 }
+/** What a receipt is: what a machine makes for one taking of a click, and says everything of that taking by (see `delivery.ts`). */
+export const RECEIPT = /^[A-Za-z0-9_-]{16,64}$/
 export type Given = { who: string; at: number }
 export type WaitCopy = { click: Offered; key: string; given?: Given }
 export type MarkFallback = { via: 'codex'; text: string } | { via: 't3'; text: string; thread: string }
@@ -58,6 +60,12 @@ interface Kept {
   accepted: string[]
   returning: string[]
   targets?: [string, string][]
+  /**
+   * The receipt each claim that is kept here was made under, by the click's id: a connector that
+   * starts again says by it what the one before handed over. A record from before receipts has
+   * none, and what it left to be confirmed is confirmed with none, as that connector took it.
+   */
+  receipts?: [string, string][]
 }
 const active = new Set<DeliveryRecovery>()
 
@@ -87,6 +95,7 @@ export class DeliveryRecovery {
     accepted: Set<string>
     returning: Set<string>
     targets: Map<string, string>
+    receipts: Map<string, string>
     person: string | undefined
   } = {
     waiters: new Map<string, WaitCopy>(),
@@ -94,6 +103,7 @@ export class DeliveryRecovery {
     accepted: new Set<string>(),
     returning: new Set<string>(),
     targets: new Map<string, string>(),
+    receipts: new Map<string, string>(),
     person: undefined,
   }
   get waiters(): ReadonlyMap<string, Readonly<WaitCopy>> {
@@ -110,6 +120,10 @@ export class DeliveryRecovery {
   }
   get targets(): ReadonlyMap<string, string> {
     return this.data.targets
+  }
+  /** The receipt of the taking each kept claim was made by. Never written anywhere but this record. */
+  get receipts(): ReadonlyMap<string, string> {
+    return this.data.receipts
   }
   get person(): string | undefined {
     return this.data.person
@@ -162,6 +176,7 @@ export class DeliveryRecovery {
       accepted: new Set(data.accepted),
       returning: new Set(data.returning),
       targets: new Map(data.targets),
+      receipts: new Map(data.receipts),
     }
   }
 
@@ -174,6 +189,13 @@ export class DeliveryRecovery {
     if (data.marks.flatMap(([, marks]) => marks).length > RECEIPTS_MOST || data.accepted.length > RECEIPTS_MOST || data.returning.length > CLAIMS_MOST)
       throw new Error('full')
     if (data.targets !== undefined && (!Array.isArray(data.targets) || data.targets.some(([id, key]) => typeof id !== 'string' || typeof key !== 'string')))
+      throw new Error('invalid')
+    if (
+      data.receipts !== undefined &&
+      (!Array.isArray(data.receipts) ||
+        data.receipts.length > CLAIMS_MOST ||
+        data.receipts.some((entry) => !Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'string' || !RECEIPT.test(entry[1])))
+    )
       throw new Error('invalid')
     for (const [id, copy] of data.waiters) {
       const c = copy.click
@@ -285,11 +307,15 @@ export class DeliveryRecovery {
     })
   }
 
-  claim(ids: readonly string[], key: string): Promise<void> {
+  /** A taking of these clicks is about to be asked for, under that receipt where it has one: kept before It is asked, so that the taking is known whatever becomes of the answer. */
+  claim(ids: readonly string[], key: string, receipt?: string): Promise<void> {
     return this.change((data) => {
       for (const id of ids) {
         data.returning.add(id)
         data.targets.set(id, key)
+        // This taking's in the place of an earlier one's: what is said of the click from here on is said of this one
+        if (receipt === undefined) data.receipts.delete(id)
+        else data.receipts.set(id, receipt)
       }
     })
   }
@@ -308,6 +334,8 @@ export class DeliveryRecovery {
       for (const id of ids) {
         data.returning.delete(id)
         data.targets.delete(id)
+        // Its receipt stays for as long as its hand-over waits to be told to It, which is told by it
+        if (!data.accepted.has(id)) data.receipts.delete(id)
       }
     })
   }
@@ -318,6 +346,7 @@ export class DeliveryRecovery {
       if (retire()) {
         data.returning.delete(id)
         data.targets.delete(id)
+        data.receipts.delete(id)
       }
     })
   }
@@ -416,7 +445,7 @@ export class DeliveryRecovery {
       parts.push(`[${JSON.stringify(key)},[${marks.map((mark) => this.encode(mark)).join(',')}]]`)
     }
     parts.push(
-      `],"accepted":${JSON.stringify([...data.accepted])},"returning":${JSON.stringify([...data.returning])},"targets":${JSON.stringify([...data.targets])}}`,
+      `],"accepted":${JSON.stringify([...data.accepted])},"returning":${JSON.stringify([...data.returning])},"targets":${JSON.stringify([...data.targets])},"receipts":${JSON.stringify([...data.receipts])}}`,
     )
     return parts
   }
@@ -433,6 +462,7 @@ export class DeliveryRecovery {
         accepted: new Set(before.accepted),
         returning: new Set(before.returning),
         targets: new Map(before.targets),
+        receipts: new Map(before.receipts),
       }
       change(data)
       const oldest = [...data.waiters].filter(([id]) => this.restoredWaiters.has(id)).sort((a, b) => a[1].click.at - b[1].click.at)
@@ -444,6 +474,7 @@ export class DeliveryRecovery {
         sameMap(data.waiters, before.waiters) &&
         sameMap(data.marks, before.marks) &&
         sameMap(data.targets, before.targets) &&
+        sameMap(data.receipts, before.receipts) &&
         sameSet(data.accepted, before.accepted) &&
         sameSet(data.returning, before.returning)
       )
@@ -488,6 +519,7 @@ export class DeliveryRecovery {
     this.data.accepted.clear()
     this.data.returning.clear()
     this.data.targets.clear()
+    this.data.receipts.clear()
     this.onErase?.()
   }
 

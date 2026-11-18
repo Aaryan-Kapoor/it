@@ -20,6 +20,8 @@ interface Asked {
   path: string
   harness: string | null
   session: string | null
+  /** Whether it was asked with receipts, as the query says. */
+  receipts: string | null
   token: string | undefined
   body: any
 }
@@ -67,6 +69,7 @@ async function connect(info: Record<string, unknown> = {}): Promise<void> {
         path: url.pathname,
         harness: url.searchParams.get('harness'),
         session: url.searchParams.get('session'),
+        receipts: url.searchParams.get('receipts'),
         token: req.headers['x-it-token'] as string | undefined,
         body,
       })
@@ -315,6 +318,37 @@ describe('the Pi add-on', () => {
     expect(acks()[0]!.body.ids).toEqual([a.id, b.id])
   })
 
+  it('asks for clicks with their receipts, and says the agent has a click by the receipt it was offered with, also when it is offered again under a later taking', async () => {
+    await connect()
+    acksArrive = false // the connector never hears that the agent has it, and goes on offering it
+    const c = click('approve')
+    offered = [{ ...c, receipt: 'receipt-of-the-first-taking' } as Click]
+    const p = pi('session-receipts')
+    p.start()
+    await until(() => acks().length > 0)
+    expect(polls().every((a) => a.receipts === '1')).toBe(true)
+    expect(acks()[0]!.body).toEqual({ ids: [c.id], receipts: ['receipt-of-the-first-taking'] })
+    // It has taken the click anew since, and offers it under the receipt of that taking: the agent
+    // has it already, so it is not given again, and is said to be with the agent by the receipt it is offered with now
+    const before = acks().length
+    offered = [{ ...c, receipt: 'receipt-of-the-second-taking' } as Click]
+    await until(() =>
+      acks()
+        .slice(before)
+        .some((a) => a.body.receipts[0] === 'receipt-of-the-second-taking'),
+    )
+    expect(p.sent).toHaveLength(1)
+    // A connector from before receipts offers none, and is told by the click's id alone
+    const then = acks().length
+    offered = [c]
+    await until(() =>
+      acks()
+        .slice(then)
+        .some((a) => a.body.receipts[0] === null),
+    )
+    expect(p.sent).toHaveLength(1)
+  })
+
   it('delivers a click that is offered twice only once, and reports it again', async () => {
     await connect()
     acksArrive = false // the connector never hears that the agent has it, so it keeps offering it
@@ -325,7 +359,7 @@ describe('the Pi add-on', () => {
     await until(() => acks().length >= 3)
     expect(p.sent).toHaveLength(1)
     expect(p.conversation).toEqual([c.text])
-    for (const a of acks()) expect(a.body).toEqual({ ids: [c.id] })
+    for (const a of acks()) expect(a.body).toEqual({ ids: [c.id], receipts: [null] })
   })
 
   it('does not deliver a click again in the conversation that replaces this one', async () => {
@@ -360,7 +394,7 @@ describe('the Pi add-on', () => {
     expect(acks()).toEqual([])
     p.step()
     await settled()
-    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id] }])
+    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id], receipts: [null] }])
   })
 
   it('reports nothing when Pi does not take the message', async () => {
@@ -404,7 +438,7 @@ describe('the Pi add-on', () => {
     for (let i = 0; i < 6 && p.sent.length < 2; i++) await second()
     expect(p.sent).toHaveLength(2)
     expect(p.conversation).toEqual([c.text])
-    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id] }])
+    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id], receipts: [null] }])
   })
 
   it('keeps reporting through a refusal backoff longer than the runtime retention window', async () => {
@@ -431,7 +465,7 @@ describe('the Pi add-on', () => {
     p.state.refuses = false
     await second(5)
     expect(p.sent).toHaveLength(5)
-    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id] }])
+    expect(acks().map((a) => a.body)).toEqual([{ ids: [c.id], receipts: [null] }])
   })
 
   it('reports its loaded code without taking clicks in a one-shot run that has finished', async () => {
@@ -579,7 +613,7 @@ describe('the Pi add-on', () => {
     expect(p.conversation).toEqual([])
     honest = true
     await until(() => seen.some((s) => s.startsWith('POST /ack')))
-    expect(seen[0]).toBe('POST /clicks?harness=pi&session=session-port undefined true')
+    expect(seen[0]).toBe('POST /clicks?harness=pi&session=session-port&receipts=1 undefined true')
     expect(p.conversation).toEqual([c.text])
   })
 
@@ -815,7 +849,7 @@ describe.skipIf(process.platform === 'win32')('the Pi add-on, in a Pi started wi
           const end = performance.now() + 15_000
           while (!seen.some((s) => s.startsWith('POST /ack')) && !proxy.seen.length && performance.now() < end) await new Promise((r) => really(r, 20))
           expect(proxy.seen).toEqual([])
-          expect(seen[0]).toBe('POST /clicks?harness=pi&session=the-persons-own-session true')
+          expect(seen[0]).toBe('POST /clicks?harness=pi&session=the-persons-own-session&receipts=1 true')
           expect(handed.trim()).toBe(c.text)
           expect(seen).toContain('POST /ack true')
         } finally {

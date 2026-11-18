@@ -4969,7 +4969,9 @@ describe.skipIf(process.platform === 'win32')('a wait', () => {
       req
         .on('data', (c: Buffer) => chunks.push(c))
         .on('end', async () => {
-          const answer = await fetch(`${b.url}${req.url}`, { method: req.method, headers: { 'content-type': 'application/json' }, body: Buffer.concat(chunks) })
+          // What is asked with nothing sent, as It's door is asked what it takes, is passed on with nothing
+          const sent = req.method === 'GET' || req.method === 'HEAD' ? {} : { body: Buffer.concat(chunks) }
+          const answer = await fetch(`${b.url}${req.url}`, { method: req.method, headers: { 'content-type': 'application/json' }, ...sent })
           res.writeHead(answer.status, { 'content-type': 'application/json' }).end(await answer.text())
         })
     })

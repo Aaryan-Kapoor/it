@@ -1,7 +1,8 @@
-import { MESSAGE, NOUN, parseJson } from '@it/protocol'
+import { randomBytes } from 'node:crypto'
+import { MESSAGE, NOUN, parseJson, TAKES } from '@it/protocol'
 import { type Args, text } from './args'
 import { local } from './connector'
-import { api, call, end, handed, live, Problem, sessionAsked, sessionNote, translate, written } from './lib'
+import { api, backendTakes, call, end, handed, live, Problem, sessionAsked, sessionNote, translate, written } from './lib'
 import { failure } from './output'
 import { claimUnclaimed } from './unclaimed'
 import * as usage from './usage'
@@ -111,6 +112,30 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
   }
   if (!slug) await waitingNow()
   const who = crypto.randomUUID()
+  /**
+   * The receipt of the taking each click that was printed is held by, where it is held by one:
+   * a receipt this made for a taking of its own, or the one the connector holds a click by and
+   * gave with it. It is told that the click was handed over by that receipt, so that the word
+   * of it, should it come late, is not taken for a word about a later taking of the same click.
+   * An It from before receipts is given none, and told by the click's id alone, as before.
+   */
+  const takings = new Map<string, string>()
+  // Asked at It's door, and not waited for long: a wait is to be listening at once, and where the
+  // door is slow to say, what is taken is taken with no receipt, which It takes as it always did
+  let waited = () => {}
+  const slow = new Promise<undefined>((resolve) => {
+    const timer = setTimeout(resolve, 3000)
+    waited = () => clearTimeout(timer)
+  })
+  const withReceipts = (await Promise.race([backendTakes(TAKES.receipts).catch(() => undefined), slow])) === true
+  waited()
+  const byReceipt = (id: string) => (takings.has(id) ? { receipt: takings.get(id)! } : {})
+  /** What the connector handed back, with the receipt each came with noted and taken off it: a receipt is no part of what is printed. */
+  const noted = (clicks: (Listed & { receipt?: unknown })[] | undefined): Listed[] =>
+    (clicks ?? []).map(({ receipt, ...click }) => {
+      if (typeof receipt === 'string') takings.set(click.id, receipt)
+      return click
+    })
   // The connector is told what this waits for: one page, or, with none named, this
   // conversation's clicks only. Everyone else's go on being delivered as usual.
   /**
@@ -129,7 +154,8 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
   const announce = () =>
     local<{ sessions?: { harness: string; id: string }[]; clicks?: Listed[] }>('/waiting', {
       method: 'POST',
-      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), ...got() },
+      // Said with it: that this tells It of a hand-over by the receipt the connector holds the click by
+      body: { id: who, slug: slug ?? null, ...(slug ? {} : { session: me }), receipts: true, ...got() },
     })
   // The connector knows the ids this conversation had before it was last cleared: pages made
   // then are still recorded under them
@@ -140,7 +166,7 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
   // An add-on in this conversation may already have been given a click it can only hand over
   // with the result of a command, and the command now running is this one. The connector
   // passes such a click on here, already held for this machine, and it is printed like any other.
-  let handedBack: Listed[] = first?.clicks ?? []
+  let handedBack: Listed[] = noted(first?.clicks)
   /** The asking of the connector that is on its way now, if one is. What it brings is waited for before the wait says its last word. */
   let announcing: Promise<void> | null = null
   /** The wait is choosing its last word: the connector is asked for nothing more, which it would hand over once and this could then not print. */
@@ -150,7 +176,7 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
     announcing = announce()
       .then((r) => {
         if (r?.clicks?.length) {
-          handedBack = [...handedBack, ...r.clicks]
+          handedBack = [...handedBack, ...noted(r.clicks)]
           void onHandedBack()
         }
       })
@@ -205,7 +231,7 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
   }
   const report = async () => {
     for (const id of unreported) {
-      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter' }).then(
+      const ok = await call<{ already: boolean } | null>('mutation', api.delivery.handedOff, { id, route: 'waiter', ...byReceipt(id) }).then(
         (done) => {
           const c = made.get(id)
           // Counted or not, it is finished with: a wait that goes on for days keeps nothing of it
@@ -222,7 +248,10 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
         },
         (err) => /conflict|not_found/.test(String((err as Problem).code)),
       )
-      if (ok) unreported.delete(id)
+      if (ok) {
+        unreported.delete(id)
+        takings.delete(id)
+      }
     }
   }
   /** Prints what the connector handed back and has not been printed yet, and tells It of it. */
@@ -266,14 +295,23 @@ export async function wait(a: Args, counted: (code?: string) => void, also?: (c:
       const fresh = clicks.filter((c) => !printedIds.has(c.id) && mine(c))
       if (fresh.length) {
         const got = new Set<string>()
-        if (slug) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: fresh.map((c) => c.id) })) got.add(id)
+        // Each taking under a receipt of its own, made before It is asked
+        const takeThem = async (ids: string[], of?: { harness: string; id: string }) => {
+          const receipt = withReceipts ? randomBytes(18).toString('base64url') : undefined
+          for (const id of await call<string[]>('mutation', api.delivery.claim, { ids, ...(of ? { for: of } : {}), ...(receipt ? { receipt } : {}) })) {
+            got.add(id)
+            if (receipt) takings.set(id, receipt)
+          }
+        }
+        if (slug) await takeThem(fresh.map((c) => c.id))
         // Waiting for its own conversation's clicks, each is claimed for the conversation it
         // was offered for: a page that has changed hands meanwhile keeps its click for its new owner
-        else for (const c of fresh) for (const id of await call<string[]>('mutation', api.delivery.claim, { ids: [c.id], for: c.session! })) got.add(id)
+        else for (const c of fresh) await takeThem([c.id], c.session!)
         for (const c of fresh.filter((x) => got.has(x.id))) {
           // The wait ended while this was being asked for: it is given back, and not printed after the last word
           if (ending || over) {
-            await call('mutation', api.delivery.release, { id: c.id }).catch(() => {})
+            await call('mutation', api.delivery.release, { id: c.id, ...byReceipt(c.id) }).catch(() => {})
+            takings.delete(c.id)
             continue
           }
           // Out of this process first, and only then reported as handed over
