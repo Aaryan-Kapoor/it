@@ -3493,7 +3493,8 @@ describe('what a person is told about an app', () => {
       // The command stands on a line of its own, so that no terminal breaks it in the middle of a word
       expect(AFTER.hermes!.split('\n')).toContain('    hermes config set plugins.entries.it-bridge.allow_gateway_injection true')
       expect(AFTER.hermes).toContain('If this Hermes (0.22.0) does not take that setting, what you do waits on the page until the agent runs `it wait`')
-      expect(AFTER.hermes!.split('\n')).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
+      // Before 0.23.1 Hermes says nothing when a saved conversation is opened again, in its terminal or its TUI
+      expect(AFTER.hermes!.split('\n')).toContain('A saved conversation you open again starts listening once you send a message in it.')
     } finally {
       VERSIONS.hermes = 'Hermes Agent v0.21.5'
     }
@@ -3512,6 +3513,22 @@ describe('what a person is told about an app', () => {
     // Where the turn a click starts was seen not to show in the plain terminal, the person is told
     expect(afterHermes('0.23.1')).toContain('shows in the TUI and not in the plain terminal')
     expect(afterHermes('0.22.0')).not.toContain('shows in the TUI and not in the plain terminal')
+  })
+
+  test('from Hermes 0.23.1, where a conversation listens as soon as it is opened, nobody is told to send a message in a saved one', () => {
+    // Hermes 0.23.1 tells a plugin when a conversation is opened, new or saved, and the add-on listens from then
+    for (const version of ['0.23.1', '0.23.2', '0.24.0']) {
+      expect(afterHermes(version)).not.toMatch(/saved conversation/)
+      expect(afterHermes(version).split('\n')).toEqual([
+        'If Hermes is open, restart it, and run this once, which lets It put what you do on a page into a Hermes conversation, in the plain `hermes` terminal as well as the TUI and the desktop app:',
+        '    hermes config set plugins.entries.it-bridge.allow_gateway_injection true',
+        'In this Hermes the turn a click starts shows in the TUI and not in the plain terminal, though the agent there has it and answers on the page.',
+        `If this Hermes (${version}) does not take that setting, what you do waits on the page until the agent runs \`it wait\`, as it does in the messaging gateway.`,
+      ])
+    }
+    // An earlier one that takes the setting says nothing when a saved conversation is opened again, in its terminal or its TUI
+    for (const version of ['0.21.6', '0.22.6', '0.23.0'])
+      expect(afterHermes(version).split('\n')).toContain('A saved conversation you open again starts listening once you send a message in it.')
   })
 
   test('after connecting OpenCode says that a saved conversation listens once a message is sent in it', () => {

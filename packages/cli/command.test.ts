@@ -7863,9 +7863,9 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     }
   })
 
-  test('run from a Hermes conversation, it tells the agent to pass on Hermes’s note, whole: to restart it, the command that lets clicks in, and to send a message in a resumed conversation', async () => {
+  test('run from a Hermes conversation, it tells the agent to pass on Hermes’s note, whole: to restart it, the command that lets clicks in, and to send a message in a saved conversation opened again', async () => {
     const m = machine()
-    // A stand-in for Hermes's own command: it lists It's plugin once its files are in Hermes's folder, as enabled once it was told to enable it
+    // A stand-in for Hermes's own command, of a Hermes that says nothing when a saved conversation is opened again: it lists It's plugin once its files are in Hermes's folder, as enabled once it was told to enable it
     writeFileSync(
       path.join(m.bin, 'hermes'),
       [
@@ -7873,7 +7873,7 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
         'PATH=/bin:/usr/bin',
         'folder="$HOME/.hermes"',
         'case "$*" in',
-        '  --version) echo "Hermes Agent v0.23.1" ;;',
+        '  --version) echo "Hermes Agent v0.23.0" ;;',
         '  "plugins enable it-bridge") : > "$HOME/hermes-on" ;;',
         '  "plugins disable it-bridge") rm -f "$HOME/hermes-on" ;;',
         '  "plugins list --json --no-bundled")',
@@ -7889,13 +7889,13 @@ describe.skipIf(process.platform === 'win32')('`it setup`, and which agent apps 
     const b = await mine(m)
     try {
       const setup = await run(m, ['setup', '--no-service', '--only', 'hermes'], { ...b.env, HERMES_SESSION_ID: '20261110_120000_abcd' })
-      expect(printed(setup).harnesses).toEqual([{ id: 'hermes', version: '0.23.1', addon: 'connected' }])
-      const note = `Hermes Agent: ${afterHermes('0.23.1')}`
+      expect(printed(setup).harnesses).toEqual([{ id: 'hermes', version: '0.23.0', addon: 'connected' }])
+      const note = `Hermes Agent: ${afterHermes('0.23.0')}`
       passedOn(setup, note)
       // The three things an agent in Hermes was seen to pass on only the first of
       expect(note).toContain('If Hermes is open, restart it')
       expect(note).toContain('\n    hermes config set plugins.entries.it-bridge.allow_gateway_injection true\n')
-      expect(note).toContain('A saved conversation you resume in the terminal starts listening once you send a message in it.')
+      expect(note).toContain('\nA saved conversation you open again starts listening once you send a message in it.\n')
     } finally {
       await b.close()
     }
