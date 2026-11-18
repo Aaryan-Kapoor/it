@@ -2417,6 +2417,35 @@ try {
     (await page.locator('.page-talk-box').count()) === 0 && new URL(page.url()).pathname === `/p/${slug}`,
   )
 
+  // A click made in a page a moment after a click on the site itself is held while the site
+  // tells which of the two the browser means. A tab closed in that while sends it as it goes,
+  // as one the page sent by itself, and does not leave it in the browser until the site is next
+  // opened there. The tab is in a browser of its own, which has no other tab to send it
+  const closing = began(await launch())
+  await pairAsOwner(closing.page)
+  await closing.page.goto(`${APP}/p/${slug}`)
+  await pageIn(closing.page, { id: slug })
+  const beforeClosing = new Set((await it(A, ['actions', '--id', slug])).map((x) => x.id))
+  await closing.page.locator('.page-title').click()
+  await closing.page.frameLocator('.mount iframe').locator('#approve').click()
+  const heldThere = await until(() => closing.page.evaluate(() => Object.keys(localStorage).some((name) => name.startsWith('it.outbox.'))), 4000, 50)
+  // Closed well inside the hold, which ends five seconds after the click on the site
+  await closing.page.waitForTimeout(1500)
+  const closedAt = Date.now()
+  await closing.page.close()
+  const sentAsItClosed = await until(
+    async () => (await it(A, ['actions', '--id', slug])).find((x) => x.action === 'approve' && !beforeClosing.has(x.id)),
+    10_000,
+    250,
+  )
+  check(
+    'a click held in a page’s first moments reaches its agent as its tab is closed, marked as the page’s own, and does not wait for the site to be opened again',
+    Boolean(heldThere) && sentAsItClosed?.sentByThePageItself === true && sentAsItClosed?.data?.plan === PLAN,
+    JSON.stringify({ heldThere, arrivedAfterMs: sentAsItClosed ? Date.now() - closedAt : null, sentAsItClosed }),
+  )
+  if (sentAsItClosed) await it(A, ['ack', sentAsItClosed.id])
+  await closing.browser.close()
+
   // ------------------------------------------------------------------
   section('Players and maps a page embeds')
   // A page that frames a player as any page writes one, and asks It for another over a place in
