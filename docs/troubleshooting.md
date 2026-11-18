@@ -64,6 +64,18 @@ The door is the one part of It that a browser, another screen or a machine on an
 | `accept_failed` | The system could not hand the door a connection | Once is nothing. Where it goes on, stop It and start it again |
 | `content_failed`, `fault` | Something went wrong inside It while it answered | Where it goes on, report it, with the lines around it in the log: they hold ids and codes, and nothing that was on a page |
 
+## A Mac that would not load the background service
+
+On macOS `it setup` and `it service install` hand It's definition to launchd, and launchd can refuse it. Its own command, `launchctl`, prints the same line for every cause, "Bootstrap failed: 5: Input/output error", so It asks launchd why and says what it found:
+
+- **macOS has It's background service switched off.** The label `dev.it` is disabled for your account: under Login Items in System Settings, by `launchctl disable`, or by a tool that manages what starts on the Mac. `launchctl print-disabled gui/$(id -u)` lists it as `"dev.it" => disabled`. Turn it on again in System Settings, under General and then Login Items, or with `launchctl enable gui/$(id -u)/dev.it`, and then run `it setup` again, which is what loads it. Where another tool manages what starts on the Mac, It has to be allowed there.
+- **The definition cannot be read, or is not a valid property list.** The definition is `~/Library/LaunchAgents/dev.it.plist`, which `it setup` writes from the settings of the terminal it is run in. `plutil -lint` on the file says where it is wrong.
+- **Anything else** is said as `launchctl` printed it, since nothing better is known.
+
+Until it is put right, It is not registered to start by itself, and `it status` says so. That is so as well where it is switched off while It runs, as `launchctl disable` does: launchd lets It run on until you log out, and does not start it at your next login. The definition stays where it is meanwhile, so that there is something to turn on. `it serve` in a terminal of your own runs It until that terminal closes. An agent that ran setup for you is told to pass the reason on to you and not to run `it serve` itself: started from the agent's shell, It stops when the app ends that command or the conversation, and then goes quiet with nothing to say why.
+
+A Mac that is reached only over SSH, with no login of yours at its own screen, is another case: nothing can be loaded there at all, the definition is kept, and launchd reads it when you next log in at the screen.
+
 ## A port another program has
 
 It counts every port from one, which is 4700 unless `IT_PORT` names another: the site is on that port, the pages are on the one after it, and the backend program has the two that are 40 and 41 above it, 4740 and 4741. Where another program has one of them, It does not start, and says which port it was.

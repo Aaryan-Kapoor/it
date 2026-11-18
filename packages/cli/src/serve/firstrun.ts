@@ -19,6 +19,8 @@ export interface Begun {
   background?: service.ServiceStatus
   /** Why It does not run in the background, when it was meant to. */
   trouble?: string
+  /** Whether that is macOS refusing to load the service, for a cause that only the person can put right. */
+  refused?: boolean
   /** Whether this machine was enrolled just now. */
   enrolled: boolean
   /** Whether the backend is run from here, only for as long as setup takes. */
@@ -191,6 +193,7 @@ export async function begin(opts: {
       begun.background = service.install()
     } catch (err) {
       begun.trouble = `It could not be registered as a background service: ${(err as Error).message}`
+      begun.refused = err instanceof service.LaunchdRefused
     }
     // Registered is not yet running: the backend is asked, and given a while to answer
     if (!begun.trouble && !(await backendAnswers(config, 90_000)))

@@ -13,6 +13,7 @@
 // its own for It and takes everything away at its end, whatever became of the checks.
 import './node.mjs'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -304,6 +305,147 @@ process.once('SIGTERM', () => {
     // The fixture removes its own files before uninstall checks that the installation is empty.
     // Unknown files at the top of It's folder are deliberately kept by uninstall.
     if (!registered) for (const file of [slow, ready, stopped]) rmSync(file, { force: true })
+  }
+
+  // ---------- on a Mac, a load that launchd refuses, and an account launchd has no domain for ----------
+  // The real launchd is told to keep It's label switched off, as Login Items or a tool that
+  // manages what starts on the Mac leaves it. Setup is then run so that it registers the
+  // service, with no agent app looked for: launchd refuses, and setup is to say why with what
+  // turns it on, and to count nothing as registered. Switched on again, the same setup registers it.
+  if (macDefinition && !registered) {
+    const target = `gui/${process.getuid()}/dev.it`
+    const launchctl = (...words) => {
+      const ran = spawnSync('launchctl', words, { encoding: 'utf8', timeout: 60_000 })
+      return { code: ran.status, said: `${ran.stdout ?? ''}${ran.stderr ?? ''}`.trim() }
+    }
+    const registering = (more = {}) => {
+      const ran = spawnSync(program, ['setup', '--yes', '--json'], { env: { ...env, IT_HARNESSES: 'none', ...more }, encoding: 'utf8', timeout: 600_000 })
+      let json
+      try {
+        json = JSON.parse((ran.stdout ?? '').slice((ran.stdout ?? '').indexOf('{')))
+      } catch {}
+      return { code: ran.status, json, said: `${ran.stdout ?? ''}${ran.stderr ?? ''}` }
+    }
+    const off = launchctl('disable', target)
+    let on = { code: null, said: 'it was never switched on again' }
+    try {
+      const listed = launchctl('print-disabled', `gui/${process.getuid()}`)
+      console.log(
+        `macOS ${spawnSync('sw_vers', ['-productVersion'], { encoding: 'utf8' }).stdout.trim()} lists the label as:${listed.said.split('\n').find((line) => line.includes('"dev.it"')) ?? ' (no line)'}`,
+      )
+      const refused = registering({ IT_HARNESS: 'pi', IT_SESSION: 'a-conversation' })
+      registered = existsSync(macDefinition)
+      const problem = String(refused.json?.problem ?? '')
+      check(
+        'with its label switched off in launchd, setup says that macOS has the service switched off and what turns it on, and not what launchctl printed',
+        off.code === 0 &&
+          refused.code === 1 &&
+          refused.json?.service?.registered === false &&
+          problem.includes('macOS has It’s background service switched off') &&
+          problem.includes(`launchctl enable ${target}`) &&
+          !refused.said.includes('Input/output error'),
+        `${off.said}\n${refused.said.slice(-1200)}`,
+      )
+      check(
+        'and an agent that led that setup is told to pass the reason on, and not to start `it serve` itself',
+        refused.said.includes('Do not start `it serve` yourself') &&
+          !refused.said.includes('Run `it serve`') &&
+          String(refused.json?.tell ?? '').includes(problem),
+        refused.said.slice(-1200),
+      )
+      const after = it(['service', 'status', '--json'], 60_000).json ?? {}
+      check(
+        'the definition launchd refused is kept and is no registration: the service is said not to be registered, and nothing of it runs',
+        existsSync(macDefinition) && after.registered === false && after.state === 'disabled' && after.running === false && !(await answers()),
+        JSON.stringify(after),
+      )
+      const again = it(['service', 'install', '--json'], 180_000)
+      check(
+        '`it service install` says the same of it',
+        again.code === 1 && again.said.includes('macOS has It’s background service switched off') && !again.said.includes('Input/output error'),
+        again.said.slice(-600),
+      )
+    } finally {
+      on = launchctl('enable', target)
+    }
+    const loaded = registering()
+    registered = existsSync(macDefinition)
+    const up = await until(async () => (await answers()) && stands().running, 180_000, 2000)
+    check(
+      'switched on again with `launchctl enable`, the same setup registers the service, and launchd runs it',
+      on.code === 0 && loaded.code === 0 && loaded.json?.service?.registered === true && Boolean(up) && stands().registered,
+      `${on.said}\n${loaded.said.slice(-900)}\nnow: ${JSON.stringify(stands())}`,
+    )
+    if (!up) why('after the label was switched on again')
+    const removed = it(['service', 'uninstall', '--json'], 180_000)
+    registered = removed.code !== 0
+    const quiet = await until(async () => !stands().running && !(await answers()), 60_000, 1000)
+    check('and it is taken away again, and nothing of it runs', !registered && !existsSync(macDefinition) && Boolean(quiet), removed.said.slice(-600))
+
+    // An account with no login at the Mac's own screen has no domain in launchd to load an
+    // agent into, which is how a Mac reached only over SSH stands. Setup is run as such an
+    // account, made for this and taken away after: nothing can be loaded, the definition is
+    // kept for the next login, and that is a registration, said as it was said before.
+    const account = 'itnologin'
+    const sudo = (...words) => {
+      const ran = spawnSync('sudo', ['-n', ...words], { encoding: 'utf8', timeout: 600_000 })
+      return { code: ran.status, out: ran.stdout ?? '', said: `${ran.stdout ?? ''}${ran.stderr ?? ''}`.trim() }
+    }
+    const made = sudo('sysadminctl', '-addUser', account, '-password', `${randomBytes(18).toString('base64url')}aA1!`)
+    const uid = spawnSync('id', ['-u', account], { encoding: 'utf8' }).stdout.trim()
+    if (made.code !== 0 || !/^\d+$/.test(uid)) {
+      // Only a machine made for the run lets an account be made without asking: said, and counted where CI is one
+      console.log(`  ----  an account with no login at the screen could not be made here, so that case was not tried: ${made.said.slice(-300)}`)
+      if (process.env.CI) check('an account with no login at the screen is made for the run', false, made.said.slice(-600))
+    } else {
+      const shared = mkdtempSync(path.join('/tmp', 'it-no-login-'))
+      try {
+        // The program keeps a lock beside its own file, so the account is given a copy in a folder of its own
+        const handed = path.join(shared, 'it')
+        writeFileSync(handed, readFileSync(program), { mode: 0o755 })
+        spawnSync('chmod', ['755', shared, handed])
+        const theirs = sudo('-u', account, '-H', 'sh', '-c', 'echo "$HOME"').out.trim()
+        const copy = `${theirs}/it-program/it`
+        sudo('-u', account, '-H', 'mkdir', '-p', `${theirs}/it-program`)
+        const copied = sudo('-u', account, '-H', 'cp', handed, copy)
+        if (copied.code !== 0) console.log(`  ----  the program could not be handed to the account: ${copied.said.slice(-300)}`)
+        // Each account's It counts from a port of its own, and this one's is outside the blocks this run chose its own from
+        const theirPort = 28_500
+        const as = (words, forMs = 600_000) => {
+          const ran = spawnSync(
+            'sudo',
+            ['-n', '-u', account, '-H', 'env', `IT_HOME=${theirs}/.it`, `IT_PORT=${theirPort}`, 'IT_TELEMETRY_ENABLED=false', 'CI=1', copy, ...words],
+            { encoding: 'utf8', timeout: forMs, cwd: shared },
+          )
+          let json
+          try {
+            json = JSON.parse((ran.stdout ?? '').slice((ran.stdout ?? '').indexOf('{')))
+          } catch {}
+          return { code: ran.status, json, said: `${ran.stdout ?? ''}${ran.stderr ?? ''}` }
+        }
+        const asked = sudo('-u', account, '-H', 'launchctl', 'print', `gui/${uid}/dev.it`)
+        console.log(`launchd, asked of an account with no login at the screen: exit ${asked.code}, ${asked.said.split('\n').join(' / ')}`)
+        const alone = as(['setup', '--none', '--json'])
+        const kept = sudo('-u', account, '-H', 'test', '-f', `${theirs}/Library/LaunchAgents/dev.it.plist`).code === 0
+        const stood = as(['service', 'status', '--json'], 60_000).json ?? {}
+        check(
+          'for an account with no login at the screen, as over SSH, setup says the service could not be registered and keeps its definition for the next login, which is a registration',
+          alone.code === 1 &&
+            String(alone.json?.problem ?? '').startsWith('It could not be registered as a background service') &&
+            !String(alone.json?.problem ?? '').includes('switched off') &&
+            kept &&
+            stood.registered === true &&
+            stood.state === 'not loaded',
+          `${alone.said.slice(-900)}\nstatus: ${JSON.stringify(stood)}`,
+        )
+        const out = as(['uninstall', '--yes', '--json'], 180_000)
+        check('and that account’s It is taken off again whole', out.code === 0 && out.json?.removed === true, out.said.slice(-600))
+      } finally {
+        const gone = sudo('sysadminctl', '-deleteUser', account)
+        if (gone.code !== 0) console.log(`  ----  the account made for the run could not be taken away: ${gone.said.slice(-300)}`)
+        rmSync(shared, { recursive: true, force: true })
+      }
+    }
   }
 
   const whole = it(['uninstall', '--yes', '--json'], 180_000)
