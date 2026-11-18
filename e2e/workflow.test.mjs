@@ -216,9 +216,23 @@ describe('what the jobs are held to running', () => {
 
   test('each system’s unit tests are cut into halves that together run every test file, and what is run beside them is run once, in the first half', () => {
     const job = jobs.test.filter((line) => !/^\s*#/.test(line)).join('\n')
-    // Every system has both halves, and the job's name says which half it is
-    expect(job).toMatch(/^ {8}os: \[ubuntu-latest, macos-latest, windows-latest\]$/m)
-    expect(job).toMatch(/^ {8}shard: \[1, 2\]$/m)
+    // Every system has both halves, and the job's name says which half it is. The whole of what
+    // the job is run for is held to, so that nothing takes a half of a system away again
+    const own = job.split('\n')
+    expect(own.slice(own.indexOf('    strategy:'), own.indexOf('    steps:'))).toEqual([
+      '    strategy:',
+      '      fail-fast: false',
+      '      matrix:',
+      '        os: [ubuntu-latest, macos-latest, windows-latest]',
+      '        shard: [1, 2]',
+      '        include:',
+      '          - os: ubuntu-latest',
+      '            experimental: false',
+      '          - os: macos-latest',
+      '            experimental: false',
+      '          - os: windows-latest',
+      '            experimental: true',
+    ])
     expect(job).toMatch(/^ {4}name: Unit tests \(\$\{\{ matrix\.os \}\}, \$\{\{ matrix\.shard \}\} of 2\)$/m)
     // The one run of vitest is told which half it is, of as many as there are
     const tests = steps('test').filter((step) => /run: npm test\b/.test(step))
@@ -232,7 +246,10 @@ describe('what the jobs are held to running', () => {
     const beside = steps('test').slice(at + 1)
     expect(beside.length).toBeGreaterThan(0)
     for (const step of beside) expect(step).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1\b/)
-    expect(beside.some((step) => step.includes('run: npm run test:hermes'))).toBe(true)
+    // The Hermes add-on's are run on Linux alone, as they were
+    const hermes = beside.filter((step) => step.includes('run: npm run test:hermes'))
+    expect(hermes).toHaveLength(1)
+    expect(hermes[0]).toMatch(/if: \$\{\{ !cancelled\(\) && matrix\.shard == 1 && runner\.os == 'Linux' \}\}$/m)
   })
 
   test('no step is allowed to fail without failing its job, except the audit of what only the build and the tests use', () => {
