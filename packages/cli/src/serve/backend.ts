@@ -34,7 +34,7 @@ import { ConvexHttpClient } from 'convex/browser'
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
 import { runSync, unlessCutShort } from '../child'
 import { FUNCTIONS_HASH, functions } from '../functions.generated'
-import { ask, backendAt, direct, inHome, Problem, psQuote, readJson, VERSION } from '../lib'
+import { ask, backendAt, direct, inHome, Problem, plainWord, psQuote, readJson, VERSION } from '../lib'
 import {
   backendFolder,
   doorKey,
@@ -760,10 +760,14 @@ const LISTED_IN = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8'
 /**
  * How Windows is asked for the list of what runs. PowerShell, and Windows behind it, can be slow
  * or fail once on a machine that is busy, on battery or just woken, so a list that does not come
- * is asked for again, three times in a row at most and a moment apart. Every listing that one
- * start or one removal makes, however many lists it needs, shares two minutes of listing between
- * them (`ListingBudget`), the pauses among them. A try is begun only while ten seconds or more of
- * that are left, and is given no more than is left, so two tries that each ran out of time are
+ * is asked for again, three times in a row at most and a moment apart.
+ *
+ * The first asking of a list has a minute, whatever went before it, and a list that comes costs
+ * nothing: a machine that gives every list, however slowly, is never refused for the time its
+ * lists took. What is bounded is the asking again. The tries that gave no list and the pauses
+ * after them, in every list that one start or one removal makes, share two minutes between them
+ * (`ListingBudget`). A list is asked for again only while ten seconds or more of those are
+ * left, and that try is given no more than is left, so two tries that each ran out of time are
  * the last.
  */
 const LIST_TRIES = 3
@@ -772,11 +776,14 @@ const LIST_EACH_MS = 60_000
 const LIST_LEAST_MS = 10_000
 const LIST_PAUSE_MS = 1_500
 
-/** The listing one start or one removal has had of Windows so far: how long it took, in milliseconds. */
+/**
+ * What one start or one removal has lost to lists that Windows did not give: how long the tries
+ * that gave none took, and the pauses after them, in milliseconds.
+ */
 export interface ListingBudget {
-  spent: number
+  lost: number
 }
-export const listingBudget = (): ListingBudget => ({ spent: 0 })
+export const listingBudget = (): ListingBudget => ({ lost: 0 })
 
 /** Runs the script that lists what runs, with a time limit. */
 const powershell =
@@ -790,16 +797,30 @@ const powershell =
     })
 
 /**
+ * Why a run of PowerShell gave no list, in a code: `timed_out` where it was ended by its limit,
+ * the system's own code where it could not be run or was ended for another reason, as `ENOENT`
+ * is where there is no PowerShell to start, `exit_<n>` for the code PowerShell ended with, and
+ * `unreadable` for anything else, such as a list that came without its last word.
+ */
+function notListed(ran: SpawnSyncReturns<string>): string {
+  const code = (ran.error as NodeJS.ErrnoException | undefined)?.code
+  if (code === 'ETIMEDOUT') return 'timed_out'
+  if (plainWord(code)) return code
+  return !ran.error && typeof ran.status === 'number' && ran.status !== 0 ? `exit_${ran.status}` : 'unreadable'
+}
+
+/**
  * The rows of what PowerShell printed for `script`, once it has printed the list whole: it
  * ended as asked, with its last word and the word for this very program among the rows. Where
- * it would not, after as many tries as it is given or once `budget` is spent, that is what is
- * said and thrown, with why in a code: `timed_out`, `exit_<n>` for the code PowerShell ended
- * with, or `unreadable` for anything else, such as a list that came without its last word.
- * Nothing PowerShell printed is said, here or in the log.
+ * it would not, after as many tries as it is given or once too little of `budget` is left to
+ * ask again, that is what is said and thrown, with why the last try failed in a code (see
+ * `notListed`) and how many tries of this list there were. Nothing PowerShell printed is said,
+ * here or in the log.
  *
  * A child that the runtime ended before its limit is run again, as `runSync` runs it (see
- * `child.ts`), and only where a second run of the whole limit still fits in what is left. `run`,
- * `clock` and `pause` are what a test stands in for.
+ * `child.ts`): always at the first asking, as every child with a limit is, and at a later one
+ * only where a second run of the whole limit still fits in what is left. `run`, `clock` and
+ * `pause` are what a test stands in for.
  */
 export function listedByWindows(
   script: string,
@@ -809,47 +830,39 @@ export function listedByWindows(
   clock: () => number = () => performance.now(),
   pause: (ms: number) => void = (ms) => void Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
 ): string[] {
-  let tries = 0
-  let why = 'timed_out'
-  const refused = () => {
-    const made = `${tries} ${tries === 1 ? 'try' : 'tries'}`
-    say?.(`backend: the list of what runs on this machine could not be had (${why}, ${made}), and no backend program is started`)
-    return new Problem(
-      `It could not look through the programs running on this machine for a backend program left on its folder (${why}, after ${made}), so it starts none.`,
-      'cannot_list_processes',
-      'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run. Where Windows was only slow or busy for a moment, as it can be on a laptop that is on battery or has just woken, run the same command again.',
-    )
-  }
-  for (;;) {
-    const left = LIST_MS - budget.spent
-    if (left < LIST_LEAST_MS) throw refused()
-    const limit = Math.min(LIST_EACH_MS, left)
-    tries += 1
+  for (let tries = 1; ; tries++) {
+    // The first asking has its minute whatever was lost before it, and one asked again has what is
+    // left: in whole milliseconds, which is all a child's limit may be given in, and never less
+    // than the least a try is begun with, should the pause have run on past its time
+    const limit = tries === 1 ? LIST_EACH_MS : Math.max(LIST_LEAST_MS, Math.min(LIST_EACH_MS, Math.floor(LIST_MS - budget.lost)))
     const began = clock()
     const ran = unlessCutShort(
       () => run(limit),
       limit,
-      () => LIST_MS - budget.spent - (clock() - began) >= limit,
+      () => tries === 1 || LIST_MS - budget.lost - (clock() - began) >= limit,
       clock,
     )
-    budget.spent += clock() - began
     if (!ran.error && ran.status === 0) {
       const rows = String(ran.stdout)
         .split(/\r?\n/)
         .map((line) => line.trim())
       if (rows.includes('end') && rows.includes('self')) return rows
     }
-    why =
-      (ran.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
-        ? 'timed_out'
-        : typeof ran.status === 'number' && ran.status !== 0
-          ? `exit_${ran.status}`
-          : 'unreadable'
-    if (tries >= LIST_TRIES || LIST_MS - budget.spent - LIST_PAUSE_MS < LIST_LEAST_MS) throw refused()
+    budget.lost += clock() - began
+    const why = notListed(ran)
+    if (tries >= LIST_TRIES || LIST_MS - budget.lost - LIST_PAUSE_MS < LIST_LEAST_MS) {
+      const made = `${tries} ${tries === 1 ? 'try' : 'tries'}`
+      say?.(`backend: the list of what runs on this machine could not be had (${why}, ${made}), and no backend program is started`)
+      throw new Problem(
+        `It could not look through the programs running on this machine for a backend program left on its folder (${why}, after ${made}), so it starts none.`,
+        'cannot_list_processes',
+        'It asks Windows through PowerShell, with `Get-CimInstance Win32_Process`, which has to be allowed to run. Where Windows was only slow or busy for a moment, as it can be on a laptop that is on battery or has just woken, run the same command again.',
+      )
+    }
     say?.(`backend: the list of what runs on this machine could not be had (${why}, try ${tries} of ${LIST_TRIES}), and is asked for again`)
     const paused = clock()
     pause(LIST_PAUSE_MS)
-    budget.spent += clock() - paused
+    budget.lost += clock() - paused
   }
 }
 
@@ -1000,8 +1013,8 @@ function couldBeProgram(shown: string): boolean {
  * started beside it. The same goes on Linux for a process of which the system shows neither
  * the folder nor the files. Where the system cannot be asked at all, that is said, and nothing
  * is started: nothing else tells that the folder is free. Windows is asked again where it gives
- * no list, as `listedByWindows` says, within the time `budget` has left for listing, and only a
- * list it gives whole is gone by. `say` is where that is written down.
+ * no list, as `listedByWindows` says, for as long as `budget` has time left for asking again,
+ * and only a list it gives whole is gone by. `say` is where that is written down.
  *
  * The list says that the folder is free only where it could have shown a backend program on
  * it. A process of this account's own of which the system would not say what it was started
@@ -1358,7 +1371,7 @@ export async function nothingLeft(say: (line: string) => void, remove: () => Pro
       throw new Problem('The backend folder is still here, but its settings are missing.', 'settings', 'Put service.json back before removing It.')
     return await remove()
   }
-  // The two looks share the time Windows is given to list what runs
+  // The two looks share the time there is for asking Windows again for a list it did not give
   const budget = listingBudget()
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
@@ -2436,7 +2449,7 @@ export async function loaded(site: string, signal?: AbortSignal, forMs = HEALTH_
  * version of It those came with, which may be run on it again.
  */
 export async function startBackend(config: ServiceConfig, say: (line: string) => void, signal?: AbortSignal): Promise<Running> {
-  // The two looks share the time Windows is given to list what runs
+  // The two looks share the time there is for asking Windows again for a list it did not give
   const budget = listingBudget()
   const lock = await takeLock(lockFile(), {
     taken: (by) => new Problem(`It is already running for this folder${by ? ` (pid ${by.pid})` : ''}.`, 'already_running'),
