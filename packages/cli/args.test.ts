@@ -54,6 +54,8 @@ describe('JSON with a backslash that begins no escape', () => {
       '{"a":"x\\',
       String.raw`{folder:D:\work}`,
       String.raw`{folder:C:\Users\ana}`,
+      // Without its quotes but for one that was written \" inside a string, which marks no string: what Windows PowerShell 5.1 leaves of {"say":"\"hi\"","folder":"D:\work"}
+      String.raw`{say:"hi",folder:D:\work}`,
     ])
       expect([text, strayBackslash(text)]).toEqual([text, true])
     for (const text of [
@@ -67,6 +69,9 @@ describe('JSON with a backslash that begins no escape', () => {
       // Without its quotes, where the backslash may be half of the two that \"C:\\\\\" had before its quote was taken out
       String.raw`{dir:C:\}`,
       String.raw`{dir:C:\,x:1}`,
+      // The same where a quote written \" is left, as of {"say":"\"hi","dir":"C:\\"} with an option after it: the quote opens no string, and the backslash was written twice
+      String.raw`{say:"hi,dir:C:\}`,
+      String.raw`{say:"hi,dir:C:\\x}`,
     ])
       expect([text, strayBackslash(text)]).toEqual([text, false])
   })

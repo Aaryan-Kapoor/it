@@ -264,7 +264,7 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     expect(outcome(['patch', 'board', String.raw`{"\"a\"":"\"b\""}`])).toEqual({ value: { a: 'b' } })
     expect(outcome(['patch', 'board', String.raw`{" \"1\"":[]}`])).toEqual({ value: { 1: [] } })
     expect(outcome(['tour', 'answer', 'k57abc', String.raw`{"": "\":1"}`])).toEqual({ value: { ': ': 1 } })
-    expect(outcome(['patch', 'board', '{"} --if-revision 3": 1}'])).toEqual({ value: {} })
+    expect(outcome(['create', 'Plan', '--state', '{"} --html x": 1}'])).toEqual({ value: {} })
     // And JSON given to --state with --state inside one of its strings, which the runtime hands on as a --state of its own, the last one given
     expect(outcome(['create', 'Plan', '--state', String.raw`{"note": "then --state {\"a\":1} --agent ", "n": 1}`])).toEqual({ value: { a: 1 } })
     // The same JSON with a first key of plain letters, or given to `it patch`, is read as written or refused
@@ -279,6 +279,17 @@ describe('nothing is taken where it is not JSON spoilt on the way, so no command
     // Text with no double quote in it and no backslash at its end is set as it is written
     expect(outcome(['set', 'board', 'dir', 'D:\\My Files\\work'])).toEqual({ value: 'D:\\My Files\\work' })
     expect(outcome(['set', 'board', 'note', 'It’s done - 3 of 7, at D:/work'])).toEqual({ value: 'It’s done - 3 of 7, at D:/work' })
+  })
+  test('a refusal says that a backslash is written twice only where one was written once, whatever quotes the runtime left', () => {
+    const TWICE = 'a backslash inside a JSON string is written twice'
+    // Written as JSON has them, and refused for the option after it: the refusal does not tell the agent to double backslashes it wrote twice
+    const right = outcome(['patch', 'board', String.raw`{"say":"\"hi","dir":"C:\\"}`, '--if-revision', '7'])
+    expect(right).toHaveProperty('refused')
+    expect('refused' in right && right.refused).not.toContain(TWICE)
+    // Written once, beside a string with \" in it, which leaves quotes that mark no string: the refusal says so
+    const wrong = outcome(['patch', 'board', String.raw`{"say":"\"hi\"","folder":"D:\work"}`])
+    expect('refused' in wrong && wrong.refused).toContain(TWICE)
+    expect(outcome(['patch', 'board', String.raw`{"folder":"D:\work"}`])).toEqual({ refused: expect.stringContaining(TWICE) })
   })
   test('across JSON of every awkward kind, nothing is read as something else but the JSON the skill names', () => {
     // The same JSON in every run, from a generator with a fixed seed: its strings are made of what a shell, the runtime or a command could take for its own
