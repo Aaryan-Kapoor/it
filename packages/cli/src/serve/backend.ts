@@ -52,6 +52,7 @@ import {
   writeFlushed,
   writeWhole,
 } from './config'
+import { type Ended, endedAs, notStarted } from './ended'
 
 /** That the functions in the database are not the ones this version of It carries, which ones those are, why, and since when. */
 export interface Behind {
@@ -1146,12 +1147,13 @@ async function stopLeft(pid: number, say: (line: string) => void, signal?: Abort
   }
   const unasked = interrupt(pid)
   if (process.platform === 'win32') {
-    if ((unasked || !(await gone(HEARD_MS))) && there()) {
-      say(`backend: one left running did not stop when asked, and is ended (pid ${pid}${unasked ? `, ${unasked}` : ''})`)
+    // One that was asked, or may have been, is given a while to go before it is ended
+    if ((!mayHaveHeard(unasked) || !(await gone(HEARD_MS))) && there()) {
+      say(`backend: one left running ${endedSaid(pid, unasked)}`)
       try {
         process.kill(pid)
       } catch {}
-    }
+    } else if (unasked?.maybe) say(`backend: one left running has gone, ${goneSaid(pid, unasked)}`)
     if (await gone(ENDED_MS)) return
   } else if (await gone(60_000)) return
   throw new Problem(
@@ -1825,9 +1827,52 @@ function settleErased(folder: string, more: number, say: (line: string) => void)
 // ---------- starting and stopping ----------
 
 /**
+ * Why a program was not asked to stop, or may not have been. `code` is what the log says of it:
+ * a word, with the numbers that go with it, and nothing that a helper printed. `maybe` is so
+ * where a helper was started and did not say how far it got: the program may have been asked
+ * all the same, and is given the while to go that one that was asked is given.
+ */
+export interface Unasked {
+  code: string
+  maybe: boolean
+}
+
+/** How long the helper that asks a program on Windows to stop is given. */
+const HELPER_MS = 30_000
+
+/**
+ * What became of the helper that asks a program on Windows to stop, which says how far it got
+ * by the code it ends with: 0 where it raised the event, 3 where the program has no console to
+ * hear on, and 4 where Windows would not raise the event. Nothing where the program was asked.
+ *
+ * A helper that failed in any other way is `no_helper`, with how it ended and the numbers that
+ * go with that (see `endedAs`): one that could not be started asked nothing, and of any other
+ * nothing says whether it had raised the event by the time it ended. `ms` is how long it ran,
+ * and `limit` how long it was given.
+ */
+export function helped(ran: Ended, ms: number, limit: number): Unasked | undefined {
+  if (ran.status === 0) return undefined
+  if (ran.status === 3) return { code: 'no_console', maybe: false }
+  if (ran.status === 4) return { code: 'no_event', maybe: false }
+  return { code: `no_helper, ${endedAs(ran, ms, limit)}`, maybe: !notStarted(ran) }
+}
+
+/** Whether a program on Windows is given a while to go once the asking is over: where it was asked, and where it may have been. */
+const mayHaveHeard = (unasked: Unasked | undefined): boolean => !unasked || unasked.maybe
+
+/** What the log says of a program on Windows that is ended, by whether it had been asked to stop: with why, where it was not or may not have been. */
+const endedSaid = (pid: number, unasked: Unasked | undefined): string =>
+  unasked
+    ? `${unasked.maybe ? 'may not have been asked to stop' : 'could not be asked to stop'}, and is ended (pid ${pid}, ${unasked.code})`
+    : `did not stop when asked, and is ended (pid ${pid})`
+
+/** What the log says of a program on Windows that went in the while it was given, where the helper that asks it failed: how the helper failed is kept all the same. */
+const goneSaid = (pid: number, unasked: Unasked): string => `though the helper that asks it to stop failed (pid ${pid}, ${unasked.code})`
+
+/**
  * Asks a program to stop as Ctrl-C at a terminal would: the backend program stops cleanly on
- * that and on nothing else. Nothing when it was asked, and otherwise a word for why it could
- * not be.
+ * that and on nothing else. Nothing when it was asked, and otherwise why it could not be, or
+ * may not have been.
  *
  * Away from Windows that is a signal. Windows has none: there Ctrl-C is an event of the
  * console a program is attached to, and a program can only raise it on a console it is
@@ -1837,15 +1882,15 @@ function settleErased(folder: string, more: number, say: (line: string) => void)
  * given none: the helper then says `no_console`. Whoever asks on Windows therefore never
  * depends on the answer, and ends the program where it could not be asked (see `halt`).
  */
-function interrupt(pid: number): 'no_process' | 'no_console' | 'no_event' | 'no_helper' | undefined {
+function interrupt(pid: number): Unasked | undefined {
   // A number that is no process's own would mean every process in this program's group
-  if (!Number.isInteger(pid) || pid <= 1) return 'no_process'
+  if (!Number.isInteger(pid) || pid <= 1) return { code: 'no_process', maybe: false }
   if (process.platform !== 'win32') {
     try {
       process.kill(pid, 'SIGINT')
       return undefined
     } catch {
-      return 'no_process'
+      return { code: 'no_process', maybe: false }
     }
   }
   const script = [
@@ -1862,14 +1907,16 @@ function interrupt(pid: number): 'no_process' | 'no_console' | 'no_event' | 'no_
   // event already, and the program may have stopped on it since and its number gone to another
   // program, whose console a second helper would then reach; and nothing it printed can be
   // counted on to say how far it got, since what a child printed is not always all read once it
-  // is ended. So it is taken for a helper that failed, and the program is ended (see `halt`).
+  // is ended. So it is taken for a helper that failed and may have asked: the program is given
+  // its while to go, and is then ended (see `halt`).
+  const began = performance.now()
   const ran = runSync(
     'powershell.exe',
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { windowsHide: true, timeout: 30_000 },
+    { windowsHide: true, timeout: HELPER_MS },
     () => false,
   )
-  return ran.status === 0 ? undefined : ran.status === 3 ? 'no_console' : ran.status === 4 ? 'no_event' : 'no_helper'
+  return helped(ran, performance.now() - began, HELPER_MS)
 }
 
 /**
@@ -2071,10 +2118,14 @@ const ENDED_MS = 30_000
  * stopped the service has closed its door, so nothing new is asked of it, and what it was
  * doing is given a moment to finish. It is then asked as a console would ask it. Where it has
  * no console to hear on, or has not gone a short while after being asked, Windows is told to
- * end it. That is what a power cut does to it, and its database is made to come through that
- * whole. Ended so on a machine that goes on running, it has kept everything it had answered
- * for, and only what it was in the middle of is lost. Where Windows will not end it, or does
- * not say that it has ended, it has not: it is left running, and so is the lock.
+ * end it. Where the helper that asks failed without saying whether it had asked, the program
+ * may have been asked, and is given the same short while before it is ended. What is written
+ * down says which of these it was, and how the helper ended, so that a program that was not
+ * asked is not said to have been. Ending it is what a power cut does to it, and its database is
+ * made to come through that whole. Ended so on a machine that goes on running, it has kept
+ * everything it had answered for, and only what it was in the middle of is lost. Where Windows
+ * will not end it, or does not say that it has ended, it has not: it is left running, and so is
+ * the lock.
  */
 async function halt(child: Child, lock: Held, say: (line: string) => void): Promise<boolean> {
   // One that could not be started has no number, and is over as soon as that has been heard
@@ -2083,12 +2134,13 @@ async function halt(child: Child, lock: Held, say: (line: string) => void): Prom
   if (process.platform === 'win32') {
     await endedWithin(child, IN_FLIGHT_MS)
     const unasked = child.over() ? undefined : interrupt(child.pid)
-    if (!unasked) await endedWithin(child, HEARD_MS)
+    // One that was asked, or may have been, is given a while to go before it is ended
+    if (mayHaveHeard(unasked)) await endedWithin(child, HEARD_MS)
     if (!child.over()) {
-      say(`backend: did not stop when asked, and is ended (pid ${child.pid}${unasked ? `, ${unasked}` : ''})`)
+      say(`backend: ${endedSaid(child.pid, unasked)}`)
       child.end()
       await endedWithin(child, ENDED_MS)
-    }
+    } else if (unasked?.maybe) say(`backend: has gone, ${goneSaid(child.pid, unasked)}`)
     if (child.over()) return true
     say(`backend: could not be ended, and is left running (pid ${child.pid})`)
     lock.abandon()
@@ -2099,7 +2151,7 @@ async function halt(child: Child, lock: Held, say: (line: string) => void): Prom
     // It may have ended by itself in this very moment, which is as good
     await endedWithin(child, 5000)
     if (child.over()) return true
-    say(`backend: could not be asked to stop, and is left running (pid ${child.pid}, ${unasked})`)
+    say(`backend: could not be asked to stop, and is left running (pid ${child.pid}, ${unasked.code})`)
     lock.abandon()
     return false
   }

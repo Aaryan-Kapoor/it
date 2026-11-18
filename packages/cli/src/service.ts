@@ -16,6 +16,7 @@ import { cutShort, runSync } from './child'
 import { home, inHome, itFirst, PROFILE_VARS, psQuote, readJson, rename, writeFlushed } from './lib'
 import { holderRuns } from './serve/backend'
 import { storageAsked } from './serve/config'
+import { failure } from './serve/ended'
 import { resetStartup, startupStatus } from './serve/startup'
 import { watch, watched } from './upgrade'
 
@@ -187,32 +188,6 @@ export interface Ran {
   why: string
   /** Whether it was ended for taking longer than it was given. */
   timedOut: boolean
-}
-/**
- * Says why a command did not do what it was asked: that it could not be started, that it was
- * ended at its time limit or by a signal, or the code it ended with, and how long it ran, with
- * whatever it printed. A failure that printed nothing is then still told from another.
- */
-export function failure(
-  name: string,
-  r: { status: number | null; signal?: NodeJS.Signals | null; error?: (Error & { code?: string }) | undefined; out: string },
-  ms: number,
-  forMs?: number,
-): string {
-  const took = `${(ms / 1000).toFixed(1)} seconds`
-  const code = r.error?.code
-  const how =
-    code === 'ETIMEDOUT' || (forMs !== undefined && r.signal && ms >= forMs)
-      ? // How long it had run is said too: a limit that ended a command long before it was reached would be told so
-        `${name} was ended at its limit of ${Math.round((forMs ?? ms) / 1000)} seconds, after ${took}`
-      : r.error && r.status === null && !r.signal
-        ? `${name} could not be started (${code ?? r.error.message})`
-        : r.signal
-          ? `${name} was ended by ${r.signal} after ${took}`
-          : r.status !== null
-            ? `${name} ended with exit code ${r.status}${r.status > 0xffff ? ` (0x${r.status.toString(16).toUpperCase()})` : ''} after ${took}`
-            : `${name} ended after ${took} without saying how`
-  return r.out ? `${how}, and printed: ${r.out}` : `${how}, and printed nothing`
 }
 /**
  * Runs one of the system's own commands and gives what it printed. `forMs` is how long it is

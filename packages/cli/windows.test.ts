@@ -6,9 +6,9 @@ import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { psQuote, RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
 import { startOf } from './src/serve/backend'
+import { failure } from './src/serve/ended'
 import {
   askedTwice,
-  failure,
   installedHere,
   installedHereOr,
   PS_QUIET,

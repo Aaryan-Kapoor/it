@@ -927,11 +927,12 @@ describe.skipIf(!program)('the backend program, started by the service', () => {
       // Seen the next time this one looks at its lock, which is every few seconds
       await backend.ended
       await backend.stop()
-      // On Windows a line may come between the two, which says that the program was ended
-      expect(said.filter((line) => !line.startsWith('backend: did not stop when asked')).slice(-2)).toEqual([
-        'backend: another service has taken this folder; stopping',
-        'backend: stopped',
-      ])
+      // On Windows a line may come between the two, which says that the program was ended, or that the helper that asks it to stop failed
+      expect(
+        said
+          .filter((line) => !/^backend: (did not stop when asked|could not be asked to stop|may not have been asked to stop|has gone, though)/.test(line))
+          .slice(-2),
+      ).toEqual(['backend: another service has taken this folder; stopping', 'backend: stopped'])
       expect(readFileSync(lock(), 'utf8')).toBe(theirs)
       rmSync(lock())
     },
