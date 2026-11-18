@@ -1333,7 +1333,7 @@ describe('whether a Codex conversation’s last turn was interrupted', () => {
 
 describe('the mode a Claude Code conversation is reopened in', () => {
   const UUID = '3f6c2f0e-1a2b-4c3d-9e8f-000000000001'
-  const has = { codex: ['codex'], itHome: '/home/someone/.it' }
+  const has = { codex: ['codex'], itHome: '/home/someone/.it', platform: 'linux' as const }
   const words = (how: unknown) => (how as { argv: string[] }).argv
 
   const MODES = ['default', 'acceptEdits', 'auto', 'dontAsk', 'bypassPermissions']
