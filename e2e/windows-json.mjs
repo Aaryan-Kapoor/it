@@ -168,6 +168,18 @@ for (const [name, run] of shells) {
       `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
     )
   }
+  // The guide's first example, with no option at all
+  {
+    calls.length = 0
+    const written = '{"order":["c1"]}'
+    const done = await run(['patch', 'board', written])
+    const sent = calls.find((c) => c.path === 'state:patch')?.args
+    check(
+      `${name}: it patch board ${written}`,
+      done.status === 0 && sent?.patch === written && sent?.baseRevision === undefined,
+      `exit ${done.status}, sent ${JSON.stringify(sent)}, said ${done.stderr.trim().slice(0, 400)}`,
+    )
+  }
   // What the guide has an agent keep away from is read exactly as written or refused with nothing
   // changed, whichever the shell: an option after JSON with a backslash just before a quote
   {
@@ -211,6 +223,7 @@ for (const [name, run] of shells) {
     ['folder', String.raw`D:\My Files\work`, String.raw`{"folder":"D:\\My Files\\work"}`],
     ['n', '4', '{"n":4}'],
     ['done', 'false', '{"done":false}'],
+    ['done', 'true', '{"done":true}'],
   ]) {
     calls.length = 0
     const done = await run(['set', 'board', key, value])
