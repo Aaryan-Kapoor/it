@@ -642,8 +642,9 @@ export function launchdDisabled(printed: string, label: string = LABEL): boolean
  *   `loaded`      it holds the agent, running or not, and `state` is what it says of it
  *   `no login`    the person has no login at the Mac's own screen, so nothing could be loaded:
  *                 launchd reads the definition's file when they next log in there
- *   `disabled`    it does not hold the agent, and the label is switched off, so that it will not
- *                 load it at the next login either
+ *   `disabled`    the label is switched off, so that launchd will not load the agent at the
+ *                 next login, whether or not it holds it now: `launchctl disable` leaves a
+ *                 loaded agent running until it is taken out or the person logs out
  *   `not loaded`  it has the person's domain and does not hold the agent: it refused the
  *                 definition, or someone took the agent out by hand
  *   `unknown`     it could not be asked, or what it answered is not known
@@ -652,11 +653,11 @@ export function launchdDisabled(printed: string, label: string = LABEL): boolean
  */
 export function launchdHas(): { has: 'loaded' | 'no login' | 'disabled' | 'not loaded' | 'unknown'; state?: string } {
   const seen = run('launchctl', ['print', launchdTarget()], ASKED_MS)
-  if (seen.ok) return { has: 'loaded', state: /state = (\w+)/.exec(seen.out)?.[1] ?? 'loaded' }
   if (noDomain(seen)) return { has: 'no login' }
-  if (seen.status !== 113) return { has: 'unknown' }
+  if (!seen.ok && seen.status !== 113) return { has: 'unknown' }
   const off = run('launchctl', ['print-disabled', launchdDomain()], ASKED_MS)
-  return { has: off.ok && launchdDisabled(off.out) === true ? 'disabled' : 'not loaded' }
+  if (off.ok && launchdDisabled(off.out) === true) return { has: 'disabled' }
+  return seen.ok ? { has: 'loaded', state: /state = (\w+)/.exec(seen.out)?.[1] ?? 'loaded' } : { has: 'not loaded' }
 }
 
 /**
@@ -744,8 +745,9 @@ export function waitForLaunchdUnload(forMs = STOP_MS): void {
 // be asked, that is thrown, with why: see `installedHereOr` for a caller that can go on without.
 //
 // On macOS the definition naming this folder is not yet the service being registered: launchd
-// is asked as well. A definition that launchd refused, or whose label is switched off, starts
-// nothing, now or at the next login, and is no registration. One that launchd has had no chance
+// is asked as well. A definition that launchd refused starts nothing, and one whose label is
+// switched off is not loaded at the next login, though an agent loaded before may run on until
+// then: neither is a registration. One that launchd has had no chance
 // to load, because the person has no login at the Mac's own screen, as over SSH, is read at
 // their next login there, and is one.
 export function installedHere(): boolean {
@@ -1183,7 +1185,8 @@ export function uninstall(patience = STOP_MS): void {
  * is enabled, and not by its definition's file alone, which is there from before systemd was
  * asked to take it. On macOS it is registered when launchd holds the agent, or has had no login
  * of the person's at the screen to load it in and reads the definition at the next one: a
- * definition that launchd refused, or whose label is switched off, is none.
+ * definition that launchd refused is none, and nor is one whose label is switched off, even
+ * where launchd holds it still and it runs: `state` then says `disabled`, which is why.
  */
 export function status(): ServiceStatus {
   const system = systemStatus()

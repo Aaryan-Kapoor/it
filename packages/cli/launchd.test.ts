@@ -324,6 +324,24 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('the b
       expect(startsByItself()).toBe(true)
     }))
 
+  test('an agent whose label is switched off while launchd still holds it is not registered: launchd will not load it at the next login', () =>
+    onAMac((mac) => {
+      install()
+      expect(startsByItself()).toBe(true)
+      // `launchctl disable` leaves a loaded agent running until it is taken out or the person logs out
+      mac.set('disabled')
+      expect(mac.has('loaded')).toBe(true)
+      expect(launchdHas()).toEqual({ has: 'disabled' })
+      expect(stands()).toEqual({ installed: false, registered: false, state: 'disabled', defined: 'this folder' })
+      // The running service says it at its next asking, a minute on at most, or at once for a definition that is another
+      writeFileSync(mac.definition, `${readFileSync(mac.definition, 'utf8')}\n`)
+      expect(startsByItself()).toBe(false)
+      // And setup, run again, takes the agent out and is refused with why
+      const err = refusal()
+      expect((err as LaunchdRefused).why).toBe('disabled')
+      expect([mac.has('loaded'), stands()]).toEqual([false, { installed: false, registered: false, state: 'disabled', defined: 'this folder' }])
+    }))
+
   test('an agent that was taken out of launchd by hand is not registered, and one that launchd cannot be asked about is gone by its definition', () =>
     onAMac((mac) => {
       install()
