@@ -9,7 +9,7 @@ import { base64url, createLocalJWKSet, importJWK, type JWK, jwtVerify } from 'jo
 import { internal } from './_generated/api'
 import { httpAction } from './_generated/server'
 import { doorKey, issuer } from './config'
-import { overClashes } from './lib/clash'
+import { overClashes, ROUTE_CLASH_MS } from './lib/clash'
 import { cookieFor, FAMILY } from './lib/cookie'
 import { sha256 } from './lib/hash'
 import { kind, log } from './lib/log'
@@ -126,13 +126,15 @@ http.route({
     try {
       // Asked again if the backend gave up on it because another call touched the same count at
       // the same instant
-      const made = await overClashes(() =>
-        ctx.runMutation(internal.bridge.enrollInvited, {
-          codeHash,
-          name: typeof body.name === 'string' ? body.name : 'machine',
-          publicKey,
-          ...(typeof body.replaces === 'string' && body.replaces.length <= 64 ? { replaces: body.replaces } : {}),
-        }),
+      const made = await overClashes(
+        () =>
+          ctx.runMutation(internal.bridge.enrollInvited, {
+            codeHash,
+            name: typeof body.name === 'string' ? body.name : 'machine',
+            publicKey,
+            ...(typeof body.replaces === 'string' && body.replaces.length <= 64 ? { replaces: body.replaces } : {}),
+          }),
+        { within: ROUTE_CLASH_MS },
       )
       if ('error' in made)
         return made.error === 'code'
@@ -282,7 +284,9 @@ http.route({
     const body = await objectBody(request)
     if (!body || typeof body.code !== 'string' || body.code.length > 64) return json(400, { error: 'Send a code.' })
     try {
-      const role = await overClashes(async () => ctx.runMutation(internal.sessions._codeFor, { codeHash: await sha256(body.code as string) }))
+      const role = await overClashes(async () => ctx.runMutation(internal.sessions._codeFor, { codeHash: await sha256(body.code as string) }), {
+        within: ROUTE_CLASH_MS,
+      })
       return role ? json(200, { role }) : json(401, { error: WRONG_CODE })
     } catch (err) {
       return refusal(err, 'code')
@@ -308,7 +312,9 @@ http.route({
     // Whatever session this browser holds already ends when the new one begins
     const held = await presented(request)
     try {
-      const made = await overClashes(() => ctx.runMutation(internal.sessions._redeem, { codeHash, secretHash, presented: named(held) }))
+      const made = await overClashes(() => ctx.runMutation(internal.sessions._redeem, { codeHash, secretHash, presented: named(held) }), {
+        within: ROUTE_CLASH_MS,
+      })
       if (!made) return json(401, { error: WRONG_CODE })
       if ('refused' in made)
         return json(409, {
@@ -338,7 +344,7 @@ http.route({
     if (held.length === 0) return json(401, { error: NOT_PAIRED })
     let found: { session: { sessionId: string; userId: string; role: 'owner' | 'screen'; renew: boolean } | null; over: string[] }
     try {
-      found = await overClashes(() => ctx.runMutation(internal.sessions._present, { presented: named(held) }))
+      found = await overClashes(() => ctx.runMutation(internal.sessions._present, { presented: named(held) }), { within: ROUTE_CLASH_MS })
     } catch (err) {
       return refusal(err, 'session')
     }
@@ -374,7 +380,9 @@ http.route({
     if (held.length === 0) return json(401, { error: NOT_PAIRED })
     let said: { ended: 'ended' | 'another' | 'none'; over: string[] }
     try {
-      said = await overClashes(() => ctx.runMutation(internal.sessions._end, { presented: named(held), session: body.session as string }))
+      said = await overClashes(() => ctx.runMutation(internal.sessions._end, { presented: named(held), session: body.session as string }), {
+        within: ROUTE_CLASH_MS,
+      })
     } catch (err) {
       // The browser keeps its cookie, so that it can ask again
       log('session.end_failed', { kind: kind(err) }, 'error')
@@ -449,8 +457,9 @@ http.route({
     try {
       // Done, or already done: either way there is nothing more for the browser to do. Which
       // of the two it was is written down by the mutation.
-      await overClashes(() =>
-        ctx.runMutation(internal.displays._signOutByToken, { displayId: claims.sub as string, userId: claims.u as string, epoch: claims.e as number }),
+      await overClashes(
+        () => ctx.runMutation(internal.displays._signOutByToken, { displayId: claims.sub as string, userId: claims.u as string, epoch: claims.e as number }),
+        { within: ROUTE_CLASH_MS },
       )
     } catch (err) {
       log('signout_token.failed', { reason: 'record', kind: kind(err) }, 'error')

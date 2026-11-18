@@ -8383,7 +8383,7 @@ describe('more cases at the edges', () => {
 })
 
 describe('a step of publishing that the backend gave up on because another touched the same record', () => {
-  test('is asked again by the action itself until it is let through, for a quarter of a minute at most or the time its caller gives, and nothing else is', async () => {
+  test('is asked again by the action itself until it is let through, for a minute at most or the time its caller gives, as is one turned away, and nothing else is', async () => {
     const { overClashes, clashed, CLASH_MS } = await import('./lib/clash')
     const clash = () =>
       new Error('Documents read from or written to the "tallies" table changed while this mutation was being run and on every subsequent retry.')
@@ -8406,6 +8406,19 @@ describe('a step of publishing that the backend gave up on because another touch
     ).toBe('done')
     expect(asked).toBe(3)
     expect(pauses).toHaveLength(2)
+    // One the backend turned away, having more to run or to write down than it could get to in time, is asked again in the same way
+    asked = 0
+    const turnedAway = [
+      'Too many concurrent requests in a short period of time. Spread out your requests out over time or throttle them to avoid errors.',
+      'Too many concurrent commits in a short period of time. Spread your writes out over time or throttle them to avoid errors.',
+    ]
+    expect(
+      await overClashes(async () => {
+        if (++asked < 3) throw new Error(turnedAway[asked - 1])
+        return 'done'
+      }, clock),
+    ).toBe('done')
+    expect(asked).toBe(3)
     // One that keeps being given up on is asked for as long as CLASH_MS says, each asking taking
     // the half second it takes on a machine with little to spare, and is then given up on with
     // the clash as the reason. No asking begins once that time is up.
