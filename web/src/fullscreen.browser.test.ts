@@ -28,6 +28,8 @@ interface Site {
   told: string[]
   /** What the browser was asked and what it answered, and what it had fullscreen at each change, in order. */
   seen: string[]
+  /** How many times the browser has said that it left a fullscreen it was asked to leave. */
+  left: number
   itsFullscreen: { fullscreenOn(): boolean }
 }
 
@@ -67,6 +69,7 @@ const SITE = `<!doctype html><html><body>
   window.ends = 'never'
   window.told = []
   window.seen = []
+  window.left = 0
   const player = document.getElementById('player')
   let has = true
   const stop = itsFullscreen.hostPlayers({
@@ -82,6 +85,14 @@ const SITE = `<!doctype html><html><body>
     if (ends.startsWith('host, while')) stop()
     if (ends.startsWith('player, while')) has = false
   })
+  // When the browser says, by its promise, that it left a fullscreen: what the site does next for the player it does in that turn
+  const leave = document.exitFullscreen
+  document.exitFullscreen = function () {
+    const answer = leave.call(document)
+    const count = () => { window.left += 1 }
+    answer.then(count, count)
+    return answer
+  }
   const whole = document.documentElement
   const ask = whole.requestFullscreen
   whole.requestFullscreen = function (...how) {
@@ -171,9 +182,12 @@ describe.each(BROWSERS)('a player’s own fullscreen made the site’s, in %s', 
     await tab.waitForFunction(() => (window as unknown as Site).seen.includes('player'))
     return tab
   }
-  /** Waits until the browser has nothing fullscreen, and then for as long again as it could take to be asked for more. */
-  async function nothingFullscreen(tab: Page) {
-    await tab.waitForFunction(() => document.fullscreenElement === null)
+  /**
+   * Waits until the browser has answered so many requests to leave a fullscreen and has nothing
+   * fullscreen, which is when the site would have asked for more, and then a moment longer.
+   */
+  async function nothingFullscreen(tab: Page, left: number) {
+    await tab.waitForFunction((times) => (window as unknown as Site).left >= times && document.fullscreenElement === null, left)
     await tab.waitForTimeout(500)
   }
 
@@ -194,7 +208,7 @@ describe.each(BROWSERS)('a player’s own fullscreen made the site’s, in %s', 
     'the site is not made fullscreen for a player that has gone by the time the browser has left the player’s own fullscreen: the %s',
     async (ends) => {
       const tab = await pressed(ends)
-      await nothingFullscreen(tab)
+      await nothingFullscreen(tab, 1)
       expect(await state(tab)).toEqual({ fullscreen: 'nothing', on: false, told: [], seen: ['player', 'nothing'] })
     },
     60_000,
@@ -206,7 +220,8 @@ describe.each(BROWSERS)('a player’s own fullscreen made the site’s, in %s', 
       const tab = await pressed('host, once the site’s fullscreen is asked for')
       // The browser answers the request the site made for the player, which the site can no longer withdraw
       await tab.waitForFunction(() => (window as unknown as Site).seen.some((s) => s === 'granted' || s === 'refused'))
-      await nothingFullscreen(tab)
+      // Left twice: the player's own fullscreen, and then the site's, which was for that player alone
+      await nothingFullscreen(tab, 2)
       const { fullscreen, on, told, seen } = await state(tab)
       expect({ fullscreen, on, told }).toEqual({ fullscreen: 'nothing', on: false, told: [] })
       expect(seen.filter((s) => s === 'site asked')).toHaveLength(1)

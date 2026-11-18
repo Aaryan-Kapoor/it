@@ -54,10 +54,15 @@ export interface PlayerHost {
   unfill(): void
 }
 const hosts = new Set<PlayerHost>()
-/** How many players' own fullscreen is being made It's, with the browser asked for the site's and yet to answer. */
-let pending = 0
 /** How many times It's fullscreen was asked for by the bar or by a page, or given to a player that was laid over the page in it. */
 let taken = 0
+/**
+ * The players whose own fullscreen is being made It's, from the moment the browser shows one
+ * fullscreen until it is laid over the page or given up: how many there are, what `taken` was
+ * and whether It was fullscreen when the first of them began, and whether the browser has been
+ * asked for the site's fullscreen for any of them.
+ */
+const waiting = { players: 0, taken: 0, wasOn: false, asked: false }
 /** Hosts players, whose own fullscreen is made It's: see `changed`. Gives back what stops that. */
 export function hostPlayers(host: PlayerHost): () => void {
   hosts.add(host)
@@ -98,29 +103,40 @@ for (const kind of ['fullscreenchange', 'webkitfullscreenchange']) document.addE
  * host, its document or the player itself. So each step asks again whether the player is still
  * hosted. The site is not made fullscreen for a player that has gone by the time its own
  * fullscreen is left. A browser that was asked already cannot be told to forget it, so a
- * fullscreen it grants once the player has gone is left again, where it was for players alone
- * and none of them is there: not where It was fullscreen before, where the bar or a page has
- * asked for It's fullscreen since, or where another player is laid in it or still waits for it.
+ * fullscreen it grants once the player has gone is left again: see `settled`.
  */
 async function handOver(host: PlayerHost, frame: Element, left: Promise<void>): Promise<void> {
   const hosted = () => hosts.has(host) && host.owns(frame)
-  await left
-  if (!hosted()) return
-  const was = on || shownWhole() === whole()
-  const before = taken
-  pending += 1
+  if (waiting.players === 0) Object.assign(waiting, { taken, wasOn: on || shownWhole() === whole(), asked: false })
+  waiting.players += 1
   try {
-    await request()
-  } catch {
-    // The browser would not make the site fullscreen: the player stays where the page keeps it
-    return
-  } finally {
-    pending -= 1
-  }
-  if (hosted()) {
+    await left
+    if (!hosted()) return
+    waiting.asked = true
+    try {
+      await request()
+    } catch {
+      // The browser would not make the site fullscreen: the player stays where the page keeps it
+      return
+    }
+    if (!hosted()) return
     taken += 1
     host.fill(frame)
-  } else if (!was && taken === before && pending === 0 && shownWhole() === whole()) await leaveTop()
+  } finally {
+    waiting.players -= 1
+    settled()
+  }
+}
+
+/**
+ * Leaves a fullscreen that the browser granted for players alone, once the last of them has
+ * been answered and none of them is there to be laid in it. It is kept where It was fullscreen
+ * before the first of them began, and where the bar or a page has asked for It's fullscreen, or
+ * a player was laid in it, since then.
+ */
+function settled(): void {
+  if (waiting.players > 0 || !waiting.asked || waiting.wasOn || taken !== waiting.taken) return
+  if (shownWhole() === whole()) void leaveTop()
 }
 
 /** Leaves whatever is fullscreen on top, and only that, and says when the browser has. */
