@@ -2733,12 +2733,27 @@ async function turnOnNow(id: Harness): Promise<TurnedOn> {
 export function refresh(say: (line: string) => void, forLog = false): Promise<AddonOutcome[]> {
   return inTurn(async (told) => {
     for (const id of HARNESSES) {
-      if (!(id in ADAPTERS && id in ADDONS) || !supported(id) || !installations(id).length) continue
+      if (!(id in ADAPTERS && id in ADDONS) || !supported(id)) continue
+      // A record that cannot be read is not one that holds nothing: it is looked at, and said
+      const unread = unreadInstallations(id) !== undefined
+      if (!unread && !installations(id).length) continue
       try {
         const now = await statusOf(id)
         // And Codex where all that is wrong is hooks that an It from before wrote, which it cannot
         // run: brought up to date, they may be ones it can
         const repairable = now?.addon === 'error' && now.detail === HOOKS_UNRUNNABLE
+        // What is on record could not be gone by, as where the record itself cannot be read: the
+        // add-on was not brought up to date, and that is said. It is not an app whose add-on was
+        // taken out or turned off, which is left as it is and has nothing said of it
+        if (now?.addon === 'error' && !repairable) {
+          told({ id, did: 'failed', detail: forLog ? (unread ? 'record_unread' : 'error') : now.detail })
+          say(
+            forLog
+              ? `${KNOWN[id].label}: ${unread ? 'its installation record could not be read, so the add-on and record were kept' : 'its add-on could not be brought up to date'}`
+              : `${KNOWN[id].label}: ${now.detail}`,
+          )
+          continue
+        }
         if (now?.addon !== 'connected' && now?.addon !== 'needs_approval' && !repairable) continue
         const s = await connect(id, say, forLog, told)
         if (s.addon === 'error') say(forLog ? `${KNOWN[id].label}: its add-on could not be installed` : `${KNOWN[id].label}: ${s.detail}`)

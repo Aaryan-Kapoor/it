@@ -2412,6 +2412,38 @@ describe('what setup says became of each add-on, and bringing the add-ons up to 
     // And once all is up to date, there is nothing to do
     expect(await refresh(() => {})).toEqual([])
   })
+
+  test.each([
+    ['is not JSON', '{broken'],
+    ['lists an installation that is not as It wrote it', JSON.stringify({ installs: [{ version: 5, at: 0 }] })],
+  ])('refresh says that an add-on whose record %s was not brought up to date, and brings the others up', async (_what, record) => {
+    await connect('pi', () => {})
+    await connect('codex', () => {})
+    for (const id of ['pi', 'codex'] as const) {
+      const was = noted(id)
+      Object.assign(was.installs[0]!, { version: 'previous-version', build: 'an-earlier-build' })
+      put(stampFile(id), JSON.stringify(was))
+    }
+    put(stampFile('codex'), record)
+    ran = []
+    const unread =
+      'The installation record for Codex could not be read. Restore its addons/codex.json file from a backup, then run `it setup` again. No add-on was changed and the record is kept.'
+    const { said, say } = lines()
+    expect(await refresh(say)).toEqual([
+      { id: 'codex', did: 'failed', detail: unread },
+      { id: 'pi', did: 'installed', restart: true },
+    ])
+    expect(said).toContain(`Codex: ${unread}`)
+    // Nothing of Codex's was changed, and the record is as it was found
+    expect(commands('codex').filter((words) => /\b(?:add|install|update|remove)\b/.test(words))).toEqual([])
+    expect(read(stampFile('codex'))).toBe(record)
+    // It is said again each time, until the record can be read
+    expect(await refresh(() => {})).toEqual([{ id: 'codex', did: 'failed', detail: unread }])
+    // And for the service's log in fixed words, which name no file
+    said.length = 0
+    expect(await refresh(say, true)).toEqual([{ id: 'codex', did: 'failed', detail: 'record_unread' }])
+    expect(said).toEqual(['Codex: its installation record could not be read, so the add-on and record were kept'])
+  })
 })
 
 describe('managed plugin and marketplace ownership', () => {
