@@ -3974,6 +3974,119 @@ describe('how long Windows is given to list what runs', () => {
   })
 })
 
+// What the tests above hold with stand-ins, held here of Windows itself: the service's own start,
+// in a program of its own, asks the PowerShell that Windows has for the list of what runs. That
+// PowerShell is made to fail first, in the ways `POWERSHELL_FAILS` names and each by a run of
+// its own: `exit` ends with code 5 having printed words of its own, `cut` prints a list without
+// its last word, and `timeout` is ended by a limit of two seconds, as is the second run that a
+// child ended so far before its time is given. Every other asking is Windows' own to answer.
+describe.skipIf(!windows || !program)('a start on Windows where PowerShell does not give the list of what runs at once', () => {
+  let starts: string
+  beforeAll(async () => {
+    const failing: Plugin = {
+      name: 'failing',
+      setup(b) {
+        b.onResolve({ filter: /^node:child_process$/ }, (asked) => (asked.namespace === 'failing' ? undefined : { path: asked.path, namespace: 'failing' }))
+        b.onLoad({ filter: /.*/, namespace: 'failing' }, () => ({
+          loader: 'js',
+          contents: `
+            import * as real from 'node:child_process'
+            export * from 'node:child_process'
+            export { default } from 'node:child_process'
+            const fails = (process.env.POWERSHELL_FAILS ?? '').split(',').filter(Boolean)
+            let failed = 0
+            let again = false
+            const instead = (file, script, options) => real.spawnSync(file, ['-NoProfile', '-NonInteractive', '-Command', script], options)
+            export const spawnSync = (file, args, options) => {
+              // Only the asking for the whole list, which is the one that asks for every process's command line
+              const lists = file === 'powershell.exe' && Buffer.from(String(args.at(-1)), 'base64').toString('utf16le').includes('Win32_Process -Property')
+              if (lists && again) {
+                again = false
+                return instead(file, 'Start-Sleep -Seconds 30', { ...options, timeout: 2000 })
+              }
+              if (lists && failed < fails.length) {
+                const fault = fails[failed++]
+                if (fault === 'timeout') {
+                  again = true
+                  return instead(file, 'Start-Sleep -Seconds 30', { ...options, timeout: 2000 })
+                }
+                if (fault === 'exit') return instead(file, "'Access denied to a person'; exit 5", options)
+                return instead(file, "'self'", options)
+              }
+              return real.spawnSync(file, args, options)
+            }
+          `,
+        }))
+      },
+    }
+    // Starts the backend as the service does, says what the start said, and stops the backend again
+    starts = path.join(scratch, 'starts-on-windows.mjs')
+    await bundled(
+      'starts-on-windows.mjs',
+      `
+        import { startBackend } from './src/serve/backend'
+        import { readConfig } from './src/serve/config'
+        try {
+          const backend = await startBackend(readConfig(), (line) => console.log('SAID ' + line))
+          console.log('STARTED')
+          await backend.stop()
+          console.log('STOPPED')
+        } catch (err) {
+          console.log('PROBLEM ' + err.message)
+          console.log('ERROR ' + err.code)
+        }
+        process.exit(0)
+      `,
+      [failing],
+    )
+  }, HOOK_MS)
+
+  /** Starts the backend where PowerShell fails so, and gives every line the start wrote, and those among them about the list. */
+  const started = async (fails: string[]) => {
+    const child = spawn(process.execPath, [starts], { env: { ...process.env, POWERSHELL_FAILS: fails.join(',') }, stdio: ['ignore', 'pipe', 'inherit'] })
+    let out = ''
+    child.stdout.on('data', (chunk) => {
+      out += chunk
+    })
+    await new Promise((resolve) => child.once('close', resolve))
+    const lines = out.split(/\r?\n/).filter(Boolean)
+    return { lines, listing: lines.filter((line) => line.includes('the list of what runs') || line.startsWith('PROBLEM ') || line.startsWith('ERROR ')) }
+  }
+
+  test('a list that PowerShell does not give twice is asked for a third time, and the backend program is started on the list Windows then gives', async () => {
+    const config = makeConfig()
+    const { lines, listing } = await started(['cut', 'exit'])
+    expect(listing).toEqual([
+      'SAID backend: the list of what runs on this machine could not be had (unreadable, try 1 of 3), and is asked for again',
+      'SAID backend: the list of what runs on this machine could not be had (exit_5, try 2 of 3), and is asked for again',
+    ])
+    expect(
+      lines.filter((line) => /^(SAID backend: started|STARTED|STOPPED)/.test(line)).map((line) => line.replace(/^SAID backend: started.*$/, 'started')),
+    ).toEqual(['started', 'STARTED', 'STOPPED'])
+    expect(lines.join('\n')).not.toMatch(/Access|denied|person/)
+    expect(programsHere(instanceName(config.instanceSecret))).toEqual([])
+    expect(existsSync(inBackend('lock'))).toBe(false)
+  }, 300_000)
+
+  test('a list that PowerShell does not give three times, the last by running out of time, is refused with that in a code, and no backend program is started', async () => {
+    const config = makeConfig()
+    const { lines, listing } = await started(['exit', 'cut', 'timeout'])
+    expect(listing).toEqual([
+      'SAID backend: the list of what runs on this machine could not be had (exit_5, try 1 of 3), and is asked for again',
+      'SAID backend: the list of what runs on this machine could not be had (unreadable, try 2 of 3), and is asked for again',
+      'SAID backend: the list of what runs on this machine could not be had (timed_out, 3 tries), and no backend program is started',
+      'PROBLEM It could not look through the programs running on this machine for a backend program left on its folder (timed_out, after 3 tries), so it starts none.',
+      'ERROR cannot_list_processes',
+    ])
+    expect(lines.filter((line) => /^(SAID backend: started|STARTED)/.test(line))).toEqual([])
+    expect(lines.join('\n')).not.toMatch(/Access|denied|person/)
+    // Nothing was started on the folder, and the folder is let go
+    expect(existsSync(database())).toBe(false)
+    expect(programsHere(instanceName(config.instanceSecret))).toEqual([])
+    expect(existsSync(inBackend('lock'))).toBe(false)
+  }, 300_000)
+})
+
 describe('the backend programs fetched for earlier releases', () => {
   test.skipIf(windows)('the one that is in use is left where the person named it themselves, though it was fetched here for an earlier release', () => {
     const bin = (...parts: string[]) => inBackend('bin', ...parts)
