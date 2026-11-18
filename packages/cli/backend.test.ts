@@ -6,7 +6,7 @@
 // on ports of this file's own. Nothing here reaches a remote, but for the one test that runs
 // only on Windows, which fetches the program from its release where CI has not put one on the
 // machine.
-import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process'
+import { type ChildProcess, execFileSync, type SpawnSyncReturns, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import {
   chmodSync,
@@ -44,6 +44,8 @@ import {
   program as fetched,
   fetchProgram,
   HEALTH_MS,
+  listedByWindows,
+  listingBudget,
   loaded,
   nothingLeft,
   programsHere,
@@ -704,7 +706,13 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     // system no PowerShell is to be had: asked to list what runs, it says what `POWERSHELL_SAYS`
     // holds, and the helper that asks a program on Windows to stop answers as it does of a
     // program with no console. With `PS_SAYS`, that is what `ps` says when it is asked to
-    // list what runs. Either says what its `_NEXT` holds from the second asking on.
+    // list what runs. Either says what its `_NEXT` holds from the second asking on. Before
+    // that, PowerShell fails once for each word in `POWERSHELL_FAILS`, in order: `timeout` runs
+    // out of time, `exit` ends with code 5 having printed words of its own, `cut` prints a
+    // list without its last word, and `missing` is not there to be started. Where
+    // `POWERSHELL_LOG` names a file, each time PowerShell is
+    // asked writes a line there: when, and how long it was given. A try that runs out of time
+    // is run a second time at once by runSync, as one cut short is, and that run runs out too.
     // The fault is in what the service is given as the system's own files and processes, and
     // nothing of the service itself is other than it is.
     const faults: Plugin = {
@@ -740,6 +748,7 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
               `
               : `
                 import * as real from 'node:child_process'
+                import { appendFileSync } from 'node:fs'
                 export * from 'node:child_process'
                 export { default } from 'node:child_process'
                 export const spawn = (file, args, options) => {
@@ -756,8 +765,33 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
                   return child
                 }
                 let asked = 0
+                let failed = 0
+                let timedOut = false
                 const said = (first, next) => (asked++ === 0 || next === undefined ? first : next)
+                const timeout = () => ({ error: Object.assign(new Error('spawnSync powershell.exe ETIMEDOUT'), { code: 'ETIMEDOUT' }), status: null, signal: 'SIGTERM', stdout: '', stderr: '' })
                 export const spawnSync = (file, args, ...rest) => {
+                  // A time limit that ran out at once looks like the runtime's fault that runSync runs a child again for: that second run is part of the same try
+                  if (file === 'powershell.exe' && timedOut) {
+                    timedOut = false
+                    return timeout()
+                  }
+                  // A limit that is not a whole number of milliseconds is refused, as the real one refuses it
+                  if (file === 'powershell.exe' && rest[0]?.timeout !== undefined && !(Number.isInteger(rest[0].timeout) && rest[0].timeout >= 0))
+                    throw Object.assign(new RangeError('The value of "timeout" is out of range.'), { code: 'ERR_OUT_OF_RANGE' })
+                  if (file === 'powershell.exe' && process.env.POWERSHELL_LOG)
+                    appendFileSync(process.env.POWERSHELL_LOG, Date.now() + ' ' + rest[0]?.timeout + '\\n')
+                  const fails = (process.env.POWERSHELL_FAILS ?? '').split(',').filter(Boolean)
+                  if (file === 'powershell.exe' && failed < fails.length) {
+                    const fault = fails[failed++]
+                    if (fault === 'timeout') {
+                      timedOut = true
+                      return timeout()
+                    }
+                    if (fault === 'exit') return { status: 5, stdout: 'Get-CimInstance : Access denied at C:\\\\Users\\\\a person\\\\it', stderr: 'Access denied' }
+                    if (fault === 'missing')
+                      return { error: Object.assign(new Error('spawnSync powershell.exe ENOENT'), { code: 'ENOENT' }), status: null, signal: null, stdout: null, stderr: null }
+                    return { status: 0, stdout: 'self\\r\\n', stderr: '' }
+                  }
                   if (file === 'powershell.exe')
                     return process.env.POWERSHELL_SAYS === undefined
                       ? { status: 3, stdout: '', stderr: '' }
@@ -785,8 +819,9 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
       `
         import { programsHere } from './src/serve/backend'
         try {
-          console.log(JSON.stringify(programsHere(process.env.NAMED, process.env.AS)))
+          console.log(JSON.stringify(programsHere(process.env.NAMED, process.env.AS, (line) => console.error('SAID ' + line))))
         } catch (err) {
+          console.error('PROBLEM ' + err.message)
           console.log('ERROR ' + err.code)
         }
       `,
@@ -1434,6 +1469,67 @@ describe.skipIf(!program || windows)('one backend program at a time on a folder'
     expect(listed(['self', 'unseen 77 unknown 1', 'end'])).toBe('ERROR cannot_list_processes')
     // One that is so only for the moment it takes to end is gone when Windows is asked again
     expect(listed(['self', backend, 'unseen 77 mine 1', 'end'], ['self', backend, 'end'])).toBe('[4242]')
+  }, 180_000)
+
+  test('a list of what runs that Windows does not give is asked for again, three times in all, and nothing is started on the folder until one is given whole', async () => {
+    const config = makeConfig()
+    const coded = (line: string) => Buffer.from(line).toString('base64')
+    const backend = `seen 4242 ${coded(`"${program}" --port 1 --instance-name ${instanceName(config.instanceSecret)} --instance-secret x "${database()}"`)}`
+    const asked = (fails: string[]) => {
+      const log = path.join(scratch, `powershell-${randomBytes(4).toString('hex')}.log`)
+      const ran = spawnSync(process.execPath, [listing], {
+        env: {
+          PATH: process.env.PATH,
+          IT_HOME: folder,
+          IT_BACKEND_BIN: program!,
+          AS: 'win32',
+          NAMED: instanceName(config.instanceSecret),
+          POWERSHELL_SAYS: ['self', backend, 'end'].join('\r\n'),
+          POWERSHELL_FAILS: fails.join(','),
+          POWERSHELL_LOG: log,
+        },
+        encoding: 'utf8',
+      })
+      const calls = existsSync(log)
+        ? readFileSync(log, 'utf8')
+            .trim()
+            .split('\n')
+            .map((line) => line.split(' ').map(Number))
+        : []
+      return { found: ran.stdout.trim(), said: ran.stderr.trim().split('\n').filter(Boolean), calls }
+    }
+    // Given whole the first time: asked once, given a minute, and nothing waited for
+    const first = asked([])
+    expect([first.found, first.said, first.calls.map(([, within]) => within)]).toEqual(['[4242]', [], [60_000]])
+    // Not given once, it is asked for again a moment later, and the list it then gives is gone by
+    const once = asked(['timeout'])
+    expect([once.found, once.said]).toEqual([
+      '[4242]',
+      ['SAID backend: the list of what runs on this machine could not be had (timed_out, try 1 of 3), and is asked for again'],
+    ])
+    expect(once.calls).toHaveLength(2)
+    expect(once.calls[1]![0]! - once.calls[0]![0]!).toBeGreaterThanOrEqual(1_400)
+    // Not given three times, whether it ran out of time, ended with a code, came without its last word or could not be started: nothing is started, and why is said in a code
+    const codeOf = (fault: string) => ({ timeout: 'timed_out', exit: 'exit_5', cut: 'unreadable', missing: 'ENOENT' })[fault]
+    for (const fails of [
+      ['timeout', 'cut', 'exit'],
+      ['exit', 'exit', 'timeout'],
+      ['cut', 'cut', 'cut'],
+      ['exit', 'missing', 'missing'],
+    ]) {
+      const why = codeOf(fails[2]!)
+      const refused = asked(fails)
+      expect(refused.found).toBe('ERROR cannot_list_processes')
+      expect(refused.calls).toHaveLength(3)
+      expect(refused.said).toEqual([
+        `SAID backend: the list of what runs on this machine could not be had (${codeOf(fails[0]!)}, try 1 of 3), and is asked for again`,
+        `SAID backend: the list of what runs on this machine could not be had (${codeOf(fails[1]!)}, try 2 of 3), and is asked for again`,
+        `SAID backend: the list of what runs on this machine could not be had (${why}, 3 tries), and no backend program is started`,
+        `PROBLEM It could not look through the programs running on this machine for a backend program left on its folder (${why}, after 3 tries), so it starts none.`,
+      ])
+      // Nothing PowerShell printed is said, and no folder's name
+      expect(refused.said.join('\n')).not.toMatch(/Access|denied|Users|person|spawnSync/)
+    }
   }, 180_000)
 
   test('a backend program that was started is stopped again, and only then is the lock let go, when what is to be noted of it cannot be written', async () => {
@@ -3727,6 +3823,275 @@ describe.skipIf(windows)('where the backend program is fetched from', () => {
     },
     180_000,
   )
+})
+
+describe('how long Windows is given to list what runs', () => {
+  const result = (status: number | null, stdout: string, code?: string): SpawnSyncReturns<string> => ({
+    pid: 1,
+    output: [],
+    stdout,
+    stderr: '',
+    status,
+    signal: code === 'ETIMEDOUT' ? 'SIGTERM' : null,
+    ...(code ? { error: Object.assign(new Error(`spawnSync powershell.exe ${code}`), { code }) } : {}),
+  })
+  /**
+   * Asks for one list against a clock of its own, where each run of PowerShell takes as long as
+   * its outcome says: `whole` gives the list in three seconds and `slow` in fifty, `exit` ends
+   * with code 5 in two, `missing` is not there to be started, `timeout` runs out its whole
+   * limit, and `early` is ended by its limit a second before its time, as the runtime's fault on
+   * Windows ends a child. With `odd`, every run and every pause takes that much longer, which
+   * is a part of a millisecond, as time by a real clock is never whole, and with `late` every
+   * pause runs on that much past its time. What it gives back is what came of it, the limit
+   * each run was given, and how long it all took.
+   */
+  const asked = (outcomes: string[], budget = listingBudget(), odd = 0, late = 0) => {
+    let now = 0
+    const limits: number[] = []
+    let next = 0
+    const run = (limit: number) => {
+      // What starts a child takes a limit only in whole milliseconds, and throws at any other
+      if (!Number.isInteger(limit) || limit < 0) throw Object.assign(new RangeError('The value of "timeout" is out of range.'), { code: 'ERR_OUT_OF_RANGE' })
+      limits.push(limit)
+      now += odd
+      const outcome = outcomes[next++] ?? 'whole'
+      if (outcome === 'timeout' || outcome === 'early') {
+        now += outcome === 'early' ? limit - 1000 : limit
+        return result(null, '', 'ETIMEDOUT')
+      }
+      if (outcome === 'missing') return result(null, '', 'ENOENT')
+      if (outcome === 'exit') {
+        now += 2000
+        return result(5, 'Access denied')
+      }
+      now += outcome === 'slow' ? 50_000 : 3000
+      return result(0, 'self\r\nend\r\n')
+    }
+    let came = 'listed'
+    try {
+      listedByWindows(
+        '',
+        undefined,
+        budget,
+        run,
+        () => now,
+        (ms) => {
+          now += ms + odd + late
+        },
+      )
+    } catch (err) {
+      // A refusal says why between brackets, and anything else that was thrown is given as it is
+      came = String((err as Error).message).replace(/^.*\((.+)\).*$/, '$1')
+    }
+    return { came, limits, took: now }
+  }
+
+  test('one list given at once is asked for once, with a minute to give it in and nothing waited for after it', () => {
+    expect(asked(['whole'])).toEqual({ came: 'listed', limits: [60_000], took: 3000 })
+  })
+
+  test('tries that fail are tried again, each given no more than is left of two minutes, and are given up within two minutes in all', () => {
+    expect(asked(['exit', 'whole'])).toEqual({ came: 'listed', limits: [60_000, 60_000], took: 6500 })
+    expect(asked(['exit', 'exit', 'exit'])).toEqual({ came: 'exit_5, after 3 tries', limits: [60_000, 60_000, 60_000], took: 9000 })
+    // A PowerShell that cannot be started is said by the system's code for that
+    expect(asked(['exit', 'missing', 'missing'])).toEqual({ came: 'ENOENT, after 3 tries', limits: [60_000, 60_000, 60_000], took: 5000 })
+    // Two tries that each ran out of time leave too little for a third
+    expect(asked(['timeout', 'timeout'])).toEqual({ came: 'timed_out, after 2 tries', limits: [60_000, 58_500], took: 120_000 })
+  })
+
+  test('a try that is asked again is given its limit in whole milliseconds, which is all a child may be given, though no time by the clock is whole', () => {
+    // Each run and each pause takes a quarter of a millisecond more than it would: what is left of the two minutes is never a whole number
+    expect(asked(['timeout', 'whole'], listingBudget(), 0.25)).toEqual({ came: 'listed', limits: [60_000, 58_499], took: 64_500.75 })
+    expect(asked(['timeout', 'timeout'], listingBudget(), 0.25)).toEqual({ came: 'timed_out, after 2 tries', limits: [60_000, 58_499], took: 119_999.75 })
+    expect(asked(['exit', 'timeout', 'exit'], listingBudget(), 0.25)).toEqual({
+      came: 'exit_5, after 3 tries',
+      limits: [60_000, 60_000, 54_999],
+      took: 67_001.25,
+    })
+  })
+
+  test('the limit a try that is asked again is given is one a child is really started with: PowerShell is asked again, by the program’s own asking and the clock’s own time, after a minute lost to an earlier list', () => {
+    const commands = mkdtempSync(path.join(os.tmpdir(), 'it-powershell-'))
+    const before = process.env.PATH
+    try {
+      // Windows' own PowerShell ends with the code the script names. Anywhere else a script stands in for it, and ends with the same
+      if (!windows) {
+        writeFileSync(path.join(commands, 'powershell.exe'), '#!/bin/sh\nexit 5\n', { mode: 0o755 })
+        process.env.PATH = `${commands}${path.delimiter}${before}`
+      }
+      const said: string[] = []
+      const budget = { lost: 61_000.3 }
+      expect(() =>
+        listedByWindows(
+          'exit 5',
+          (line) => said.push(line),
+          budget,
+          undefined,
+          undefined,
+          () => {},
+        ),
+      ).toThrow(/\(exit_5, after [23] tries\)/)
+      // Three tries where PowerShell starts as it does, and two on a machine so slow that the first two took most of the minute that was left
+      expect(said[0]).toBe('backend: the list of what runs on this machine could not be had (exit_5, try 1 of 3), and is asked for again')
+      expect(said.at(-1)).toMatch(/^backend: the list of what runs on this machine could not be had \(exit_5, [23] tries\), and no backend program is started$/)
+      expect(said.length).toBeLessThan(4)
+      // What the three runs took is lost with the minute
+      expect(budget.lost).toBeGreaterThan(61_000.3)
+    } finally {
+      process.env.PATH = before
+      rmSync(commands, { recursive: true, force: true })
+    }
+  }, 120_000)
+
+  test('a try the runtime ended before its time is run again at the first asking, and at a later one only where a whole second run still fits in the two minutes', () => {
+    // Ended a second early at the first asking: run again, and what that run took is lost with it
+    expect(asked(['early', 'whole'])).toEqual({ came: 'listed', limits: [60_000, 60_000], took: 62_000 })
+    expect(asked(['early', 'timeout'])).toEqual({ came: 'timed_out, after 1 try', limits: [60_000, 60_000], took: 119_000 })
+    // Ended a second early where a second run of a whole minute would go past the two minutes: not run again, and the next try is given what is left
+    expect(asked(['exit', 'early', 'timeout'])).toEqual({ came: 'timed_out, after 3 tries', limits: [60_000, 60_000, 56_000], took: 120_000 })
+  })
+
+  test('a pause that runs on past its time, and leaves less than ten seconds of the two minutes, is not followed by another try', () => {
+    // Ten and a half seconds are left after the try that failed, which is enough to ask again once the pause is over
+    expect(asked(['exit', 'whole'], { lost: 106_000 })).toEqual({ came: 'listed', limits: [60_000, 10_500], took: 6500 })
+    // The pause takes a second longer than it was to, and nine and a half are left: the list is not asked for again
+    expect(asked(['exit', 'whole'], { lost: 106_000 }, 0, 1000)).toEqual({ came: 'exit_5, after 1 try', limits: [60_000], took: 4500 })
+  })
+
+  test('lists that come cost nothing, however slowly and however many of them one start asks for', () => {
+    const budget = listingBudget()
+    for (let list = 0; list < 6; list++) expect(asked(['slow'], budget)).toEqual({ came: 'listed', limits: [60_000], took: 50_000 })
+    expect(budget).toEqual({ lost: 0 })
+    // And after them a list that fails is asked for again as the first would have been
+    expect(asked(['timeout', 'slow'], budget)).toEqual({ came: 'listed', limits: [60_000, 58_500], took: 111_500 })
+    expect(budget).toEqual({ lost: 61_500 })
+  })
+
+  test('every list that one start or one removal asks for shares the two minutes of asking again, and the first asking of each has its minute all the same', () => {
+    const budget = listingBudget()
+    expect(asked(['timeout', 'whole'], budget)).toEqual({ came: 'listed', limits: [60_000, 58_500], took: 64_500 })
+    // Asked again with what is left of the two minutes, and no third time once that has gone
+    expect(asked(['exit', 'timeout'], budget)).toEqual({ came: 'timed_out, after 2 tries', limits: [60_000, 55_000], took: 58_500 })
+    expect(budget).toEqual({ lost: 120_000 })
+    // With the two minutes gone a list is still asked for once, with its whole minute, and gone by where it comes
+    expect(asked(['slow'], budget)).toEqual({ came: 'listed', limits: [60_000], took: 50_000 })
+    // And where it does not come, it is not asked for again
+    expect(asked(['exit', 'whole'], budget)).toEqual({ came: 'exit_5, after 1 try', limits: [60_000], took: 2000 })
+    expect(asked(['timeout', 'whole'], budget)).toEqual({ came: 'timed_out, after 1 try', limits: [60_000], took: 60_000 })
+  })
+})
+
+// What the tests above hold with stand-ins, held here of Windows itself: the service's own start,
+// in a program of its own, asks the PowerShell that Windows has for the list of what runs. That
+// PowerShell is made to fail first, in the ways `POWERSHELL_FAILS` names and each by a run of
+// its own: `exit` ends with code 5 having printed words of its own, `cut` prints a list without
+// its last word, and `timeout` is ended by a limit of two seconds, as is the second run that a
+// child ended so far before its time is given. Every other asking is Windows' own to answer.
+describe.skipIf(!windows || !program)('a start on Windows where PowerShell does not give the list of what runs at once', () => {
+  let starts: string
+  beforeAll(async () => {
+    const failing: Plugin = {
+      name: 'failing',
+      setup(b) {
+        b.onResolve({ filter: /^node:child_process$/ }, (asked) => (asked.namespace === 'failing' ? undefined : { path: asked.path, namespace: 'failing' }))
+        b.onLoad({ filter: /.*/, namespace: 'failing' }, () => ({
+          loader: 'js',
+          contents: `
+            import * as real from 'node:child_process'
+            export * from 'node:child_process'
+            export { default } from 'node:child_process'
+            const fails = (process.env.POWERSHELL_FAILS ?? '').split(',').filter(Boolean)
+            let failed = 0
+            let again = false
+            const instead = (file, script, options) => real.spawnSync(file, ['-NoProfile', '-NonInteractive', '-Command', script], options)
+            export const spawnSync = (file, args, options) => {
+              // Only the asking for the whole list, which is the one that asks for every process's command line
+              const lists = file === 'powershell.exe' && Buffer.from(String(args.at(-1)), 'base64').toString('utf16le').includes('Win32_Process -Property')
+              if (lists && again) {
+                again = false
+                return instead(file, 'Start-Sleep -Seconds 30', { ...options, timeout: 2000 })
+              }
+              if (lists && failed < fails.length) {
+                const fault = fails[failed++]
+                if (fault === 'timeout') {
+                  again = true
+                  return instead(file, 'Start-Sleep -Seconds 30', { ...options, timeout: 2000 })
+                }
+                if (fault === 'exit') return instead(file, "'Access denied to a person'; exit 5", options)
+                return instead(file, "'self'", options)
+              }
+              return real.spawnSync(file, args, options)
+            }
+          `,
+        }))
+      },
+    }
+    // Starts the backend as the service does, says what the start said, and stops the backend again
+    starts = path.join(scratch, 'starts-on-windows.mjs')
+    await bundled(
+      'starts-on-windows.mjs',
+      `
+        import { startBackend } from './src/serve/backend'
+        import { readConfig } from './src/serve/config'
+        try {
+          const backend = await startBackend(readConfig(), (line) => console.log('SAID ' + line))
+          console.log('STARTED')
+          await backend.stop()
+          console.log('STOPPED')
+        } catch (err) {
+          console.log('PROBLEM ' + err.message)
+          console.log('ERROR ' + err.code)
+        }
+        process.exit(0)
+      `,
+      [failing],
+    )
+  }, HOOK_MS)
+
+  /** Starts the backend where PowerShell fails so, and gives every line the start wrote, and those among them about the list. */
+  const started = async (fails: string[]) => {
+    const child = spawn(process.execPath, [starts], { env: { ...process.env, POWERSHELL_FAILS: fails.join(',') }, stdio: ['ignore', 'pipe', 'inherit'] })
+    let out = ''
+    child.stdout.on('data', (chunk) => {
+      out += chunk
+    })
+    await new Promise((resolve) => child.once('close', resolve))
+    const lines = out.split(/\r?\n/).filter(Boolean)
+    return { lines, listing: lines.filter((line) => line.includes('the list of what runs') || line.startsWith('PROBLEM ') || line.startsWith('ERROR ')) }
+  }
+
+  test('a list that PowerShell does not give twice is asked for a third time, and the backend program is started on the list Windows then gives', async () => {
+    const config = makeConfig()
+    const { lines, listing } = await started(['cut', 'exit'])
+    expect(listing).toEqual([
+      'SAID backend: the list of what runs on this machine could not be had (unreadable, try 1 of 3), and is asked for again',
+      'SAID backend: the list of what runs on this machine could not be had (exit_5, try 2 of 3), and is asked for again',
+    ])
+    expect(
+      lines.filter((line) => /^(SAID backend: started|STARTED|STOPPED)/.test(line)).map((line) => line.replace(/^SAID backend: started.*$/, 'started')),
+    ).toEqual(['started', 'STARTED', 'STOPPED'])
+    expect(lines.join('\n')).not.toMatch(/Access|denied|person/)
+    expect(programsHere(instanceName(config.instanceSecret))).toEqual([])
+    expect(existsSync(inBackend('lock'))).toBe(false)
+  }, 300_000)
+
+  test('a list that PowerShell does not give three times, the last by running out of time, is refused with that in a code, and no backend program is started', async () => {
+    const config = makeConfig()
+    const { lines, listing } = await started(['exit', 'cut', 'timeout'])
+    expect(listing).toEqual([
+      'SAID backend: the list of what runs on this machine could not be had (exit_5, try 1 of 3), and is asked for again',
+      'SAID backend: the list of what runs on this machine could not be had (unreadable, try 2 of 3), and is asked for again',
+      'SAID backend: the list of what runs on this machine could not be had (timed_out, 3 tries), and no backend program is started',
+      'PROBLEM It could not look through the programs running on this machine for a backend program left on its folder (timed_out, after 3 tries), so it starts none.',
+      'ERROR cannot_list_processes',
+    ])
+    expect(lines.filter((line) => /^(SAID backend: started|STARTED)/.test(line))).toEqual([])
+    expect(lines.join('\n')).not.toMatch(/Access|denied|person/)
+    // Nothing was started on the folder, and the folder is let go
+    expect(existsSync(database())).toBe(false)
+    expect(programsHere(instanceName(config.instanceSecret))).toEqual([])
+    expect(existsSync(inBackend('lock'))).toBe(false)
+  }, 300_000)
 })
 
 describe('the backend programs fetched for earlier releases', () => {

@@ -309,15 +309,19 @@ const SHORT_MS = 600_000
  * So is a backend that refuses everything said and then takes that much: it is told everything
  * again a while later, and whenever what there is to say has changed. Once the door is being
  * stopped, which `over` says, a telling that failed is not followed by the shorter one: the
- * backend is about to be asked to stop, and is asked nothing more first.
+ * backend is about to be asked to stop, and is asked nothing more first. Each time the shorter
+ * one follows a telling that failed, `say` is told so, with the code of what failed and how
+ * many times that has happened since the service started.
  */
 export function teller(
   tell: (said: Partial<Stands>) => Promise<unknown>,
   behind: boolean,
   clock: () => number = Date.now,
   over: () => boolean = () => false,
+  say: (line: string) => void = () => {},
 ): (stands: Stands) => Promise<void> {
   let told = ''
+  let failed = 0
   let shortUntil = behind ? Number.POSITIVE_INFINITY : 0
   const short = ({ on, wanted, addresses }: Stands) => ({ on, wanted, addresses })
   return async (stands) => {
@@ -328,6 +332,10 @@ export function teller(
       told = JSON.stringify(said)
     } catch (err) {
       if (said !== stands || over()) throw err
+      failed += 1
+      say(
+        `door: the backend did not take all of how the service stands (${why(err)}), and is told only how the door stands (${failed} ${failed === 1 ? 'time' : 'times'} since the service started)`,
+      )
       // Whatever it was that failed is what is said of it, should the shorter word fail as well
       await tell(short(stands)).catch(() => {
         throw err
@@ -551,6 +559,7 @@ async function keptDoor(
     backend.behind !== undefined,
     Date.now,
     () => stopped,
+    say,
   )
   const tell = () => report(standsAs(now, wanted, config.port))
   /** Whether it has been said that the backend could not be told. Said once, until it has been told again. */

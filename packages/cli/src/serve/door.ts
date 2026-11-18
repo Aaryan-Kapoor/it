@@ -30,7 +30,7 @@ import os from 'node:os'
 import type { Duplex } from 'node:stream'
 import { createContent, pagePolicy } from '@it/content'
 import { contentPort, httpsPort, onThisMachine, UPLOAD, uploadBudgetMs } from '@it/protocol'
-import { direct, inHome, Problem, VERSION } from '../lib'
+import { direct, inHome, Problem, VERSION, why } from '../lib'
 import type { Backend } from './backend'
 import { doorKey, type ServiceConfig, storageAsked } from './config'
 import { recordExports } from './export'
@@ -353,17 +353,21 @@ function held(body: ReadableStream<Uint8Array>, most: number, ms: number): { str
   return { stream, over }
 }
 
-/** Says a thing about the door seldom: once, and then not again for ten minutes, however often it happens. */
-function seldomSaid(say: (line: string) => void): (code: string) => void {
+/**
+ * Says a thing about the door seldom: once, and then not again for ten minutes, however often
+ * it happens. Where a cause is given, the line it is said in carries that cause.
+ */
+function seldomSaid(say: (line: string) => void): (code: string, cause?: string) => void {
   const last = new Map<string, { at: number; held: number }>()
-  return (code) => {
+  return (code, cause) => {
     const before = last.get(code)
     if (before && Date.now() - before.at < QUIET_MS) {
       before.held += 1
       return
     }
     last.set(code, { at: Date.now(), held: 0 })
-    say(`door refused a request (${code})${before?.held ? `; ${before.held} more like it since this was last said` : ''}`)
+    const ended = cause ? `, the connection having ended with ${cause}` : ''
+    say(`door refused a request (${code})${ended}${before?.held ? `; ${before.held} more like it since this was last said` : ''}`)
   }
 }
 
@@ -440,9 +444,14 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
     }
   }
 
-  /** A refusal: a status and one fixed word for why. Nothing of what was asked is repeated, here or in the log. */
-  const refuse = (status: number, code: string, headers: Record<string, string> = {}) => {
-    noted(code)
+  /**
+   * A refusal: a status and one fixed word for why. Nothing of what was asked is repeated, here
+   * or in the log. Of a request the backend did not answer, `cause` is how the connection to it
+   * ended, which the log says too: the system's code for that or the kind of error, never the
+   * error's own words. The caller is told only the word.
+   */
+  const refuse = (status: number, code: string, headers: Record<string, string> = {}, cause?: string) => {
+    noted(code, cause)
     return json(status, { error: code }, headers)
   }
   /**
@@ -581,8 +590,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
       // An answer that sends the caller elsewhere comes back as it is: nothing is asked of wherever it names
       answered = await direct(`${site}${url.pathname}${url.search}`, { method: a.method, headers, body, signal: AbortSignal.timeout(BACKEND_MS) })
       bytes = await answered.arrayBuffer()
-    } catch {
-      return refuse(502, 'backend_unreachable')
+    } catch (err) {
+      return refuse(502, 'backend_unreachable', {}, why(err))
     }
     const says = passedOn(answered.headers, NOT_RETURNED)
     // Only a token that the backend granted to a paired browser carries this word. Retained
@@ -644,8 +653,8 @@ export function makeDoor(config: ServiceConfig, backend: Backend, say: (line: st
         signal: AbortSignal.timeout(path === '/api/action' ? ACTION_MS : BACKEND_MS),
       })
       bytes = await answered.arrayBuffer()
-    } catch {
-      return refuse(502, 'backend_unreachable')
+    } catch (err) {
+      return refuse(502, 'backend_unreachable', {}, why(err))
     }
     const packed = answered.headers.get('content-encoding')
     return new Response([204, 205, 304].includes(answered.status) ? null : bytes, {

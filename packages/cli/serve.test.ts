@@ -444,6 +444,38 @@ describe('what the service tells the backend of how it stands', () => {
     expect(backend.told.at(-1)).toEqual(stands)
   })
 
+  test('a telling that ran out of time and was followed by the shorter one is written down with its code and a count, and never with the words of what failed', async () => {
+    const said: string[] = []
+    let slow = true
+    const tell = async (told: Record<string, unknown>) => {
+      if (slow && 'background' in told) throw Object.assign(new DOMException('The operation was aborted due to timeout at C:\\Users\\a person', 'TimeoutError'))
+    }
+    let now = 1_000_000
+    const report = teller(
+      tell,
+      false,
+      () => now,
+      undefined,
+      (line) => said.push(line),
+    )
+    await report(stands)
+    expect(said).toEqual([
+      'door: the backend did not take all of how the service stands (TimeoutError), and is told only how the door stands (1 time since the service started)',
+    ])
+    // Told everything again a while later, it runs out of time once more, and the count goes on
+    now += 600_001
+    await report({ ...stands, usage: false })
+    expect(said.at(-1)).toBe(
+      'door: the backend did not take all of how the service stands (TimeoutError), and is told only how the door stands (2 times since the service started)',
+    )
+    // And a telling that is taken writes nothing down
+    slow = false
+    now += 600_001
+    await report(stands)
+    expect(said).toHaveLength(2)
+    expect(said.join('\n')).not.toMatch(/aborted|Users|person/)
+  })
+
   test('a backend that cannot be told at all fails the telling with what it failed with, and is told again the next time', async () => {
     let reachable = false
     const backend = backendThat(() => !reachable)
