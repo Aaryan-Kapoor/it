@@ -330,6 +330,71 @@ describe.skipIf(!program || process.platform === 'win32')('many callers at once,
     }
   }, 120_000)
 
+  /**
+   * The backend program's own ordering of a field a record does not have, which giving back
+   * what a machine set aside leans on (delivery.ts): what was set aside before the times a
+   * conversation is heard from again were numbered carries no number, and a time that has one is
+   * to give it back, by reading up to its own number. Convex says it orders a missing field
+   * below every number, and the stand-in backend the other tests run on does. This asks the
+   * program itself. Such records are written as a backup would bring them back, by the backend
+   * program's own way of adding records, since no function of It's writes one any more.
+   */
+  test('a conversation heard from again is given back what was set aside for it with no number, and what was set aside before that time, and nothing set aside since', async () => {
+    const { adminKey } = JSON.parse(readFileSync(path.join(folder, 'it/service.json'), 'utf8')) as { adminKey: string }
+    const { api } = backendAt(Number(new URL(origin).port))
+    const asAdmin = async (kind: 'query' | 'mutation', name: string, args: Record<string, unknown>) => {
+      const response = await fetch(`${api}/api/${kind}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Convex ${adminKey}` },
+        body: JSON.stringify({ path: name, args, format: 'json' }),
+        signal: AbortSignal.timeout(10_000),
+      })
+      const result = (await response.json()) as { status: string; value?: unknown; errorMessage?: string }
+      if (result.status !== 'success') throw new Error(`${name} was refused: ${result.errorMessage}`)
+      return result.value
+    }
+    const rows = async (table: string) =>
+      ((await asAdmin('query', '_system/cli/tableData', { table, order: 'asc', paginationOpts: { numItems: 100, cursor: null } })) as { page: any[] }).page
+    const add = async (table: string, documents: Record<string, unknown>[]) => {
+      const said = (await asAdmin('mutation', '_system/frontend/addDocument', { table, documents })) as { success?: boolean } | null
+      expect(said?.success ?? true).toBe(true)
+    }
+    const [user] = await rows('users')
+    const [machine] = await rows('machines')
+    const now = Date.now()
+    const aside = { harness: 'codex', id: 'thread-set-aside' }
+    await add('artifacts', [{ userId: user._id, slug: 'set-aside', title: 'Set aside', lastVersion: 1, bytes: 0, createdAt: now, updatedAt: now, waiting: 3 }])
+    const page = (await rows('artifacts')).find((a) => a.slug === 'set-aside')
+    const click = (clientActionId: string, more: Record<string, unknown> = {}) => ({
+      userId: user._id,
+      artifactId: page._id,
+      clientActionId,
+      name: 'press',
+      payload: '{}',
+      contentVersion: 1,
+      title: 'Set aside',
+      createdAt: now,
+      delivery: 'pending',
+      harness: aside.harness,
+      sessionId: aside.id,
+      parkedBy: machine._id,
+      ...more,
+    })
+    await add('actions', [click('aside-with-no-number'), click('aside-before', { parkedGeneration: 3 }), click('aside-since', { parkedGeneration: 60 })])
+    await add('deliveryReturns', [{ userId: user._id, machineId: machine._id, harness: aside.harness, sessionId: aside.id, generation: 55, at: now }])
+    // A step of giving back what was set aside before the conversation was heard from again for the 55th time
+    await asAdmin('mutation', 'delivery:unparkRest', { userId: user._id, machineId: machine._id, for: aside, generation: 55 })
+    const after = new Map((await rows('actions')).filter((x) => x.clientActionId.startsWith('aside-')).map((x) => [x.clientActionId, x]))
+    expect([...after.keys()]).toHaveLength(3)
+    for (const given of ['aside-with-no-number', 'aside-before']) {
+      expect(after.get(given)).toMatchObject({ delivery: 'pending', machineId: machine._id })
+      expect(after.get(given)).not.toHaveProperty('parkedBy')
+      expect(after.get(given)).not.toHaveProperty('parkedGeneration')
+    }
+    expect(after.get('aside-since')).toMatchObject({ parkedBy: machine._id, parkedGeneration: 60 })
+    expect(after.get('aside-since')).not.toHaveProperty('machineId')
+  })
+
   /** A token for the session a cookie is. */
   const token = async (cookie: string) =>
     ((await (await fetch(`${origin}/session/token`, { method: 'POST', headers: { ...site(), cookie } })).json()) as { token: string }).token
