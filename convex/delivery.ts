@@ -23,7 +23,7 @@ import {
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
-import { internalMutation, type MutationCtx, mutation, type QueryCtx, query } from './_generated/server'
+import { internalMutation, mutation, type QueryCtx, query } from './_generated/server'
 import { destination, dropStopped, madeOf, noLongerWaiting, stoppedSince } from './actions'
 import { artifactBySlug, requireMachine } from './lib/authz'
 import { fail } from './lib/errors'
@@ -1152,7 +1152,7 @@ export const unpark = mutation({
  * that was scheduled before they were numbered asks, everything that was set aside is given back.
  */
 async function giveBackAside(
-  ctx: MutationCtx,
+  ctx: Parameters<typeof dropStopped>[0],
   userId: Id<'users'>,
   machineId: Id<'machines'>,
   s: { harness: string; id: string },
