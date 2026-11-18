@@ -2741,7 +2741,7 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
     for (const run of [running.get(key), unsettled.get(key)]) if (run) run.stopped = true
     keepRuns()
   }
-  const pendingEnds = new Map<string, { for: { harness: string; id: string }; run?: string; ok?: true; ran?: true }>()
+  const pendingEnds = new Map<string, { for: { harness: string; id: string }; run?: string; ok?: true }>()
   let finishing = false
   const finishRuns = async () => {
     if (finishing || over) return
@@ -2766,22 +2766,18 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           // by number, and a note that told a process's start another way cannot be compared: both stay as they were)
           if (now === null || still.told !== SINCE_TOLD || now.get(still.pid) === still.since) continue
         }
-        const told = (said: { stopped?: boolean } | null) => {
-          if (pendingEnds.get(key) === ended || (ended.run !== undefined && pendingEnds.get(key)?.run === ended.run)) pendingEnds.delete(key)
-          // A person stopped it just before It was told it was over, and the word of that went
-          // with it: its conversation is told it was stopped, as it would have been on hearing it
-          if (said?.stopped && !reopenedNow.has(key)) {
-            rememberStopped(key)
-            if (!pendingStops.has(key) && cutOff.delete(key)) keepCutOff()
-          }
-        }
-        await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, ended).then(told, async (err) => {
-          // An It older than the word that the run ran, and its turn is over, takes the rest
-          if (!ended.ran || !refusedFor(err)) return
-          const { ran: _ran, ...plain } = ended
-          pendingEnds.set(key, plain)
-          await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, plain).then(told, () => {})
-        })
+        await call<{ stopped?: boolean } | null>('mutation', api.machines.runEnded, ended).then(
+          (said) => {
+            if (pendingEnds.get(key) === ended) pendingEnds.delete(key)
+            // A person stopped it just before It was told it was over, and the word of that went
+            // with it: its conversation is told it was stopped, as it would have been on hearing it
+            if (said?.stopped && !reopenedNow.has(key)) {
+              rememberStopped(key)
+              if (!pendingStops.has(key) && cutOff.delete(key)) keepCutOff()
+            }
+          },
+          () => {},
+        )
       }
     } finally {
       finishing = false
@@ -3254,10 +3250,6 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
         for: session,
         run: runId,
         ...(ended === null || ended === STOPPED || ended === NOT_STARTED ? { ok: true } : {}),
-        // It ran, to its end, as It saw: its turn is over, which its page says where nothing else
-        // said so. Not of one that was not started, as for a conversation open meanwhile or held
-        // for T3 Code at the last moment, nor of one the person stopped
-        ...(ended === null ? { ran: true as const } : {}),
       })
       await finishRuns()
     }
@@ -3950,11 +3942,17 @@ async function connecting(say: (line: string) => void, discovery: ClaudeDiscover
           }
         }
         if (refused === STOPPED) say(`${a(harness)} conversation (${short(line)}) was stopped by the person`)
+        // A conversation It reopened, whose run ran to its end: no turn of it is running now, since
+        // its program has ended. Its pages are told that its turn is over once the hand-over is
+        // confirmed, where its add-on said nothing of it, so that they do not go on saying that
+        // its agent has what was done there. Not of a run the person stopped
+        const ranOut = reopening && refused === null
+        if (ranOut) turnsSaid.set(follow(key), { on: false, at: Date.now() })
         for (const c of [click, ...withIt]) {
           journal('queued', c.id)
           toConfirm.set(c.id, 'queue')
           // A conversation It reopened is shown as working by its run, which has ended by now
-          if (!reopening) handedOver(c, follow(key), true)
+          if (!reopening || ranOut) handedOver(c, follow(key), true, ranOut)
           // The queue, or the reopening, starts a turn in a conversation that was not working
           counting.set(c.id, { at: c.at, harness, path: 'woke' })
           if (c !== click) {

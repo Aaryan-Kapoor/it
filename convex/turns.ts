@@ -91,26 +91,6 @@ export const say = mutation({
   },
 })
 
-/**
- * That the turn of a conversation a machine reopened is over, because the run that carried it
- * ended, as the machine saw: kept as ended now, whatever the conversation's add-on said or did not
- * say, so that its page does not go on saying that its agent has what was done there. A turn kept
- * as running is ended now; one kept as ended before, or none kept, is kept as one that began and
- * ended now, as a short one is whose beginning its machine never heard.
- */
-export async function endedTurn(ctx: MutationCtx, userId: Id<'users'>, machineId: Id<'machines'>, s: { harness: string; id: string }): Promise<void> {
-  const harness = s.harness.slice(0, 40)
-  const sessionId = s.id.slice(0, 200)
-  const row = await kept(ctx, machineId, harness, sessionId)
-  const now = Date.now()
-  if (row && row.endedAt === undefined) await ctx.db.patch(row._id, { endedAt: now })
-  else if (row) await ctx.db.patch(row._id, { since: now, endedAt: now })
-  else {
-    await makeRoom(ctx, machineId)
-    await ctx.db.insert('turns', { userId, machineId, harness, sessionId, since: now, endedAt: now })
-  }
-}
-
 /** Makes room for one more record of a machine's, where it has as many as it may. */
 async function makeRoom(ctx: MutationCtx, machineId: Id<'machines'>): Promise<void> {
   const rows = await ctx.db
