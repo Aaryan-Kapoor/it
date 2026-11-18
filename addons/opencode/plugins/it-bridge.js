@@ -276,8 +276,12 @@ function bridge(app) {
   function gave(clicks) {
     for (const c of clicks) given.add(c.id)
     if (given.size > 2000) for (const id of [...given].slice(0, 1000)) given.delete(id)
-    void ask('/ack', { ids: clicks.map((c) => c.id) })
+    void ask('/ack', acked(clicks))
   }
+  // Each click is said to be with the agent by the receipt the connector offered it with: it
+  // takes a click anew each time it holds it, and a word of an earlier taking, come late, is
+  // then not taken for a word of a later one. A connector from before receipts offers none.
+  const acked = (clicks) => ({ ids: clicks.map((c) => c.id), receipts: clicks.map((c) => (typeof c.receipt === 'string' ? c.receipt : null)) })
 
   /** Every conversation whose clicks are handed to this one, the one the person sees. */
   const handedTo = (into) => [...sessions.values()].filter((s) => s.into === into)
@@ -400,13 +404,13 @@ function bridge(app) {
   }
 
   async function check(s) {
-    const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(s.id)}`)
+    const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(s.id)}&receipts=1`)
     // The conversation may have been dropped while the connector was answering
     if (!got || !Array.isArray(got.clicks) || sessions.get(s.id) !== s) return
     const clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && c.id && typeof c.text === 'string' && c.text)
     const again = clicks.filter((c) => given.has(c.id))
     // Offered something the agent already has: the earlier report of it was lost, so it is sent again
-    if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
+    if (again.length) void ask('/ack', acked(again))
     // Only what the connector offers this very moment is handed over. A click it has stopped
     // offering may have gone to someone else.
     // Nor what OpenCode holds already, on its way into the conversation

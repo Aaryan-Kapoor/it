@@ -237,8 +237,12 @@ export default function (pi) {
     if (shared.given.size > 2000) for (const id of [...shared.given].slice(0, 1000)) shared.given.delete(id)
     retryWait = 0
     retryAt = 0
-    void ask('/ack', { ids: clicks.map((c) => c.id) })
+    void ask('/ack', acked(clicks))
   }
+  // Each click is said to be with the agent by the receipt the connector offered it with: it
+  // takes a click anew each time it holds it, and a word of an earlier taking, come late, is
+  // then not taken for a word of a later one. A connector from before receipts offers none.
+  const acked = (clicks) => ({ ids: clicks.map((c) => c.id), receipts: clicks.map((c) => (typeof c.receipt === 'string' ? c.receipt : null)) })
 
   /**
    * Pi takes a message without saying whether it got in, so the proof is the conversation
@@ -345,14 +349,14 @@ export default function (pi) {
         if (!(await ask('/session', { harness: HARNESS, session: move.now, was: move.was }))) return
         if (shared.moves[0] === move) shared.moves.shift()
       }
-      const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`)
+      const got = await ask(`/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}&receipts=1`)
       // Pi may have shut this conversation down while the connector was answering, or gone to
       // another one: what was asked for the first is not handed to the second
       if (!ctx || !got || !Array.isArray(got.clicks) || ctx.sessionManager.getSessionId() !== id) return
       const clicks = got.clicks.filter((c) => c && typeof c.id === 'string' && c.id && typeof c.text === 'string' && c.text)
       const again = clicks.filter((c) => shared.given.has(c.id))
       // Offered something the agent already has: the earlier report of it was lost, so it is sent again
-      if (again.length) void ask('/ack', { ids: again.map((c) => c.id) })
+      if (again.length) void ask('/ack', acked(again))
       // Only what the connector offers this very moment is handed over. A click it has stopped
       // offering may have gone to someone else.
       handOver(clicks.filter((c) => !shared.given.has(c.id) && !sent.some((s) => s.id === c.id)))

@@ -68,6 +68,11 @@ let startingAt = 0 // when that prompt was taken
 let session = null // this conversation's id, which /clear changes
 const pending = [] // clicks taken from the connector, not yet handed to Claude
 const given = new Set() // clicks Claude already has, which must never be handed over a second time
+// The receipt each click was last offered with: the connector takes a click anew each time it
+// holds it, under a receipt of that taking, and is told by that receipt that Claude has the
+// click. A word of an earlier taking, come late, is then not taken for a word of a later one.
+// A connector from before receipts offers none, and is told by the click's id alone.
+const receipts = new Map()
 
 /**
  * The person's own folder, found as the `it` command finds it, so that both look for It's folder
@@ -227,7 +232,13 @@ const briefOf = (clicks) => clicks.map((c) => (typeof c.brief === 'string' && c.
  * is not known, as when an earlier report is repeated.
  */
 const report = ($, ids, woke, turnOver) =>
-  void ask($, '/ack', { ids, ...(woke === undefined ? {} : { woke }), turn: working(), ...(turnOver ? { turnOver: true } : {}) })
+  void ask($, '/ack', {
+    ids,
+    receipts: ids.map((id) => receipts.get(id) ?? null),
+    ...(woke === undefined ? {} : { woke }),
+    turn: working(),
+    ...(turnOver ? { turnOver: true } : {}),
+  })
 /**
  * Whether the conversation is at work, as the connector is told with everything it is asked
  * and every receipt: a turn of its own is running, or a click was taken as a prompt a moment
@@ -413,7 +424,7 @@ async function checkOnce($) {
     if (!(await ask($, '/session', { harness: HARNESS, session: move.now, was: move.was }))) return
     if (moves[0] === move) moves.shift()
   }
-  const got = await ask($, `/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}`, { turn: working() })
+  const got = await ask($, `/clicks?harness=${HARNESS}&session=${encodeURIComponent(id)}&receipts=1`, { turn: working() })
   if (!got || !Array.isArray(got.clicks)) return
   // Something was found missing while the connector was answering: nothing is taken for now
   if (!addon().delivery) return lacks($)
@@ -428,6 +439,12 @@ async function checkOnce($) {
   // run out and something else may have delivered it
   const offered = new Set(got.clicks.map((c) => c.id))
   offeredNow = offered
+  // Each is said to be with Claude by the receipt it is offered with now, and no earlier one
+  for (const c of got.clicks) {
+    receipts.delete(c.id)
+    if (typeof c.receipt === 'string') receipts.set(c.id, c.receipt)
+  }
+  if (receipts.size > 2000) for (const old of [...receipts.keys()].slice(0, 1000)) receipts.delete(old)
   for (let i = pending.length - 1; i >= 0; i--) if (!offered.has(pending[i].id)) pending.splice(i, 1)
   const again = got.clicks.filter((c) => given.has(c.id))
   // Offered something Claude already has: the earlier report of it was lost, so it is sent again
