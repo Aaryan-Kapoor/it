@@ -61,7 +61,7 @@ import {
 } from './arrives'
 import { runSync } from './child'
 import { CODEX_SAVE_ESCALATE } from './codex-settings'
-import { choices, conversationIds, local, type Route, refusedFor } from './connector'
+import { choices, conversationIds, local, type Route, refusedFor, T3_THREAD_CLAIM } from './connector'
 import { deletePage, deletionStatus } from './delete'
 import { saveAttached } from './files'
 import * as flow from './flow'
@@ -935,8 +935,13 @@ async function factsHere(slug?: string, tour = false, unclaimedLeft?: 'unanswere
 
 /** What the connector says of the way to a conversation (`/route`), or null where it could not be asked or gave no answer that is one. */
 async function routeOf(session: { harness: string; id: string }): Promise<Route | null> {
+  // The thread of T3 Code this command says it runs in, which T3 Code sets for the commands of the Claude Code and Codex it runs:
+  // the connector reads that thread first, and notes it only where T3 Code says it runs this conversation
+  const claimed = process.env.T3CODE_THREAD_ID ?? ''
+  const thread =
+    (session.harness === 'claude-code' || session.harness === 'codex') && T3_THREAD_CLAIM.test(claimed) ? `&thread=${encodeURIComponent(claimed)}` : ''
   // The connector gives T3 Code up to eight seconds, the first time a couple of them to issue It a session
-  const asked = await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}`, {
+  const asked = await local<Partial<Route>>(`/route?harness=${encodeURIComponent(session.harness)}&session=${encodeURIComponent(session.id)}${thread}`, {
     timeoutMs: 10_000,
   })
   // An answer that is not one is no answer: a connector from before it answered this says nothing of it

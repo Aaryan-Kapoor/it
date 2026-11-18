@@ -22,6 +22,7 @@ import {
   t3NearRead,
   t3Refusal,
   t3Running,
+  t3RunsIn,
   t3RunsNow,
   t3Search,
   t3Server,
@@ -571,6 +572,46 @@ describe.skipIf(process.platform === 'win32')('the thread that runs a conversati
       found.read.length = 0
       expect(await t3RunsNow(found.t3, { harness: 'claude-code', ids: ['a-terminal-conversation'], cwd: '/work/site' })).toEqual({ status: 'none' })
       expect(new Set(found.read)).toEqual(new Set(['running', ...lively.map((t) => t.id)]))
+    } finally {
+      found.close()
+    }
+  })
+
+  test('of the one thread a command names, says yes only where T3 Code’s snapshot of that very thread says it runs this conversation now', async () => {
+    const delegated = 'thread:delegated-task:command%3Amcp%3Aafd77451'
+    const found = await server([], {
+      'mcp:mine': switched('mcp:mine', [claude, codex], codex.provider),
+      neighbour: switched('neighbour', [neighbour], neighbour.provider),
+      [delegated]: switched(delegated, [codex], codex.provider),
+      // Archived, or deleted, it runs nothing, whatever its snapshot names
+      archived: {
+        projection: {
+          ...switched('archived', [codex], codex.provider).projection,
+          thread: { id: 'archived', activeProviderThreadId: codex.provider, archivedAt: '2026-11-01T00:00:00.000Z' },
+        },
+      },
+      deleted: {
+        projection: {
+          ...switched('deleted', [codex], codex.provider).projection,
+          thread: { id: 'deleted', activeProviderThreadId: codex.provider, deletedAt: '2026-11-01T00:00:00.000Z' },
+        },
+      },
+      // A snapshot that is of another thread than the one asked for says nothing of this one
+      'asked-for': switched('another', [codex], codex.provider),
+    })
+    const of = { harness: 'codex', ids: ['an-id-it-has-since', 'codex-conversation'] }
+    try {
+      expect(await t3RunsIn(found.t3, 'mcp:mine', of)).toBe(true)
+      // Read by its own name, however T3 Code writes it, and that thread alone: the threads are not listed
+      expect(await t3RunsIn(found.t3, delegated, of)).toBe(true)
+      expect(found.read).toEqual(['mcp:mine', delegated])
+      // Another conversation's thread, a conversation the thread ran before, the same id under another app
+      expect(await t3RunsIn(found.t3, 'neighbour', of)).toBe(false)
+      expect(await t3RunsIn(found.t3, 'mcp:mine', { harness: 'claude-code', ids: ['claude-conversation'] })).toBe(false)
+      expect(await t3RunsIn(found.t3, 'mcp:mine', { harness: 'claude-code', ids: ['codex-conversation'] })).toBe(false)
+      for (const thread of ['archived', 'deleted', 'asked-for', 'no-such-thread', '']) expect(await t3RunsIn(found.t3, thread, of)).toBe(false)
+      // Nor where T3 Code cannot be asked at all
+      expect(await t3RunsIn({ origin: 'http://127.0.0.1:1', home: scratch, command: [found.program] }, 'mcp:mine', of)).toBe(false)
     } finally {
       found.close()
     }

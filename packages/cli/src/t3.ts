@@ -578,6 +578,34 @@ export async function t3RunsNow(
 }
 
 /**
+ * Whether one thread of T3 Code runs a conversation at this moment, as T3 Code's own snapshot of
+ * that very thread says, in the way `t3Running` reads it: the thread's own conversation, the one
+ * it runs now, by the agent app and by any of the ids it is known by. A thread that T3 Code says is
+ * archived or deleted runs none. Asked of the thread that a command's environment names
+ * (`T3CODE_THREAD_ID`), which is the command's word and nothing more: only T3 Code's answer
+ * counts, so it is false where the thread runs another conversation, ran this one before, is
+ * not there, or could not be read.
+ */
+export async function t3RunsIn(
+  t3: T3,
+  thread: string,
+  of: { harness: string; ids: readonly string[] },
+  signal: AbortSignal = AbortSignal.timeout(DISCOVERY_MS),
+): Promise<boolean> {
+  if (!thread || signal.aborted) return false
+  const snapshot = await ask<{ projection?: { thread?: { deletedAt?: unknown; archivedAt?: unknown } } }>(
+    t3,
+    'GET',
+    `/api/orchestration/threads/${encodeURIComponent(thread)}/bounded`,
+    signal,
+  )
+  const own = snapshot?.projection?.thread
+  if (!own || own.deletedAt || own.archivedAt) return false
+  const { now } = conversationsOf(snapshot, thread)
+  return now?.harness === of.harness && of.ids.includes(now.id)
+}
+
+/**
  * How far the looking for one conversation's thread has come. It is done in searches, each of
  * which lists the threads once and reads at most so many of them, and what is kept from one
  * search to the next is which threads were read and do not hold the conversation, and which
