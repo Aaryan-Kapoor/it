@@ -44,8 +44,11 @@ import {
   claudeDesktopHere,
   codexGivesNetwork,
   codexLetsItOut,
+  codexReopenedLetsItOut,
   codexRuleLetsItOut,
   codexRunsApart,
+  codexShutReopened,
+  codexShutSaid,
   connect,
   detectAll,
   disconnect,
@@ -60,6 +63,7 @@ import {
   turnBackOn,
   unpack,
 } from './src/setup'
+import { carrying } from './src/wake'
 
 const fake = vi.hoisted(() => ({ execFile: vi.fn(), randomBytes: undefined as ((size: number) => Buffer) | undefined }))
 vi.mock('node:child_process', async (original) => ({ ...(await original<typeof import('node:child_process')>()), execFile: fake.execFile }))
@@ -3962,6 +3966,71 @@ describe('whether Codex, as it is set, lets `it` reach It', () => {
     // What says nothing of the network says the same as before
     expect(codexLetsItOut('[windows]\nsandbox = "elevated"\n', false, 'win32')).toBe(false)
     expect(codexLetsItOut(false, false, 'win32')).toBeUndefined()
+  })
+  // What Codex has in its own window with these settings, as issue #322 gives them: full access, and its elevated sandbox on Windows
+  const fullInWindow = 'sandbox_mode = "danger-full-access"\n[windows]\nsandbox = "elevated"\n'
+  const MODES = ['full-access', 'approve-for-me', 'ask', 'read-only'] as const
+  test('a conversation that It reopens runs in the mode chosen for it, and not with the access Codex has in its own window', () => {
+    expect(codexLetsItOut(fullInWindow, false, 'win32')).toBe(true)
+    // Reopened in Full Access there is no sandbox either, and with the rule `it` is let out of any
+    expect(codexReopenedLetsItOut('full-access', false, 'win32')).toBe(true)
+    for (const mode of MODES) for (const platform of ['win32', 'linux', 'darwin'] as const) expect(codexReopenedLetsItOut(mode, true, platform)).toBe(true)
+    // On Windows the sandbox of every other mode is not given It's folder, so without the rule `it` does not reach It
+    for (const mode of ['approve-for-me', 'ask', 'read-only']) expect(codexReopenedLetsItOut(mode, false, 'win32')).toBe(false)
+    // Elsewhere the sandbox for a workspace is given the network and It's folder, and the read-only one has no network anywhere
+    for (const platform of ['linux', 'darwin'] as const) {
+      expect(codexReopenedLetsItOut('approve-for-me', false, platform)).toBe(true)
+      expect(codexReopenedLetsItOut('ask', false, platform)).toBe(true)
+      expect(codexReopenedLetsItOut('read-only', false, platform)).toBe(false)
+    }
+    // A mode with a name this It does not know is run as the one that allows least
+    expect(codexReopenedLetsItOut('something-newer', false, 'linux')).toBe(false)
+  })
+  test('that is what Auto-wake asks Codex for in each mode: `it` gets out with no sandbox, or with the network and It’s folder to write in', () => {
+    for (const platform of ['win32', 'linux', 'darwin'] as const)
+      for (const mode of MODES) {
+        const run = carrying('codex', 'thread-1', 'what a page sent', { codex: ['codex'], itHome: path.join(tmp, 'it'), platform, wakeMode: mode })
+        if (typeof run === 'string') throw new Error(run)
+        const unsandboxed = run.argv.includes('sandbox_mode="danger-full-access"')
+        const given =
+          run.argv.includes('sandbox_mode="workspace-write"') &&
+          run.argv.includes('sandbox_workspace_write.network_access=true') &&
+          run.argv.some((word) => word.startsWith('sandbox_workspace_write.writable_roots='))
+        expect([platform, mode, codexReopenedLetsItOut(mode, false, platform)]).toEqual([platform, mode, unsandboxed || given])
+      }
+  })
+  test('where Auto-wake is on for Codex, a person is told that a reopened conversation would keep `it` out, though Codex in its window lets it through', () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'it-codex-reopened-'))
+    try {
+      // Auto-wake is off for Codex, or the mode is Full Access: nothing is said, as before
+      expect(codexShutSaid(undefined, fullInWindow, false, 'win32', home)).toBeNull()
+      expect(codexShutSaid('full-access', fullInWindow, false, 'win32', home)).toBeNull()
+      // Reopened in a mode with a sandbox, on Windows, with no rule: said, with the mode by its name, the rules and their file
+      const ask = codexShutSaid('ask', fullInWindow, false, 'win32', home)
+      expect(ask).toBe(`Codex: ${codexShutReopened('ask')}`)
+      expect(ask).toContain('Auto-wake is on for Codex, and a conversation that It reopens runs in Ask for approval,')
+      expect(ask).toContain('`it` is stopped there, with nobody to approve it')
+      expect(ask).toContain(`\n    ${CODEX_RULE}\n`)
+      expect(ask).toContain(CODEX_RULE_FILE)
+      // A reopened conversation is a Codex that has just started, so nothing is said of starting Codex again
+      expect(ask).not.toContain('restart Codex')
+      const reviewed = codexShutSaid('approve-for-me', fullInWindow, false, 'win32', home)
+      expect(reviewed).toContain('runs in Approve for me,')
+      expect(reviewed).toContain('each `it` command there waits on Codex’s reviewer, which may refuse it')
+      // Elsewhere only Read Only keeps it out, whatever the sandbox of Codex's own window has
+      const withNetwork = 'sandbox_mode = "workspace-write"\n[sandbox_workspace_write]\nnetwork_access = true\n'
+      expect(codexShutSaid('ask', withNetwork, false, 'linux', home)).toBeNull()
+      expect(codexShutSaid('read-only', withNetwork, false, 'linux', home)).toContain('runs in Read Only,')
+      // Where Codex as it is set keeps `it` out in its window too, that is what is said, since the same rule answers both
+      expect(codexShutSaid('ask', null, false, 'win32', home)).toBe(`Codex: ${CODEX_SHUT}`)
+      // With the rule, nothing of the mode is said, and a rules file of the person's own is still said to lack what it lacks
+      expect(codexShutSaid('ask', fullInWindow, true, 'win32', home)).toBeNull()
+      mkdirSync(path.join(home, 'rules'))
+      writeFileSync(path.join(home, 'rules', 'it.rules'), `${CODEX_RULE}\n`)
+      expect(codexShutSaid('ask', fullInWindow, codexRuleLetsItOut(home), 'win32', home)).toMatch(/^Codex: your rules file was left unchanged\./)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
   test('what a person is told, and what an agent that is stopped there passes on, both carry the rule and the file to keep it in', () => {
     expect(CODEX_RULE).toBe('prefix_rule(pattern=["it"], decision="allow")')
