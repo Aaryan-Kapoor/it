@@ -258,7 +258,9 @@ function must(cmd: string, args: string[], what: string): void {
 // was told to leave alone), where usage is reported to, whether the person's shell may be asked
 // what it gives a program, which only the service ever asks, and where the person keeps each
 // harness's settings when that is not the usual place, so that the connector looks where the
-// shell that ran `it setup` looked.
+// shell that ran `it setup` looked. Where T3 Code keeps its things is among them for the same
+// reason: the connector finds T3 Code's server by the note in that folder (`t3Server`), and
+// without the folder's name it would look in the usual place and find no T3 Code to hand a click to.
 //
 // Whether usage is reported at all is not in the list. That is kept in a file in It's folder,
 // which the service reads. A copy of the off switch saved in a service's definition would turn
@@ -266,6 +268,8 @@ function must(cmd: string, args: string[], what: string): void {
 // Nor, for the same reason, is whether It looks for a newer version: where the shell that
 // registers the service says that it is not to, that is written into the same file as
 // `it updates off` writes (see `install`).
+/** The setting by which a person names the folder T3 Code keeps its things in, where it is not `~/.t3`. */
+const T3_HOME_VAR = 'T3CODE_HOME'
 export function environment(from: NodeJS.ProcessEnv = process.env): Record<string, string> {
   // A service is never given an amount to keep that it would refuse once it is running
   storageAsked(from)
@@ -286,12 +290,13 @@ export function environment(from: NodeJS.ProcessEnv = process.env): Record<strin
     'IT_TELEMETRY_URL',
     'IT_SHELL_ENV',
     ...PROFILE_VARS,
+    T3_HOME_VAR,
   ])
     if (from[k]) out[k] = from[k]!
   // A folder or a file named from where the shell stood would be looked for from wherever the
-  // service stands: It's own, the backend program, and each place the person keeps a harness's
-  // settings. Where a backend program is fetched from is an address, and is carried as it was given.
-  for (const k of ['IT_HOME', 'IT_BACKEND_BIN', ...PROFILE_VARS]) if (out[k] && !path.isAbsolute(out[k])) out[k] = path.resolve(out[k])
+  // service stands: It's own, the backend program, each place the person keeps a harness's
+  // settings, and T3 Code's. Where a backend program is fetched from is an address, and is carried as it was given.
+  for (const k of ['IT_HOME', 'IT_BACKEND_BIN', ...PROFILE_VARS, T3_HOME_VAR]) if (out[k] && !path.isAbsolute(out[k])) out[k] = path.resolve(out[k])
   // With It's own folder of programs first: the shell that runs setup may have been opened
   // before It was installed, and an app the service starts runs `it` by its name alone. A
   // Windows PATH that the launcher could hold only without it is written as the shell gave it,
