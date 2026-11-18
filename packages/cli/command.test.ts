@@ -8771,26 +8771,27 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     chmodSync(path.join(m.bin, 'claude'), 0o755)
   }
 
-  test('it ends with words for the person, which the agent is told to say word for word in the message with the pairing link', async () => {
-    // A machine joining an It on another computer, which is set up as a first setup is and needs no backend program of its own
-    const joining = async (env: Record<string, string>, answer = (_url: string) => '{"ok":true}') => {
-      const m = machine(false)
-      claudeStandIn(m)
-      const answers = http.createServer((req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(answer(req.url ?? '')))
-      const socket = path.join(m.it, 'connector.sock')
-      await new Promise<void>((r) => answers.listen(socket, r))
-      writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
-      const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-2', name: 'the laptop', wanted: [] } : null))
-      try {
-        return await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'the laptop', '--only', 'claude-code', '--no-service'], {
-          CLAUDE_CONFIG_DIR: path.join(m.home, 'claude'),
-          ...env,
-        })
-      } finally {
-        await new Promise((r) => answers.close(r))
-        await b.close()
-      }
+  // A machine joining an It on another computer, which is set up as a first setup is and needs no backend program of its own
+  const joining = async (env: Record<string, string>, answer = (_url: string) => '{"ok":true}') => {
+    const m = machine(false)
+    claudeStandIn(m)
+    const answers = http.createServer((req, res) => res.writeHead(200, { 'content-type': 'application/json' }).end(answer(req.url ?? '')))
+    const socket = path.join(m.it, 'connector.sock')
+    await new Promise<void>((r) => answers.listen(socket, r))
+    writeFileSync(path.join(m.it, 'connector.json'), JSON.stringify({ socket, token: 'ef'.repeat(24), pid: process.pid, version: 'x', startedAt: 0 }))
+    const b = await backend(m, (asked) => (asked.path === 'machines:me' ? { id: 'machine-2', name: 'the laptop', wanted: [] } : null))
+    try {
+      return await run(m, ['login', '--url', b.url, '--code', 'Ab3dEf6hIj9kLm2nOp5q', '--name', 'the laptop', '--only', 'claude-code', '--no-service'], {
+        CLAUDE_CONFIG_DIR: path.join(m.home, 'claude'),
+        ...env,
+      })
+    } finally {
+      await new Promise((r) => answers.close(r))
+      await b.close()
     }
+  }
+
+  test('it ends with words for the person, which the agent is told to say word for word in the message with the pairing link', async () => {
     // Inside a Claude Code conversation, which It's add-on does not run in
     const ran = await joining({
       CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555',
@@ -8836,6 +8837,31 @@ else if (said === 'plugin install it-bridge@it --scope user') {
     expect(held.tell).toBe(`Tell the person this in your next message, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(held.next).toContain(`tells them this, word for word: “${t3ClaudeLine('2.1.321')}”`)
     expect(inThread.err).not.toContain(reloadLine('2.1.321'))
+  })
+
+  test('where T3 Code is on the machine and the connector cannot say whether a thread holds the conversation, the words say what is so in a thread and outside one', async () => {
+    // T3 Code is known to be on a machine by the folder it keeps its things in
+    const t3 = mkdtempSync(path.join(scratch, 't3-'))
+    mkdirSync(path.join(t3, 'userdata'))
+    const inClaude = {
+      CLAUDE_CODE_SESSION_ID: '11111111-2222-4333-8444-555555555555',
+      CLAUDE_CODE_EXECPATH: '/home/someone/.local/share/claude/versions/2.1.321',
+      T3CODE_HOME: t3,
+    }
+    const way = (thread: string) => (url: string) =>
+      url.startsWith('/route?harness=claude-code&session=11111111-2222-4333-8444-555555555555')
+        ? JSON.stringify({ connected: true, listening: false, runtime: 'inactive', thread })
+        : '{"ok":true}'
+    // T3 Code is running and has not said: neither that nothing reaches the conversation, which is untrue in a thread, nor that it does
+    const either =
+      'Type /reload-plugins in this chat, so that what you do on It’s pages reaches me without you telling me. If I’m still replying, it takes effect when I’m done. In a T3 Code thread it reaches me already, and typing it lets it reach me in the middle of a reply too.'
+    const unsaid = await joining(inClaude, way('unknown'))
+    expect(printed(unsaid).tell).toBe(`Tell the person this in your next message, word for word: “${either}”`)
+    expect(unsaid.err.trimEnd().endsWith(`Tell them this in your next message, word for word:\n\n  ${either}`)).toBe(true)
+    // The connector gave no answer that is one: the same
+    expect(printed(await joining(inClaude)).tell).toBe(`Tell the person this in your next message, word for word: “${either}”`)
+    // T3 Code said that no thread holds it: said outright, as on a machine without T3 Code
+    expect(printed(await joining(inClaude, way('none'))).tell).toBe(`Tell the person this in your next message, word for word: “${reloadLine('2.1.321')}”`)
   })
 })
 

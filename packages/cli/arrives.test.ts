@@ -10,6 +10,7 @@ import {
   arrives,
   CODEX_RESTART,
   CODEX_RESTART_OR_T3,
+  claudeLedLine,
   claudeReloadLine,
   claudeRunning,
   itForAgent,
@@ -21,6 +22,7 @@ import {
   piNotLoadedHere,
   RELOAD_PLUGINS_SINCE,
   reloadLine,
+  reloadOrT3Line,
   setupLine,
   T3_CODEX,
   t3ClaudeLine,
@@ -234,6 +236,49 @@ describe('what setup says of the conversation it ran in, where it has just conne
     )
   })
 
+  test('in a Claude Code conversation where T3 Code is on the machine and It cannot tell whether a thread holds it: what is so in each case, and never only that nothing reaches it', () => {
+    const onT3 = { ...facts, t3: true }
+    // The connector could not be asked, or T3 Code has not said: outside a thread the add-on has to be loaded, and in one it reaches the thread already
+    for (const r of [null, route({ thread: 'unknown' })]) expect(setupLine({ ...onT3, route: r })).toBe(reloadOrT3Line('2.1.321'))
+    const said = reloadOrT3Line('2.1.321')
+    expect(said.startsWith('Type /reload-plugins in this chat, so that what you do on It’s pages reaches me without you telling me.')).toBe(true)
+    expect(said).toContain('In a T3 Code thread it reaches me already')
+    expect(said).toContain('in the middle of a reply too')
+    // A Claude Code too old to load it that way: a new chat outside a thread, and nothing to do in one
+    const old = setupLine({ ...onT3, claude: '2.1.286', route: null })!
+    expect(old).toBe(reloadOrT3Line('2.1.286'))
+    expect(old).toContain('Start a new Claude Code chat to use It')
+    expect(old).toContain('In a T3 Code thread there’s no need')
+    expect(old).not.toContain('/reload-plugins')
+    // The connector found no thread holding it: said outright, as where T3 Code is not on the machine at all
+    expect(setupLine({ ...onT3, route: route({ thread: 'none' }) })).toBe(reloadLine('2.1.321'))
+    expect(setupLine({ ...facts, t3: false, route: route({ thread: 'unknown' }) })).toBe(reloadLine('2.1.321'))
+    // Where whether T3 Code is here was not looked at, it is not taken to be absent
+    expect(setupLine({ ...facts, t3: undefined, route: null })).toBe(reloadOrT3Line('2.1.321'))
+    // And a thread that is known to hold it is told only what is so there
+    expect(setupLine({ ...onT3, route: route({ thread: 'held' }) })).toBe(t3ClaudeLine('2.1.321'))
+  })
+
+  test('to a person who led setup from inside a Claude Code conversation that has not loaded the add-on: what is so of that conversation, in a thread of T3 Code or outside one', () => {
+    const outside =
+      'Claude Code: the conversation this ran in was already open when It’s add-on was installed, so it has not loaded it. Type /reload-plugins in it, so that what you do on a page reaches it.'
+    // No thread holds it, or T3 Code is not on this machine: it hears nothing until the add-on is loaded
+    expect(claudeLedLine({ route: route({ thread: 'none' }), t3: true })).toBe(outside)
+    expect(claudeLedLine({ route: null, t3: false })).toBe(outside)
+    // A thread holds it: what they do reaches it already, and /reload-plugins is for a turn that is running
+    const held = claudeLedLine({ route: route({ thread: 'held' }), t3: true })
+    expect(held).toContain('is held in a thread of T3 Code, so what you do on a page already reaches it, through T3 Code')
+    expect(held).toContain('Type /reload-plugins in it too, so that it also reaches the agent in the middle of a reply')
+    expect(held).not.toMatch(/has not loaded it|so that what you do on a page reaches it\./)
+    // The connector could not say, on a machine with T3 Code: both, the thread's case after the other
+    for (const r of [null, route({ thread: 'unknown' })]) {
+      const either = claudeLedLine({ route: r, t3: true })
+      expect(either.startsWith(`${outside} If it is a thread of T3 Code, what you do on a page reaches it already, through T3 Code`)).toBe(true)
+    }
+    // Said to a person at a terminal, of the conversation: never in an agent's voice
+    for (const line of [outside, held, claudeLedLine({ route: null, t3: true })]) expect(line).not.toMatch(/\bme\b|\bI’m\b/)
+  })
+
   test('in a Codex conversation, while Codex has yet to run It’s hooks: to start Codex again now, and why', () => {
     const said = setupLine({ ...facts, session: codex, addonHere: undefined, codexPending: true })
     expect(said).toBe(CODEX_RESTART)
@@ -305,6 +350,11 @@ describe('what setup says of the conversation it ran in, where it has just conne
     }
     expect(CODEX_RESTART.length).toBeLessThan(260)
     expect(reloadLine('2.1.321')).toContain('reaches me')
+    // What says both cases is longer, and still the agent's own words to the person
+    for (const line of [reloadOrT3Line('2.1.321'), reloadOrT3Line('2.1.286')]) {
+      expect(line.length).toBeLessThan(280)
+      expect(line).not.toMatch(/\bagent\b|\bIt’s add-on is not running\b/)
+    }
   })
 })
 
