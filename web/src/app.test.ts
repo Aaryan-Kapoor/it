@@ -35,7 +35,9 @@ vi.mock('convex/react', () => ({
   useConvexAuth: () => ({ isLoading: false, isAuthenticated: true }),
   useMutation: (fn: unknown) => (args: unknown) => client.mutation(fn, args),
   useAction: (fn: unknown) => (args: unknown) => client.action(fn, args),
-  useQuery: (fn: unknown) => {
+  useQuery: (fn: unknown, args?: unknown) => {
+    // As the real one: a query that is skipped is not asked, and says nothing
+    if (args === 'skip') return undefined
     const said = watched[getFunctionName(fn as never)]
     return typeof said === 'function' ? said() : said
   },
@@ -982,6 +984,37 @@ describe('a display locked to a page', () => {
     expect(host.querySelector('header .lock-mark')).not.toBeNull()
   })
 
+  test('has no mark of a newer It in the bar of its settings, which would lead to the home page it is kept from', async () => {
+    cookie = CODES.ownercode00000000001!
+    watched['artifacts:get'] = PAGE
+    const machine = {
+      id: 'machine-1',
+      name: 'the desk',
+      lastSeenAt: Date.now(),
+      connectorVersion: '0.1.41',
+      system: 'linux',
+      runsIt: true,
+      latest: '0.1.44',
+      upgrade: null,
+      harnesses: [],
+      wanted: [],
+      wakes: [],
+      descendants: { browsers: 1, mine: true, machines: 1 },
+    }
+    watched['machines:list'] = [machine]
+    // Where it is not locked the mark is there, so that its absence below is the lock's doing
+    watched['displays:mine'] = { ...DISPLAY, lockedTo: null, lockEnded: false }
+    await start('/settings')
+    expect(host.querySelector('.update-mark')?.textContent).toBe('update')
+    await act(async () => root.unmount())
+    host.remove()
+    watched['displays:mine'] = locked
+    await start('/settings')
+    expect(location.pathname).toBe('/settings')
+    expect(host.textContent).toContain('Paired as yours')
+    expect(host.querySelector('.update-mark')).toBeNull()
+  })
+
   test('a page on a display that is not locked offers to lock the display to it, where the backend names the lock', async () => {
     cookie = CODES.screencode0000000002!
     watched['artifacts:get'] = PAGE
@@ -1406,5 +1439,171 @@ describe('what was done here and given up with nobody there to be told', () => {
     expect(host.textContent).toContain('Connect this browser')
     expect(host.textContent).not.toContain('could not be sent')
     expect(Object.keys(localStorage).filter((k) => k.startsWith('it.givenup.'))).toEqual([])
+  })
+})
+
+describe('a newer It', () => {
+  const NOW = Date.now()
+  const desk = {
+    id: 'machine-1',
+    name: 'the desk',
+    lastSeenAt: NOW,
+    connectorVersion: '0.1.41',
+    system: 'linux',
+    runsIt: true,
+    latest: '0.1.44',
+    upgrade: null as object | null,
+    harnesses: [] as object[],
+    wanted: [],
+    wakes: [],
+    descendants: { browsers: 1, mine: true, machines: 1 },
+  }
+  const laptop = { ...desk, id: 'machine-2', name: 'the laptop', runsIt: false, descendants: { browsers: 0, mine: false, machines: 0 } }
+  const banner = () => host.querySelector('section.update-banner')
+  const said = () => [...(banner()?.querySelectorAll('p.update') ?? [])].map((p) => p.textContent)
+  const mark = () => host.querySelector('.update-mark')?.textContent ?? null
+  const go = (to: string) =>
+    act(async () => {
+      const { navigate } = await import('./lib')
+      navigate(to)
+      await tick()
+    })
+  beforeEach(() => {
+    cookie = CODES.ownercode00000000001!
+  })
+
+  test('is said at the top of the home page, with a filled button that asks for the update of the machine It runs on, and marked in the bar on every tab', async () => {
+    watched['machines:list'] = [desk]
+    await start()
+    expect(banner()!.getAttribute('aria-label')).toBe('Update of It')
+    expect(said()).toEqual(['It 0.1.44 is out. This machine runs 0.1.41. Update'])
+    const update = banner()!.querySelector('button')!
+    expect([update.type, update.className, update.textContent, update.disabled]).toEqual(['button', 'primary', 'Update', false])
+    expect(mark()).toBe('update')
+    await press('Update')
+    expect(asked.find((a) => a.what === 'machines:upgrade')!.args).toEqual({ machineId: 'machine-1' })
+    // On another tab the banner is not there, and the mark is, and leads back to it
+    await go('/settings')
+    expect(banner()).toBeNull()
+    expect(mark()).toBe('update')
+    await act(async () => {
+      host.querySelector<HTMLAnchorElement>('.update-mark')!.click()
+      await tick()
+    })
+    expect(location.pathname).toBe('/')
+    expect(document.activeElement).toBe(banner()!.querySelector('button'))
+  })
+
+  test.each([
+    ['at work', { state: 'working', at: NOW }, ['Updating to It 0.1.44…'], 'updating'],
+    ['starting again', { state: 'restarting', at: NOW, version: '0.1.44' }, ['Starting again as It 0.1.44…'], 'updating'],
+    [
+      'failed',
+      { state: 'failed', at: NOW, why: 'No room is left on the disk.' },
+      ['The update to It 0.1.44 did not finish: No room is left on the disk. Try again'],
+      'update',
+    ],
+    ['cut short', { state: 'working', at: NOW - 16 * 60_000 }, ['The update to It 0.1.44 did not finish. This machine still runs 0.1.41. Try again'], 'update'],
+  ])('%s, it says so in the banner and under the machine’s name in the same words', async (_, upgrade, expected, marked) => {
+    watched['machines:list'] = [{ ...desk, upgrade }]
+    await start()
+    expect(said()).toEqual(expected)
+    expect(mark()).toBe(marked)
+    await go('/machines')
+    expect([...host.querySelectorAll('p.newer')].map((p) => p.textContent)).toEqual(expected)
+  })
+
+  test('installed and waiting to be started again, and then done, it says what is left to do, the same in both places, and then goes away', async () => {
+    const claude = [{ id: 'claude-code', addon: 'connected' }]
+    watched['machines:list'] = [{ ...desk, harnesses: claude, upgrade: { state: 'installed', at: NOW, version: '0.1.44' } }]
+    await start()
+    const installed = said()
+    expect(installed[0]).toContain('It 0.1.44 is installed on the desk. It runs once It is started again there.')
+    expect(installed[0]).toContain('Type /reload-plugins only in one whose page says it cannot hear it.')
+    expect(banner()!.querySelector('button')).toBeNull()
+    expect(mark()).toBe('update')
+    await go('/machines')
+    expect([...host.querySelectorAll('p.newer')].map((p) => p.textContent)).toEqual(installed)
+    await act(async () => root.unmount())
+    host.remove()
+    watched['machines:list'] = [{ ...desk, connectorVersion: '0.1.44', harnesses: claude, upgrade: { state: 'done', at: NOW, version: '0.1.44' } }]
+    await start()
+    expect(said()).toEqual([
+      'It 0.1.44 is running on the desk. A Claude Code chat that was already open there goes on with the add-on it loaded, which still takes clicks. Type /reload-plugins only in one whose page says it cannot hear it.',
+    ])
+    // Nothing is out any more, so nothing is marked
+    expect(mark()).toBeNull()
+    await act(async () => root.unmount())
+    host.remove()
+    watched['machines:list'] = [{ ...desk, connectorVersion: '0.1.44', upgrade: { state: 'done', at: NOW - 7 * 3600_000, version: '0.1.44' } }]
+    await start()
+    expect(banner()).toBeNull()
+  })
+
+  test('where only a machine that joined is behind, it is said in one line with the way to the Machines page, and with no button of its own', async () => {
+    watched['machines:list'] = [{ ...desk, connectorVersion: '0.1.44' }, laptop]
+    await start()
+    expect(said()).toEqual(['The laptop has an update of It waiting. Go to Machines'])
+    expect(banner()!.querySelector('button')).toBeNull()
+    expect(mark()).toBeNull()
+    await act(async () => {
+      banner()!.querySelector<HTMLAnchorElement>('a')!.click()
+      await tick()
+    })
+    expect(location.pathname).toBe('/machines')
+    expect(host.querySelector('p.newer button')!.textContent).toBe('Update')
+  })
+
+  test('where both are behind, the machine It runs on comes first', async () => {
+    watched['machines:list'] = [laptop, desk, { ...laptop, id: 'machine-3', name: 'the studio' }]
+    await start()
+    expect(said()).toEqual(['It 0.1.44 is out. This machine runs 0.1.41. Update', 'The laptop and the studio have an update of It waiting. Go to Machines'])
+  })
+
+  test('where nothing is out, there is no banner and no mark', async () => {
+    watched['machines:list'] = [
+      { ...desk, latest: '0.1.41' },
+      { ...laptop, latest: null },
+    ]
+    await start()
+    expect(banner()).toBeNull()
+    expect(mark()).toBeNull()
+  })
+
+  test('a screen is shown none of it, and does not ask for the machines', async () => {
+    cookie = CODES.screencode0000000002!
+    let read = 0
+    watched['machines:list'] = () => {
+      read++
+      return [desk]
+    }
+    await start()
+    expect(banner()).toBeNull()
+    expect(mark()).toBeNull()
+    expect(read).toBe(0)
+  })
+
+  test('a page being shown is shown with none of it, in the owner’s browser too', async () => {
+    watched['machines:list'] = [desk]
+    watched['artifacts:get'] = { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: NOW, agent: 'pi', machine: 'here', run: null, pending: 0 }
+    await start('/p/plan')
+    expect(host.querySelector('main.page-view')).not.toBeNull()
+    expect(banner()).toBeNull()
+    expect(mark()).toBeNull()
+  })
+
+  test('where the backend refuses the machines for a moment, the pages are shown without the banner or the mark', async () => {
+    const { ConvexError } = await import('convex/values')
+    watched['artifacts:list'] = [
+      { id: 'page-1', slug: 'plan', title: 'Plan', version: 1, updatedAt: NOW, agent: 'pi', machine: 'here', pending: 0, pinned: false },
+    ]
+    watched['machines:list'] = () => {
+      throw new ConvexError({ code: 'limit', message: 'Too much is being asked at once. Try again in a moment.' })
+    }
+    await start()
+    expect(host.querySelector('.page-card')).not.toBeNull()
+    expect(host.textContent).not.toContain('That did not work')
+    expect(banner()).toBeNull()
+    expect(mark()).toBeNull()
   })
 })

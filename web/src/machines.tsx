@@ -1,27 +1,14 @@
 // The machines where the person's agents run, and which agent apps (harnesses, in the code) on
 // each are connected. The site only records the choice; the connector on the machine does the
 // installing.
-import {
-  ALIVE,
-  type Harness as AppName,
-  HARNESSES,
-  INSTALL,
-  newer,
-  noWakeHere,
-  TURN_ON_MS,
-  TURNS_ON,
-  UPGRADE_MS,
-  WAKE_MODES,
-  WAKES,
-  wakeModeOf,
-  wakesOn,
-} from '@it/protocol'
+import { type Harness as AppName, HARNESSES, INSTALL, noWakeHere, TURN_ON_MS, TURNS_ON, WAKE_MODES, WAKES, wakeModeOf, wakesOn } from '@it/protocol'
 import { useConvex, useMutation, useQuery } from 'convex/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Copyable, Dialog } from './dialog'
 import { ago, api, type Id, refusal, serverNow, useNow, useOpener } from './lib'
 import { NoAddress, OtherAddresses, useWhere } from './network'
 import { RevokeMachine } from './paired'
+import { online as isOnline, UpdateNote, updateSaid, withCode } from './update'
 
 const LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -143,8 +130,6 @@ export function Machines() {
 
 /** How long a code to join with lasts when the backend does not say. */
 const CODE_MS = 10 * 60_000
-/** How long the site says that an update it was asked for is over, and what is left to do after it. */
-const DONE_SAID_MS = 6 * 60 * 60_000
 
 /**
  * Adding a machine: another computer where the person's agents run joins this It with a code
@@ -226,114 +211,16 @@ function AddMachine({ onClose }: { onClose: () => void }) {
   )
 }
 
-/** What becomes of a Claude Code chat that was open across an update: nothing needs doing in it but where its page says so. */
-const CLAUDE_OPEN =
-  'A Claude Code chat that was already open there goes on with the add-on it loaded, which still takes clicks. Type /reload-plugins only in one whose page says it cannot hear it.'
-
 /**
  * A newer It is out, as this machine has learned: said under its name, with the button that has
- * the machine put it in place. The machine fetches what the place releases are kept says is
- * newest and checks it as an install does. Nothing here says which version or where from. The
- * machine It runs on goes first: another at a newer version than that one would ask for
- * what the backend there does not have yet.
+ * the machine put it in place. What is said, and when, is `updateSaid`, which the banner on the
+ * home page says of the machine It runs on too.
  */
 function NewerOut({ m, host, online, act }: { m: Machine; host: string | null; online: boolean; act: (p: Promise<unknown>) => Promise<void> }) {
-  const upgrade = useMutation(api.machines.upgrade)
   // By the backend's clock, which is the one the asking was timed by
   const now = useNow(15_000)
-  const out = newer(m.latest, m.connectorVersion) ? (m.latest as string) : null
-  const state = m.upgrade?.state
-  // Claude Code has It's add-on there: its conversations that were open go on with the add-on they loaded, which still takes
-  // clicks, and only one that never loaded it needs /reload-plugins, which its page says (see RELOAD_OPEN in the program)
-  const claude = m.harnesses.some((h) => h.id === 'claude-code' && (h.addon === 'connected' || h.addon === 'needs_approval'))
-  const reload = claude ? ` ${CLAUDE_OPEN}` : ''
-  if (state === 'installed')
-    return (
-      <p className="panel-note newer" data-tone="wait">
-        {/* Said by a machine that could not start It again by itself: one started in a terminal, and one whose service was registered by an It
-            from before 0.1.35, whose launcher does not say that it is the service, as well as an older It that sent every Windows machine here */}
-        It {m.upgrade?.version ?? ''} is installed on {m.name}. It runs once It is started again there. If you started It in a terminal with{' '}
-        <code>it serve</code>, stop it and start it again. Otherwise run <code>it setup</code> in a terminal on that machine, which starts It again and lets the
-        next update start it again by itself. As it starts it brings the add-ons in the agent apps there up to date.
-        {claude
-          ? ` ${CLAUDE_OPEN}`
-          : ' An app that is already running goes on with the add-on it loaded until it is restarted, and its line on this page then says so.'}
-      </p>
-    )
-  const behind = !m.runsIt && newer(host, m.connectorVersion)
-  // An update the site asked for is over: said for a few hours, with what is left to do there, unless something newer waits already
-  if (state === 'done' && now - (m.upgrade?.at ?? 0) < DONE_SAID_MS && !out && !behind)
-    return (
-      <p className="panel-note newer">
-        It {m.upgrade?.version ?? m.connectorVersion} is running on {m.name}.{reload}
-      </p>
-    )
-  const mismatch = behind ? `This machine runs It ${m.connectorVersion}. The machine It runs on uses ${host}. ` : ''
-  if (!out || (behind && newer(host, out)))
-    return behind ? (
-      <p className="panel-note newer" data-tone="wait">
-        {mismatch}A matching release has not been confirmed here. Run <code>it upgrade --check</code> on this machine to check for updates.
-      </p>
-    ) : null
-  const first = !m.runsIt && newer(out, host)
-  // At work for as long as an upgrade takes, and no longer: one that has said nothing since
-  // was cut short, and is said to have been, with the way to ask for it again. A machine that
-  // was starting again as the new program and has not reported it since did not start as it:
-  // its launcher goes on trying, and what it met is in the service's log there.
-  const restarting = state === 'restarting'
-  const asked = state === 'asked' || state === 'working' || restarting
-  const cutShort = asked && now - (m.upgrade?.at ?? 0) > UPGRADE_MS
-  const working = asked && !cutShort
-  return (
-    <p className="panel-note newer" data-tone={state === 'failed' || cutShort ? 'bad' : undefined}>
-      {working ? (
-        restarting ? (
-          `Starting again as It ${out}…`
-        ) : (
-          `Updating to It ${out}…`
-        )
-      ) : (
-        <>
-          {state === 'failed'
-            ? `The update to It ${out} did not finish: ${(m.upgrade?.why ?? 'it is not known why').replace(/\.$/, '')}. `
-            : cutShort && restarting
-              ? `It ${out} is in place, and has not been heard from since it was started. Run it service logs on that machine to read why. `
-              : cutShort
-                ? `The update to It ${out} did not finish. This machine still runs ${m.connectorVersion}. `
-                : `It ${out} is out. This machine runs ${m.connectorVersion}. `}
-          {first ? (
-            'Update the machine It runs on first.'
-          ) : (
-            <button
-              type="button"
-              className="link"
-              disabled={!online}
-              title={online ? undefined : 'This machine is off'}
-              onClick={() => void act(upgrade({ machineId: m.id as Id<'machines'> }))}
-            >
-              {state === 'failed' || cutShort ? 'Try again' : 'Update'}
-            </button>
-          )}
-        </>
-      )}
-    </p>
-  )
-}
-
-/** A sentence from a machine, with what it puts in backticks, a command to run there, shown as code. */
-const withCode = (said: string) => {
-  const parts = said.split('`')
-  // Where the backticks do not pair up, the sentence is shown as it is
-  if (parts.length % 2 === 0) return said
-  // Every other part is between backticks, and each is known by where it begins in the sentence
-  let at = 0
-  let inside = true
-  return parts.map((part) => {
-    const from = at
-    at += part.length + 1
-    inside = !inside
-    return inside ? <code key={from}>{part}</code> : part
-  })
+  const said = updateSaid(m, host, now)
+  return said && <UpdateNote m={m} said={said} on={online} act={act} />
 }
 
 /**
@@ -399,7 +286,7 @@ function MachineCard({ m, now, host }: { m: Machine; now: number; host: string |
   const [error, setError] = useState('')
   const [name, setName] = useState<string | null>(null)
   const renaming = useOpener<HTMLButtonElement>(name !== null)
-  const online = !m.off && now - m.lastSeenAt < ALIVE.onlineMs && m.connectorVersion !== null
+  const online = isOnline(m, now)
   const act = (p: Promise<unknown>) =>
     p.then(
       () => setError(''),

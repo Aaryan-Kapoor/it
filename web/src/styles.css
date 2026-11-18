@@ -2254,7 +2254,7 @@ a.grid-chip {
 
 /* ══ What a person presses and types into, wherever no look of its own is given ══ */
 
-:where(.list-view, .modal-panel, .door-card, .splash, .empty, .notice, .offer, .reminders, .mount-note)
+:where(.list-view, .modal-panel, .door-card, .splash, .empty, .notice, .offer, .reminders, .mount-note, .update-banner)
 :where(button:not([class]), button.primary, button.danger) {
   display: inline-flex;
   align-items: center;
@@ -2276,7 +2276,7 @@ a.grid-chip {
     opacity 0.15s var(--ease-swift),
     background 0.15s var(--ease-swift);
 }
-:where(.list-view, .modal-panel, .door-card, .splash, .empty, .notice, .offer, .reminders, .mount-note)
+:where(.list-view, .modal-panel, .door-card, .splash, .empty, .notice, .offer, .reminders, .mount-note, .update-banner)
   :where(button:not([class]), button.primary, button.danger):hover:not(:disabled) {
   border-color: var(--line-strong);
 }
@@ -2628,6 +2628,128 @@ input[role="switch"]:disabled {
   height: 8px;
   border-radius: 50%;
   background: var(--wait);
+}
+
+/* A newer It: said plainly, with the button that puts it in place, at the top of the home page
+   for the machine It runs on and under each machine's name on the Machines page, alike */
+.update-banner {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px var(--gutter) 0;
+}
+.update-banner:focus {
+  outline: none;
+}
+.update {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 12px 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--line));
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--ok) 10%, var(--overlay));
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 520;
+  line-height: 1.45;
+}
+.update::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.update > span {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.update[data-tone="wait"] {
+  border-color: color-mix(in srgb, var(--wait) 55%, var(--line));
+  background: color-mix(in srgb, var(--wait) 12%, var(--overlay));
+}
+.update[data-tone="wait"]::before {
+  background: var(--wait);
+}
+.update[data-tone="bad"] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  background: color-mix(in srgb, var(--danger) 9%, var(--overlay));
+}
+.update[data-tone="bad"]::before {
+  background: var(--danger);
+}
+.update button.primary {
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 0 20px;
+  font-size: 13.5px;
+}
+.update-link {
+  flex: 0 0 auto;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 550;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.update-banner > .error {
+  margin: 0;
+}
+/* Under a machine's name, inside its panel */
+.panel > .update {
+  margin: 0 16px 16px;
+}
+/* On a phone the button takes a line of its own, whole and easy to press */
+@media (max-width: 520px) {
+  .update button.primary {
+    flex: 1 0 100%;
+    height: 42px;
+  }
+}
+
+/* Beside the version in the top bar while an update of the machine It runs on is out: small, since the banner is what is seen */
+.update-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  margin-right: 6px;
+  padding: 0 9px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--line));
+  border-radius: var(--r-pill);
+  color: var(--fg);
+  font-size: 11.5px;
+  font-weight: 550;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.update-mark::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+.update-mark[data-tone="wait"] {
+  border-color: color-mix(in srgb, var(--wait) 55%, var(--line));
+}
+.update-mark[data-tone="wait"]::before {
+  background: var(--wait);
+}
+.update-mark[data-tone="bad"] {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+}
+.update-mark[data-tone="bad"]::before {
+  background: var(--danger);
+}
+.update-mark:hover {
+  background: var(--panel-2);
 }
 
 /* ══ The site, which scrolls under its bar ══ */
