@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { psQuote, RUN_ONCE, WINDOWS_CLEANUP, WINDOWS_PATH_MOST, windowsDeletionCommand } from './src/lib'
-import { startOf } from './src/serve/backend'
+import { beforeThisBoot, isHolder, sameStart, startOf } from './src/serve/backend'
 import {
   askedTwice,
   failure,
@@ -235,6 +235,79 @@ describe('a question to Windows that is not answered (#404)', () => {
       }
     },
   )
+})
+
+describe('a lock left by a process whose number Windows gave to another after a restart', () => {
+  // Pretends to be Windows for the length of a test, with a stand-in for Windows PowerShell that answers what a file says
+  const asWindows = (run: (answer: (said: string) => void) => void) => {
+    const commands = mkdtempSync(path.join(os.tmpdir(), 'it-reused-'))
+    const said = path.join(commands, 'said')
+    const before = { PATH: process.env.PATH, platform: Object.getOwnPropertyDescriptor(process, 'platform')! }
+    try {
+      writeFileSync(path.join(commands, 'powershell.exe'), `#!/bin/sh\ncat '${said}'\n`, { mode: 0o755 })
+      process.env.PATH = `${commands}:/usr/bin:/bin`
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+      run((text) => writeFileSync(said, text))
+    } finally {
+      Object.defineProperty(process, 'platform', before.platform)
+      process.env.PATH = before.PATH
+      rmSync(commands, { recursive: true, force: true })
+    }
+  }
+  // When the lock's holder was started, and when the machine was last started after it, as Windows tells times: hundreds of nanoseconds since 1601
+  const fileTime = (ms: number) => ((BigInt(ms) + 11_644_473_600_000n) * 10_000n).toString()
+  const now = Date.UTC(2026, 10, 21, 5, 0, 0)
+  const upFor = 3 * 3600 // the machine was restarted three hours ago
+  const noted = fileTime(now - 5 * 3600 * 1000) // the holder was started five hours ago, before the restart
+
+  test.skipIf(process.platform === 'win32')(
+    'a start that Windows PowerShell will not tell is asked of the list of processes, and a number nobody has is none',
+    () => {
+      asWindows((answer) => {
+        answer('133000000000000000\n')
+        expect(startOf(process.pid)).toBe('133000000000000000')
+        answer('none\n')
+        expect(startOf(process.pid)).toBeNull()
+        // Neither way would say: the process is there, and when it was started is not known
+        answer('unknown\n')
+        expect(startOf(process.pid)).toBeUndefined()
+        answer('')
+        expect(startOf(process.pid)).toBeUndefined()
+      })
+    },
+  )
+
+  test.skipIf(process.platform === 'win32')('a holder whose start cannot be told is gone when it was started before the machine was', () => {
+    asWindows(() => {
+      expect(beforeThisBoot(noted, upFor, now)).toBe(true)
+      // Started after the restart, or within the margin before it, it may still run
+      expect(beforeThisBoot(fileTime(now - 2 * 3600 * 1000), upFor, now)).toBe(false)
+      expect(beforeThisBoot(fileTime(now - upFor * 1000 - 60_000), upFor, now)).toBe(false)
+      // A lock that says nothing of when, or the system saying nothing of how long it has been up, proves nothing
+      expect(beforeThisBoot('', upFor, now)).toBe(false)
+      expect(beforeThisBoot(noted, 0, now)).toBe(false)
+    })
+    // Elsewhere a machine's start is told another way
+    expect(beforeThisBoot(noted, upFor, now)).toBe(false)
+  })
+
+  test.skipIf(process.platform === 'win32')('the process found under the number is the holder only by when it was started', () => {
+    asWindows(() => {
+      const lock = fileTime(Date.now() - 5 * 3600 * 1000)
+      expect(isHolder(null, lock)).toBe(false)
+      expect(isHolder(lock, lock)).toBe(true)
+      // The list of processes tells it a microsecond less exactly
+      expect(isHolder((BigInt(lock) - (BigInt(lock) % 10n)).toString(), lock)).toBe(true)
+      // svchost.exe, started after the restart under the number the holder had
+      expect(isHolder(fileTime(Date.now() - 60_000), lock)).toBe(false)
+      expect(sameStart((BigInt(lock) + 10n).toString(), lock)).toBe(false)
+      // Not told at all: gone only where the holder was started before the machine was
+      if (os.uptime() < 4 * 3600) expect(isHolder(undefined, lock)).toBe(false)
+      expect(isHolder(undefined, fileTime(Date.now()))).toBe(true)
+      expect(isHolder(undefined, '')).toBe(true)
+      expect(isHolder('anything', '')).toBe(true)
+    })
+  })
 })
 
 describe.skipIf(process.platform !== 'win32')('Windows scripts run by Windows PowerShell', () => {

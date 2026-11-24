@@ -399,7 +399,18 @@ export function startOf(pid: number): string | null | undefined {
     // Asking when costs the start of another program here, and a number no process has needs none:
     // a lock that was left behind is told to be so at once
     if (!alive(pid)) return null
-    const script = `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { $p.StartTime.ToFileTimeUtc() } else { 'none' }`
+    // Windows PowerShell will not say when a process of another user or session was started,
+    // a system one such as svchost.exe above all, and a number is often given to one of those
+    // after a restart. The system's own list of processes says it for every process, a
+    // microsecond less exactly (see `sameStart`), and is asked only then.
+    const script = [
+      `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+      `if (-not $p) { 'none'; exit 0 }`,
+      `$t = $null; try { $t = $p.StartTime } catch {}`,
+      `if ($t) { $t.ToFileTimeUtc(); exit 0 }`,
+      `$c = $null; try { $c = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -ErrorAction Stop } catch { 'unknown'; exit 0 }`,
+      `if (-not $c) { 'none' } elseif ($c.CreationDate) { $c.CreationDate.ToFileTimeUtc() } else { 'unknown' }`,
+    ].join('\n')
     const ran = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
       encoding: 'utf8',
       windowsHide: true,
@@ -425,6 +436,47 @@ export function startOf(pid: number): string | null | undefined {
   }
   // The system would not say when. Whether there is such a process at all, it does say.
   return alive(pid) ? undefined : null
+}
+
+/**
+ * Whether two starts the system told are one and the same. On Windows a start told by the
+ * system's list of processes is a microsecond less exact than one told by the process itself,
+ * so two starts within a microsecond of each other are the same: no number is given to two
+ * processes in one microsecond.
+ */
+export function sameStart(found: string, noted: string): boolean {
+  if (found === noted) return true
+  if (process.platform !== 'win32' || !/^\d+$/.test(found) || !/^\d+$/.test(noted)) return false
+  const apart = BigInt(found) - BigInt(noted)
+  return apart > -10n && apart < 10n
+}
+
+/** How long before the machine was last started a start has to be for it to be counted as before it, in hundreds of nanoseconds: ten minutes. */
+const BOOT_MARGIN = 6_000_000_000n
+/**
+ * Whether a start It noted on Windows, as the system tells it there, was before the machine was
+ * last started, by a margin that the system's measure of how long it has been up cannot get
+ * wrong. No process started then still runs, whatever number it had. Asked only where the
+ * process that has the number now will not say when it was started: a clock set forward since
+ * the machine started could make a start after it look as if it was before.
+ */
+export function beforeThisBoot(noted: string, uptimeSeconds = os.uptime(), now = Date.now()): boolean {
+  if (process.platform !== 'win32' || !/^\d+$/.test(noted) || !(uptimeSeconds > 0)) return false
+  const booted = (BigInt(Math.floor(now - uptimeSeconds * 1000)) + 11_644_473_600_000n) * 10_000n
+  return BigInt(noted) < booted - BOOT_MARGIN
+}
+
+/**
+ * Whether the process found under a lock's number is the one the lock names, from when the
+ * system says it was started (`startOf`) and when the lock says. None found is not it. One whose
+ * start the system will not tell is taken to be it, unless the lock's own start was before the
+ * machine was last started. A lock that says nothing of when is believed of whatever has the
+ * number.
+ */
+export function isHolder(found: string | null | undefined, noted: string): boolean {
+  if (found === null) return false
+  if (found === undefined) return !beforeThisBoot(noted)
+  return noted === '' || sameStart(found, noted)
 }
 
 /**
@@ -549,8 +601,7 @@ function put(file: string, lock: Lock): void {
  */
 async function fateOf(file: string, seen: Seen, opts: { watching?: () => void; signal?: AbortSignal }): Promise<'held' | 'left' | 'changed'> {
   if (seen.lock && seen.lock.where === where()) {
-    const started = startOf(seen.lock.pid)
-    return started === undefined || started === seen.lock.started || (started !== null && seen.lock.started === '') ? 'held' : 'left'
+    return isHolder(startOf(seen.lock.pid), seen.lock.started) ? 'held' : 'left'
   }
   opts.watching?.()
   for (const began = performance.now(); ; ) {
@@ -572,8 +623,7 @@ async function fateOf(file: string, seen: Seen, opts: { watching?: () => void; s
  */
 export function holderRuns(lock: Pick<Lock, 'pid' | 'started' | 'where'>): boolean {
   if (lock.where !== where()) return process.platform !== 'linux' && alive(lock.pid)
-  const started = startOf(lock.pid)
-  return started === undefined || started === lock.started || (started !== null && lock.started === '')
+  return isHolder(startOf(lock.pid), lock.started)
 }
 
 /**
@@ -1209,7 +1259,9 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
   const pid = left?.program
   // A number that is no process's own would mean every process in this program's group
   if (left && left.where === where() && typeof pid === 'number' && Number.isInteger(pid) && pid > 1) {
-    const started = startOf(pid)
+    let started = startOf(pid)
+    // One whose start Windows will not tell is not the program when the program was started before the machine was last started
+    if (started === undefined && typeof left.programStarted === 'string' && beforeThisBoot(left.programStarted)) started = null
     if (started === undefined || (started !== null && typeof left.programStarted !== 'string'))
       throw new Problem(
         `A program is running under the number the backend program on this folder had (pid ${pid}), and It cannot tell whether it is that one.`,
@@ -1218,7 +1270,7 @@ async function noneLeft(config: ServiceConfig, say: (line: string) => void, sign
       )
     // The lock goes wherever the folder is copied to, and the program it names may be the
     // one of the folder it was copied from: where the system shows that, it is not this folder's
-    if (started !== null && started === left.programStarted) {
+    if (started !== null && typeof left.programStarted === 'string' && sameStart(started, left.programStarted)) {
       const at = seen(pid)
       if (at?.open && !at.here) throw linked(pid)
       if (at === undefined || at.here || at.open) await stopLeft(pid, say, signal)
